@@ -452,6 +452,8 @@ export class KvRuleCatalogRepository implements RuleCatalogRepository {
 // ============ 仓库聚合（依赖注入） ============
 
 export interface Repositories {
+  /** 底层 KV 存储（原始读写口，供探测/健康/日志/快照等直连使用） */
+  kv: KVStorage;
   subscriptions: SubscriptionRepository;
   nodes: NodeRepository;
   rules: RuleRepository;
@@ -463,6 +465,7 @@ export interface Repositories {
 export function createRepositories(kv: KVStorage): Repositories {
   const subscriptions = new KvSubscriptionRepository(kv);
   return {
+    kv,
     subscriptions,
     // 注入订阅仓储：停用订阅的节点从 getAll() 聚合中排除（用户 2026-09-24）
     nodes: new KvNodeRepository(kv, subscriptions),

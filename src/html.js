@@ -389,7 +389,10 @@ tbody tr:hover { background: var(--accent-soft); }
   <div class="page" id="page-nodes">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <h2>🔗 节点列表</h2>
-      <input style="width:auto;max-width:300px" placeholder="🔍 搜索节点名或地址..." id="nodeSearch" oninput="filterNodes()">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input style="width:auto;max-width:300px" placeholder="🔍 搜索节点名或地址..." id="nodeSearch" oninput="filterNodes()">
+        <button class="btn btn-sm btn-primary" onclick="probeAllNodes()" title="对所有节点执行 TCP/TLS/HTTP 测活">⚡ 立即测活</button>
+      </div>
     </div>
     <div class="card" style="padding:12px 16px;font-size:14px;color:var(--text2)">
       💡 勾选 = 该节点会进入输出配置；取消勾选 = 从输出的订阅中排除。测速请在客户端（OpenClash/Mihomo 等）导入订阅后测试。
@@ -418,7 +421,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <span style="color:var(--text2);font-size:14px">保存/删除规则时也会自动应用一次</span>
     </div>
     <table id="nodesTable">
-      <thead><tr><th style="width:40px"><input type="checkbox" id="nodeSelectAll" onchange="toggleSelectAll(this)" checked></th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th>操作</th></tr></thead>
+      <thead><tr><th style="width:40px"><input type="checkbox" id="nodeSelectAll" onchange="toggleSelectAll(this)" checked></th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
       <tbody id="nodesTableBody"></tbody>
     </table>
     <p class="text-center" id="nodesEmpty" style="color:var(--text2);padding:24px">暂无节点数据</p>
@@ -597,6 +600,14 @@ tbody tr:hover { background: var(--accent-soft); }
   </div>
 </div>
 
+<!-- Health History Modal (v2.32) -->
+<div class="modal-overlay" id="healthHistoryModal">
+  <div class="modal-content" style="max-width:640px">
+    <div class="modal-header"><h3 id="healthHistoryTitle">📈 健康历史</h3><button class="modal-close" onclick="closeModal('healthHistoryModal')">✕</button></div>
+    <div class="modal-body" id="healthHistoryBody"></div>
+  </div>
+</div>
+
 <!-- Add Subscription Modal -->
 <div class="modal-overlay" id="addSubModal">
   <div class="modal-content">
@@ -662,7 +673,7 @@ tbody tr:hover { background: var(--accent-soft); }
 
 <script>
 // ============ State ============
-let state = { subscriptions: [], nodes: [], currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
+let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
 
 // ============ Theme ============
 const themes = ['light', 'dark'];
@@ -1358,6 +1369,13 @@ async function loadNodes(forceRefresh = false) {
         setStat('statsUnique', res.stats.unique);
         setStat('statsGeoUnlocated', res.stats.geoUnlocated);
       }
+      // v2.32：并行拉健康快照（延迟/状态列数据源）。失败不阻断节点列表。
+      try {
+        const hr = await api('/nodes/health');
+        const map = {};
+        for (const h of (hr.data || [])) map[h.fingerprint] = h;
+        state.nodeHealth = map;
+      } catch { state.nodeHealth = {}; }
       renderNodes();
     } catch { toast('加载节点失败', 'error'); }
     loadCleanRules();
@@ -1471,12 +1489,37 @@ function protocolTagClass(protocol) {
   return 'tag-' + (known.indexOf(protocol) >= 0 ? protocol : 'other');
 }
 
+// 节点最新延迟（计划定稿：取 http_latency，无则回退 tcp_latency）
+function nodeLatency(n) {
+  const h = state.nodeHealth[n.fingerprint];
+  return h ? (h.httpLatency ?? h.tcpLatency) : null;
+}
+
+// 点击「延迟」表头切换 升序 → 降序 → 取消
+function sortNodesByLatency() {
+  state.nodeLatencySort = state.nodeLatencySort === null ? 'asc' : (state.nodeLatencySort === 'asc' ? 'desc' : null);
+  renderNodes();
+}
+
 function renderNodes() {
   const tbody = document.getElementById('nodesTableBody');
   const empty = document.getElementById('nodesEmpty');
   const search = document.getElementById('nodeSearch').value.toLowerCase();
-  let filtered = state.nodes;
+  // 死节点（熔断 disabled / tombstone removed）UI 完全隐藏：仅隐藏，不删除，仍参与后续测活以便恢复
+  let filtered = state.nodes.filter(n => n.status !== 'disabled' && n.status !== 'removed');
   if (search) filtered = filtered.filter(n => (n.name + ' ' + n.server).toLowerCase().includes(search));
+  if (state.nodeLatencySort) {
+    const dir = state.nodeLatencySort === 'asc' ? 1 : -1;
+    filtered = filtered.slice().sort((a, b) => {
+      const la = nodeLatency(a), lb = nodeLatency(b);
+      if (la == null && lb == null) return 0;
+      if (la == null) return 1;  // 未测到延迟的节点恒排末尾
+      if (lb == null) return -1;
+      return (la - lb) * dir;
+    });
+  }
+  const mark = document.getElementById('latencySortMark');
+  if (mark) mark.textContent = state.nodeLatencySort === 'asc' ? '▲' : (state.nodeLatencySort === 'desc' ? '▼' : '');
   if (filtered.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
@@ -1485,6 +1528,12 @@ function renderNodes() {
   empty.style.display = 'none';
   tbody.innerHTML = filtered.map(n => {
     const tagClass = protocolTagClass(n.protocol);
+    const h = state.nodeHealth[n.fingerprint];
+    const latency = nodeLatency(n);
+    const latencyStr = latency != null ? latency + 'ms' : '—';
+    const icon = !h ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[h.status] || '❓');
+    const tip = h ? \`得分 \${h.score}\${h.error ? ' · ' + h.error : ''} · 点击看趋势\` : '尚未测活 · 点击看趋势';
+    const suspect = n.status === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
     return \`<tr>
       <td><input type="checkbox" data-fp="\${escHtml(n.fingerprint)}" \${n.enabled ? 'checked' : ''} onchange="updateNodeEnabled(this)"></td>
       <td>\${escHtml(n.name)}</td>
@@ -1492,9 +1541,69 @@ function renderNodes() {
       <td style="font-size:14px">\${escHtml(n.server)}</td>
       <td>\${n.port}</td>
       <td>\${n.tls ? '✅' : '❌'}</td>
+      <td style="font-size:14px;\${latency != null && latency > 2000 ? 'color:var(--red)' : ''}">\${latencyStr}</td>
+      <td style="font-size:14px;cursor:pointer" title="\${escHtml(tip)}" onclick="showNodeHistory('\${escHtml(n.fingerprint)}')">\${suspect}\${icon}</td>
       <td><button class="btn btn-sm" onclick="copyNodeLink('\${escHtml(n.fingerprint)}')">📋 复制</button></td>
     </tr>\`;
   }).join('');
+}
+
+// ⚡ 立即测活：全量 TCP/TLS/HTTP 探测（同步等待，走通用进度弹窗）
+async function probeAllNodes() {
+  try {
+    const res = await runWithProgress({
+      title: '⚡ 正在测活所有节点…',
+      capMs: 180000,
+      fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
+    });
+    toast(\`测活完成（\${res.nodeCount ?? 0} 个节点）\`);
+    await loadNodes(true);
+  } catch (e) { /* runWithProgress 已弹出失败提示 */ }
+}
+
+// ============ 节点健康历史（点击状态列弹出，纯前端折线图） ============
+async function showNodeHistory(fingerprint) {
+  const node = state.nodes.find(n => n.fingerprint === fingerprint);
+  document.getElementById('healthHistoryTitle').textContent = \`📈 \${node ? node.name : fingerprint} · 健康历史\`;
+  const body = document.getElementById('healthHistoryBody');
+  body.innerHTML = '<p style="color:var(--text2)">加载中…</p>';
+  showModal('healthHistoryModal');
+  try {
+    const res = await api(\`/nodes/health?fingerprint=\${encodeURIComponent(fingerprint)}\`, { timeout: 20000 });
+    body.innerHTML = renderHealthChart(res.data || []);
+  } catch (e) {
+    body.innerHTML = \`<p style="color:var(--red)">加载失败：\${escHtml(e.message || '未知错误')}</p>\`;
+  }
+}
+
+function renderHealthChart(hist) {
+  const pts = hist.slice().sort((a, b) => a.timestamp - b.timestamp);
+  if (pts.length === 0) return '<p style="color:var(--text2)">暂无历史数据（该节点尚未测活）</p>';
+  const W = 560, H = 170, P = 30;
+  const vals = pts.map(p => p.httpLatency ?? p.tcpLatency).filter(v => v != null);
+  const maxV = Math.max(100, ...vals);
+  const x = i => P + (pts.length === 1 ? (W - 2 * P) / 2 : i * (W - 2 * P) / (pts.length - 1));
+  const y = v => H - P - (v / maxV) * (H - 2 * P);
+  const dots = [], line = [];
+  pts.forEach((p, i) => {
+    const v = p.httpLatency ?? p.tcpLatency;
+    if (v == null) return;
+    line.push(\`\${line.length === 0 ? 'M' : 'L'}\${x(i).toFixed(1)},\${y(v).toFixed(1)}\`);
+    dots.push(\`<circle cx="\${x(i).toFixed(1)}" cy="\${y(v).toFixed(1)}" r="3" fill="\${p.status === 'alive' ? 'var(--green)' : 'var(--red)'}"><title>\${new Date(p.timestamp).toLocaleString()} · \${v}ms · 得分 \${p.score}</title></circle>\`);
+  });
+  const fmtT = ts => new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return \`
+    <svg viewBox="0 0 \${W} \${H}" style="width:100%;height:auto">
+      <line x1="\${P}" y1="\${H - P}" x2="\${W - P}" y2="\${H - P}" stroke="var(--border)"/>
+      <line x1="\${P}" y1="\${P}" x2="\${P}" y2="\${H - P}" stroke="var(--border)"/>
+      <text x="\${P - 4}" y="\${P + 4}" text-anchor="end" font-size="11" fill="var(--text2)">\${maxV}ms</text>
+      <text x="\${P - 4}" y="\${H - P}" text-anchor="end" font-size="11" fill="var(--text2)">0</text>
+      \${line.length ? \`<path d="\${line.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2"/>\` : ''}
+      \${dots.join('')}
+      <text x="\${P}" y="\${H - 8}" font-size="11" fill="var(--text2)">\${fmtT(pts[0].timestamp)}</text>
+      <text x="\${W - P}" y="\${H - 8}" text-anchor="end" font-size="11" fill="var(--text2)">\${fmtT(pts[pts.length - 1].timestamp)}</text>
+    </svg>
+    <p style="color:var(--text2);font-size:13px;margin-top:8px">共 \${pts.length} 次探测 · ✅ 成功 ❌ 失败 · 悬停查看单次详情</p>\`;
 }
 
 function filterNodes() { renderNodes(); }

@@ -70,8 +70,12 @@ export interface AppDeps {
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
   const { repos, auth, subscriptions, config } = deps;
+  // 裸 KV 存储：探测引擎/健康数据/操作日志/快照缓存都直接读写它。
+  // 曾用 `repos.settings as unknown as KVStorage` 强转 —— 但 KvSettingsRepository 只有 get/set，
+  // 没有 list/put：导致 GET /api/nodes/health 抛 500，且探测引擎在订阅更新后静默失败（异常被 waitUntil 吞掉），一条健康数据都写不进去。
+  const storage: KVStorage = deps.storage ?? repos.kv;
   // v2.32: 配置快照缓存(用于订阅生效)
-  const snapshotCache = createSnapshotCache(deps.storage ?? (repos.settings as unknown as KVStorage));
+  const snapshotCache = createSnapshotCache(storage);
   // 规则目录同步服务：默认用全局 fetch 拉 GitHub；测试可注入 mock
   const catalogSync: CatalogSyncService =
     deps.catalogSync ??
@@ -327,7 +331,7 @@ export function createApp(deps: AppDeps): Hono {
           try {
             const { probeAllNodes } = await import('@/services/node-probe.service');
             const nodes = deduplicateNodes(await repos.nodes.getAll());
-            await probeAllNodes(nodes, repos.settings as unknown as KVStorage, 24);
+            await probeAllNodes(nodes, storage, 24);
           } catch (e) {
             console.warn(`[SubscriptionUpdate:${id}] 节点测活失败(后台,不阻塞): ${(e as Error).message}`);
           }
@@ -906,13 +910,13 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/operation-log', requireAuth(auth), async (c) => {
     const limit = Math.min(Number(c.req.query('limit') || 50), 200);
     const { getOperationLogs } = await import('@/services/operation-log.service');
-    const logs = await getOperationLogs(repos.settings as unknown as KVStorage, limit);
+    const logs = await getOperationLogs(storage, limit);
     return c.json({ success: true, data: logs });
   });
 
   app.delete('/api/operation-log', requireAuth(auth), async (c) => {
     const { clearOperationLogs } = await import('@/services/operation-log.service');
-    await clearOperationLogs(repos.settings as unknown as KVStorage);
+    await clearOperationLogs(storage);
     return c.json({ success: true });
   });
 
@@ -921,11 +925,23 @@ export function createApp(deps: AppDeps): Hono {
     const fingerprint = c.req.query('fingerprint');
     const { getNodeHealthHistory, getAllNodeHealth } = await import('@/services/node-probe.service');
     if (fingerprint) {
-      const history = await getNodeHealthHistory(fingerprint, repos.settings as unknown as KVStorage);
+      const history = await getNodeHealthHistory(fingerprint, storage);
       return c.json({ success: true, data: history });
     }
-    const health = await getAllNodeHealth(repos.settings as unknown as KVStorage);
+    const health = await getAllNodeHealth(storage);
     return c.json({ success: true, data: health });
+  });
+
+  // v2.32: 前端「立即测活」按钮触发全量节点测活（同步等待，前端展示进度）
+  app.post('/api/nodes/probe', requireAuth(auth), async (c) => {
+    try {
+      const { probeAllNodes } = await import('@/services/node-probe.service');
+      const nodes = deduplicateNodes(await repos.nodes.getAll());
+      await probeAllNodes(nodes, storage, 24);
+      return c.json({ success: true, nodeCount: nodes.length });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'PROBE_FAILED', message: (e as Error).message } }, 500);
+    }
   });
 
   // ============ 根路径（前端由 static 服务，后续实现） ============

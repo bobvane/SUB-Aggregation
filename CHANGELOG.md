@@ -2,6 +2,18 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.33.0] - 2026-09-28
+
+### 修复:节点健康/测活失效
+- **根因修复**:路由把 `repos.settings`(只有 get/set)强转成 `KVStorage` 传给探测引擎,缺 `list/put` → ①`GET /api/nodes/health` 抛 500 ②订阅更新后的全量测活**静默失败**(异常被 waitUntil 吞掉),一条健康数据都写不进。现统一改用 `deps.storage ?? repos.kv`。
+- **回归测试**:新增 `tests/integration/nodes-health-api.test.ts`(旧写法精确复现 500,修复后 200)
+
+### 新增:节点列表页(补齐前端半成品)
+- 「⚡ 立即测活」按钮 + `POST /api/nodes/probe` 手动全量测活
+- 新增「延迟」列(最新 http_latency,点击表头排序)与「状态」列(alive/dead 图标)
+- 点击状态列弹出该节点健康历史折线图(纯前端渲染,读 `node_health_history`)
+- 死节点(disabled/removed)UI 完全隐藏,仅隐藏不删除,仍参与后续测活以便恢复
+
 ## [2.32.0] - 2026-09-28
 
 ### 新增:节点测活/测速/智能评分/自动命名/状态机熔断
