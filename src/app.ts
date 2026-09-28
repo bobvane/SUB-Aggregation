@@ -12,7 +12,6 @@ import { createConfigService } from '@/services/config.service';
 import { createCatalogSyncService } from '@/services/catalog-sync.service';
 import { deduplicateNodes } from '@/parser';
 import { fetchSubscription } from '@/engine/fetcher';
-import { CleanRule } from '@/models/clean-rule';
 import HTML from '@/html';
 
 /** 运行时配置：来自 process.env（容器环境变量） */
@@ -84,11 +83,6 @@ export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
     repos,
     fetchSubscription,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
-    async () => {
-      const raw = await repos.settings.get('clean_rules');
-      if (!raw) return [];
-      try { return JSON.parse(raw) as CleanRule[]; } catch { return []; }
-    },
     kv
   );
 
@@ -272,11 +266,6 @@ export async function runScheduled(
     repos,
     fetchSubscription,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
-    async () => {
-      const raw = await repos.settings.get('clean_rules');
-      if (!raw) return [];
-      try { return JSON.parse(raw) as CleanRule[]; } catch { return []; }
-    },
     kv
   );
   const results: string[] = [];

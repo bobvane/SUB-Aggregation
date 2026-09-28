@@ -44,7 +44,7 @@ describe('Dashboard API', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
       config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',

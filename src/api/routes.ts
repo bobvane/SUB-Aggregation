@@ -285,6 +285,18 @@ export function createApp(deps: AppDeps): Hono {
     }
 
     const sub = await subscriptions.create(body.name.trim(), body.url.trim());
+    // v2.35: 新增订阅完成后同样触发全量测活（§8 触发点 3/4），不阻塞响应
+    c.executionCtx?.waitUntil(
+      (async () => {
+        try {
+          const { probeAllNodes } = await import('@/services/node-probe.service');
+          const nodes = deduplicateNodes(await repos.nodes.getAll());
+          await probeAllNodes(nodes, storage);
+        } catch (e) {
+          console.warn(`[SubscriptionCreate:${sub.id}] 节点测活失败(后台,不阻塞): ${(e as Error).message}`);
+        }
+      })()
+    );
     return c.json({ success: true, data: { id: sub.id } }, 201);
   });
 
@@ -331,7 +343,7 @@ export function createApp(deps: AppDeps): Hono {
           try {
             const { probeAllNodes } = await import('@/services/node-probe.service');
             const nodes = deduplicateNodes(await repos.nodes.getAll());
-            await probeAllNodes(nodes, storage, 24);
+            await probeAllNodes(nodes, storage);
           } catch (e) {
             console.warn(`[SubscriptionUpdate:${id}] 节点测活失败(后台,不阻塞): ${(e as Error).message}`);
           }
@@ -368,50 +380,6 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // ============ Node API ============
-
-  // ============ 持久化清洗规则（订阅更新后自动应用） ============
-
-  app.get('/api/nodes/clean-rules', requireAuth(auth), async (c) => {
-    return c.json({ success: true, data: await config.getCleanRules() });
-  });
-
-  app.post('/api/nodes/clean-rules', requireAuth(auth), async (c) => {
-    const body = await readBody<{ pattern?: string; replacement?: string; regex?: boolean }>(c);
-    const pattern = (body.pattern || '').trim();
-    if (!pattern) return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'pattern 必填' } }, 400);
-    // v2.23.0：输入长度限制——防止超大 pattern/replacement 造成 CPU 消耗或生成超大配置
-    if (pattern.length > 256) return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'pattern 过长（最多 256 字符）' } }, 400);
-    const replacement = (body.replacement ?? '').trim();
-    if (replacement.length > 512) return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'replacement 过长（最多 512 字符）' } }, 400);
-    if (body.regex) {
-      try { new RegExp(pattern); } catch {
-        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '正则表达式无效' } }, 400);
-      }
-    }
-    const created = await config.addCleanRule({ pattern, replacement, regex: body.regex ?? false });
-    return c.json({ success: true, data: created });
-  });
-
-  app.delete('/api/nodes/clean-rules/:id', requireAuth(auth), async (c) => {
-    await config.deleteCleanRule(c.req.param('id')!);
-    return c.json({ success: true });
-  });
-
-  app.put('/api/nodes/clean-rules/:id/toggle', requireAuth(auth), async (c) => {
-    const body = await readBody<{ enabled?: boolean }>(c);
-    try {
-      await config.toggleCleanRule(c.req.param('id')!, body.enabled ?? true);
-      return c.json({ success: true });
-    } catch {
-      return c.json({ success: false, error: { code: 'NOT_FOUND', message: '规则不存在' } }, 404);
-    }
-  });
-
-  // 立即执行持久化规则集（手动触发）
-  app.post('/api/nodes/clean-rules/apply', requireAuth(auth), async (c) => {
-    const changed = await config.applyCleanRulesNow();
-    return c.json({ success: true, data: { changed } });
-  });
 
   // 获取节点列表（可选按订阅过滤）；统一按 server:port:protocol 去重
   app.get('/api/nodes', async (c) => {
@@ -937,7 +905,7 @@ export function createApp(deps: AppDeps): Hono {
     try {
       const { probeAllNodes } = await import('@/services/node-probe.service');
       const nodes = deduplicateNodes(await repos.nodes.getAll());
-      await probeAllNodes(nodes, storage, 24);
+      await probeAllNodes(nodes, storage);
       return c.json({ success: true, nodeCount: nodes.length });
     } catch (e) {
       return c.json({ success: false, error: { code: 'PROBE_FAILED', message: (e as Error).message } }, 500);

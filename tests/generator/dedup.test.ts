@@ -58,7 +58,7 @@ describe('generators with duplicate names', () => {
   });
 
   it('nodeToUrl keeps originalUrl params but overrides fragment with cleaned name', () => {
-    // 原链名字是新节点的旧名，node.name 已被清洗（applyCleanRules 只改 name）
+    // 原链名字是旧名，node.name 为当前名（v2.35 起由生成时自动命名给出）
     const n = {
       ...makeNode('美国bob'),
       name: '美国bob',

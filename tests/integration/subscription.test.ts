@@ -35,7 +35,6 @@ describe('subscription pipeline integration', () => {
       repos,
       async () => TEST_SUBSCRIPTION,
       async () => [],
-      async () => [],
       kv
     );
     configService = createConfigService(repos, kv);
@@ -108,7 +107,6 @@ describe('subscription pipeline integration', () => {
       repos,
       async () => TEST_SUBSCRIPTION,
       async () => [{ type: 'exclude', pattern: 'US', enabled: true }],
-      async () => [],
       kv
     );
     const result = await filteredService.update(sub.id, async () => TEST_SUBSCRIPTION);
@@ -165,7 +163,7 @@ describe('single node subscription (direct link)', () => {
   beforeEach(() => {
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
-    service = createSubscriptionService(repos, async () => '', async () => [], async () => [], kv);
+    service = createSubscriptionService(repos, async () => '', async () => [], kv);
   });
 
   it('should parse direct vless node as subscription', async () => {
@@ -196,8 +194,8 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     repos = createRepositories(kv);
     const fa = async () => 'ss://aes-256-gcm:p1@node-a.example.com:8388#NODE-A';
     const fb = async () => 'ss://aes-256-gcm:p2@node-b.example.com:8388#NODE-B';
-    svcA = createSubscriptionService(repos, fa, async () => [], async () => [], kv);
-    svcB = createSubscriptionService(repos, fb, async () => [], async () => [], kv);
+    svcA = createSubscriptionService(repos, fa, async () => [], kv);
+    svcB = createSubscriptionService(repos, fb, async () => [], kv);
     configService = createConfigService(repos, kv);
     // 预填 ip-geo 缓存，使智能重命名解析出地理前缀（A→美国 B→香港）
     const ts = Date.now();

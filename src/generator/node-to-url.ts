@@ -11,9 +11,9 @@ import { safeBase64Encode } from './base64';
  * 将 Node 序列化为标准链接
  */
 export function nodeToUrl(node: Node): string {
-  // 整链保真：保留原链接全部参数/加密；但名字片段用清洗后的 node.name 覆盖，
-  // 使节点名字清洗规则（applyCleanRules 只改 node.name，originalUrl/originalName 保留旧名）
-  // 同样作用于 base64/v2ray/v2rayNG/nekoray 输出（此前整链直出旧名，清洗不生效）
+  // 整链保真：保留原链接全部参数/加密；但名字片段用 node.name 覆盖，
+  // 使节点名重命名（v2.34 smartRename 生成时统一命名，node.name 为当前名，
+  // originalUrl/originalName 保留旧名）同样作用于 base64/v2ray/v2rayNG/nekoray 输出
   if (node.metadata?.originalUrl) {
     return node.name
       ? node.metadata.originalUrl.replace(/#[^#]*$/, `#${encodeURIComponent(node.name)}`)

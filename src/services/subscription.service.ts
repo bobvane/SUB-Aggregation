@@ -8,7 +8,6 @@
 
 import { Subscription } from '@/models/subscription';
 import { Node } from '@/models/node';
-import { CleanRule, applyCleanRules } from '@/models/clean-rule';
 import { Repositories } from '@/storage/kv';
 import { KVStorage } from '@/storage/kv';
 import {
@@ -132,7 +131,6 @@ export function createSubscriptionService(
   repos: Repositories,
   fetchRawContent: (url: string) => Promise<string>,
   getRules: () => Promise<{ type: 'include' | 'exclude' | 'replace'; pattern: string; enabled?: boolean }[]>,
-  getCleanRules: () => Promise<CleanRule[]> = async () => [],
   kv: KVStorage
 ): SubscriptionService {
   const opLog = createOperationLog(kv);
@@ -187,17 +185,8 @@ export function createSubscriptionService(
         // 6. 计算 Diff
         const diff = diffNodes(oldNodes, newNodes);
 
-        // 7. 节点处理（先应用清洗规则再写入缓存）
-        const cleanRules = await getCleanRules();
-        if (cleanRules.length > 0) {
-          // 只对新增/变化的节点应用清洗规则
-          const allNew = [...diff.addedNodes, ...diff.changedNodes];
-          const processed = allNew.map(n => ({ ...n, name: applyCleanRules(n.name, cleanRules) }));
-          diff.addedNodes = processed.slice(0, diff.addedNodes.length);
-          diff.changedNodes = processed.slice(diff.addedNodes.length);
-        }
-
-        // 8. 合并节点（保留 tombstone、original_address、first_seen_at）
+        // 7. 合并节点（保留 tombstone、original_address、first_seen_at）
+        // v2.35：原「清洗规则」段已废弃，节点名改为生成时自动命名（smartRename）
         const mergedNodes = mergeNodes(oldNodes, diff);
 
         // 9. 写入节点缓存

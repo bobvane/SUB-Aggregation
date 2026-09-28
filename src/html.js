@@ -408,17 +408,9 @@ tbody tr:hover { background: var(--accent-soft); }
       </span>
     </div>
     <div id="geoPendingBanner" class="card" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px;border-left:4px solid var(--danger);box-shadow:var(--shadow-sm)"></div>
-    <div class="card" style="margin:0 0 12px;padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <label style="font-size:14px;font-weight:500">🧹 节点名清洗</label>
-      <input id="cleanPattern" placeholder="匹配内容（片段或正则）" style="width:auto;flex:1;min-width:180px">
-      <input id="cleanReplacement" placeholder="替换为（留空=删除）" style="width:auto;min-width:140px">
-      <label style="font-size:14px;color:var(--text2);display:flex;align-items:center;gap:4px"><input type="checkbox" id="cleanRegex"> 正则</label>
-      <button class="btn btn-sm btn-primary" onclick="saveCleanRule()">💾 保存规则（更新后自动生效）</button>
-    </div>
-    <div class="card" id="cleanRulesBox" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px"></div>
-    <div class="card" style="margin:0 0 12px;padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button class="btn btn-sm" onclick="applySavedRulesNow()">⚡ 立即应用已保存规则</button>
-      <span style="color:var(--text2);font-size:14px">保存/删除规则时也会自动应用一次</span>
+    <div class="card" style="margin:0 0 12px;padding:10px 16px;font-size:14px;display:flex;gap:8px;align-items:center">
+      <span>🏷 节点名自动生成</span>
+      <span style="color:var(--text2)">格式：旗帜 国家码 协议 延迟-序号（如 🇭🇰 HK VLESS 45ms-01），无需手工清洗</span>
     </div>
     <table id="nodesTable">
       <thead><tr><th style="width:40px"><input type="checkbox" id="nodeSelectAll" onchange="toggleSelectAll(this)" checked></th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
@@ -1378,7 +1370,6 @@ async function loadNodes(forceRefresh = false) {
       } catch { state.nodeHealth = {}; }
       renderNodes();
     } catch { toast('加载节点失败', 'error'); }
-    loadCleanRules();
     loadGeoPending();
   })().finally(() => { _loadNodesPromise = null; });
   _loadNodesPromise = p;
@@ -1608,85 +1599,7 @@ function renderHealthChart(hist) {
 
 function filterNodes() { renderNodes(); }
 
-// ============ 节点名清洗 ============
-
-// ============ 持久化清洗规则 ============
-
-async function loadCleanRules() {
-  try {
-    const res = await api('/nodes/clean-rules');
-    const rules = res.data || [];
-    const box = document.getElementById('cleanRulesBox');
-    if (rules.length === 0) {
-      box.style.display = 'none';
-      return;
-    }
-    box.style.display = 'block';
-    box.innerHTML = '<b style="font-size:14px;color:var(--text1,#061b31)">已保存的清洗规则</b><span style="color:var(--text2);font-size:14px;margin-left:8px">每次订阅更新后自动应用</span><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:2px 20px;margin-top:4px">' + rules.map(r =>
-      \`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#e5edf5);font-size:14px">
-        <b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${escHtml(r.pattern)}">\${escHtml(r.pattern)}</b>
-        <input type="checkbox" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" \${r.enabled ? 'checked' : ''} onchange="toggleCleanRule('\${r.id}', this.checked)" title="启用/停用">
-        <button class="btn btn-sm btn-danger" style="flex-shrink:0" onclick="deleteCleanRule('\${r.id}')">🗑</button>
-      </div>\`
-    ).join('') + '</div>';
-  } catch { /* 静默 */ }
-}
-
-async function saveCleanRule() {
-  const pattern = document.getElementById('cleanPattern').value.trim();
-  if (!pattern) { toast('请输入匹配内容', 'error'); return; }
-  try {
-    await api('/nodes/clean-rules', {
-      method: 'POST',
-      body: JSON.stringify({
-        pattern,
-        replacement: document.getElementById('cleanReplacement').value,
-        regex: document.getElementById('cleanRegex').checked,
-      }),
-    });
-    toast('规则已保存并已应用到当前节点');
-    document.getElementById('cleanPattern').value = '';
-    document.getElementById('cleanReplacement').value = '';
-    document.getElementById('cleanRegex').checked = false;
-    // 保存后立即对存量节点应用一次全部启用规则，不等下次订阅更新
-    try {
-      const res = await api('/nodes/clean-rules/apply', { method: 'POST' });
-      toast(\`已重命名 \${res.data?.changed ?? 0} 个节点\`);
-    } catch { /* 应用失败不阻塞保存 */ }
-    loadNodes();
-    loadCleanRules();
-  } catch (e) { toast('保存失败: ' + e.message, 'error'); }
-}
-
-async function deleteCleanRule(id) {
-  if (!confirm('删除这条清洗规则？删除后剩余规则会立即重新应用到全部节点。')) return;
-  try {
-    await api('/nodes/clean-rules/' + id, { method: 'DELETE' });
-    // 删除后立即重应用（被删掉的规则效果会还原，如"删除XX"删掉后 XX 会重新出现）
-    try {
-      const res = await api('/nodes/clean-rules/apply', { method: 'POST' });
-      toast(\`已删除，并重应用规则（\${res.data?.changed ?? 0} 个节点受影响）\`);
-    } catch { /* 静默 */ }
-    loadNodes();
-    loadCleanRules();
-  } catch (e) { toast('删除失败: ' + e.message, 'error'); }
-}
-
-async function toggleCleanRule(id, enabled) {
-  try {
-    await api('/nodes/clean-rules/' + id + '/toggle', { method: 'PUT', body: JSON.stringify({ enabled }) });
-    toast(enabled ? '规则已启用' : '规则已停用');
-  } catch (e) { toast('操作失败: ' + e.message, 'error'); }
-}
-
-async function applySavedRulesNow() {
-  if (!confirm('立即对全部节点执行已保存的清洗规则？')) return;
-  try {
-    const res = await api('/nodes/clean-rules/apply', { method: 'POST' });
-    toast(\`已重命名 \${res.data?.changed ?? 0} 个节点\`);
-    loadNodes();
-  } catch (e) { toast('执行失败: ' + e.message, 'error'); }
-}
+// ============ 节点名清洗（v2.35 已废弃：改为生成时自动命名，见 config.service.smartRename） ============
 
 // 复制文本到剪贴板（v2.30.5）
 // ⚠️ 非安全上下文（内网 http 直连，如 http://NAS-IP:20130）浏览器**不提供** navigator.clipboard，

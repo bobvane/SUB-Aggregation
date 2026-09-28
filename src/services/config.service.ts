@@ -15,14 +15,11 @@ import { MetaCubeXRule, RULE_GROUPS, CustomRule, mergeCustomRules, findRuleInGro
 import { createIpGeoResolver, prewarmIpGeo, PrewarmResult, filterUnlocatedServers, countUnlocatedGeo } from './ip-geo.service';
 import { CFUsageAccount, getCFAccountsRaw, saveCFAccounts, newId, CF_USAGE_LIMIT } from './cf-usage.service';
 import { deduplicateNodes } from '@/parser';
-import { createCleanRule, applyCleanRules } from '@/models/clean-rule';
 import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
 import { getAllNodeHealth, NodeHealthLatest } from './node-probe.service';
-
-const CLEAN_RULES_KEY = 'clean_rules';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -120,13 +117,8 @@ export interface ConfigService {
   deleteCustomRule(id: string): Promise<void>;
   /** 获取合并自定义规则后的完整分组（供 /api/rules/groups 返回） */
   getMergedGroups(): Promise<(typeof RULE_GROUPS)[number][]>;
-  // ============ 节点名清洗规则（持久化，订阅更新后自动应用） ============
-  getCleanRules(): Promise<import('@/models/clean-rule').CleanRule[]>;
-  addCleanRule(rule: { pattern: string; replacement?: string; regex?: boolean }): Promise<import('@/models/clean-rule').CleanRule>;
-  deleteCleanRule(id: string): Promise<void>;
-  toggleCleanRule(id: string, enabled: boolean): Promise<void>;
-  /** 对当前全部节点立即执行清洗规则集（手动触发），返回受影响数量 */
-  applyCleanRulesNow(): Promise<number>;
+  // ============ 节点名清洗规则（v2.35 已废弃，改为生成时自动命名） ============
+
   /** 主动预填充：批量合并查询一批 server 的 IP 归属地并写入缓存（查询与配置生成解耦） */
   prewarmGeo(servers: string[]): Promise<PrewarmResult>;
   /** 返回一批 server 中「未识别国家码」的（纯读缓存，不触发外网查询，口径与 resolver 一致） */
@@ -269,65 +261,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       return mergeCustomRules(custom);
     },
 
-    // ============ 节点名清洗规则 ============
-    async getCleanRules() {
-      const raw = await repos.settings.get(CLEAN_RULES_KEY);
-      if (!raw) return [];
-      try {
-        return JSON.parse(raw) as import('@/models/clean-rule').CleanRule[];
-      } catch {
-        return [];
-      }
-    },
-
-    async addCleanRule(rule) {
-      const rules = await this.getCleanRules();
-      const created = createCleanRule({
-        pattern: rule.pattern,
-        replacement: rule.replacement ?? '',
-        regex: rule.regex ?? false,
-      });
-      rules.push(created);
-      await repos.settings.set(CLEAN_RULES_KEY, JSON.stringify(rules));
-      return created;
-    },
-
-    async deleteCleanRule(id) {
-      const rules = await this.getCleanRules();
-      await repos.settings.set(CLEAN_RULES_KEY, JSON.stringify(rules.filter((r) => r.id !== id)));
-    },
-
-    async toggleCleanRule(id, enabled) {
-      const rules = await this.getCleanRules();
-      const target = rules.find((r) => r.id === id);
-      if (!target) throw new Error('Clean rule not found');
-      target.enabled = enabled;
-      await repos.settings.set(CLEAN_RULES_KEY, JSON.stringify(rules));
-    },
-
-    async applyCleanRulesNow() {
-      const rules = await this.getCleanRules();
-      let changed = 0;
-      const subs = await repos.subscriptions.list();
-      const nodesBySub = await repos.nodes.getBySubscriptions(subs.map((s) => s.id));
-      for (const sub of subs) {
-        const nodes = nodesBySub.get(sub.id) ?? [];
-        let subChanged = false;
-        const transformed = nodes.map((n) => {
-          // 始终从原始名出发应用全部启用规则（幂等且删除规则后可正确还原）
-          const base = n.metadata?.originalName ?? n.name;
-          const newName = applyCleanRules(base, rules);
-          if (newName !== n.name) {
-            changed++;
-            subChanged = true;
-            return { ...n, name: newName };
-          }
-          return n;
-        });
-        if (subChanged) await repos.nodes.setBySubscription(sub.id, transformed);
-      }
-      return changed;
-    },
+    // ============ 节点名清洗规则（v2.35 已废弃：改为生成时自动命名 smartRename） ============
 
     async prewarmGeo(servers: string[]): Promise<PrewarmResult> {
       return prewarmIpGeo(

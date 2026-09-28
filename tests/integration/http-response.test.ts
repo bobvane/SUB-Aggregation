@@ -26,7 +26,7 @@ describe('HTTP 响应层（压缩 / 订阅 url 字段）', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
       config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',

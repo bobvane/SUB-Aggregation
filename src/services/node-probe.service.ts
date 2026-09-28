@@ -342,16 +342,31 @@ export interface HealthStorage {
 }
 
 /**
+ * 统计窗口 = 设置页「链接更新时间」sub_update_interval（小时 1-24）。
+ * 0=不自动更新 → 回退 24；缺失/非法同样回退 24。
+ */
+export async function resolveWindowHours(storage: HealthStorage): Promise<number> {
+  try {
+    const h = Number.parseInt((await storage.get(KV_KEYS.setting('sub_update_interval'))) ?? '', 10);
+    return Number.isFinite(h) && h >= 1 && h <= 24 ? h : 24;
+  } catch {
+    return 24;
+  }
+}
+
+/**
  * 全量探测所有节点
+ * windowHours 省略时自动取设置页 sub_update_interval（刷新一次测一次，窗口跟着走）
  */
 export async function probeAllNodes(
   nodes: Node[],
   storage: HealthStorage,
-  windowHours: number = 24
+  windowHours?: number
 ): Promise<{
   results: ProbeResult[];
   stats: { total: number; alive: number; dead: number; suspect: number; disabled: number };
 }> {
+  const win = windowHours ?? (await resolveWindowHours(storage));
   const results: ProbeResult[] = [];
   
   // 并发控制：分批 Promise.all
@@ -394,7 +409,7 @@ export async function probeAllNodes(
       tlsOk: result.tlsLatency !== null,
       httpOk: result.httpLatency !== null,
       history: historyForScore,
-      windowHours,
+      windowHours: win,
     });
     
     // 状态机判定
