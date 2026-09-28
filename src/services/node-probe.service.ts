@@ -328,6 +328,24 @@ export async function resolveWindowHours(storage: HealthStorage): Promise<number
 }
 
 /**
+ * 探测引擎版本：探测方式/评分口径变更时 +1。
+ * 首轮探测前清掉旧引擎留下的健康数据——口径不同（v2.35 的假探测把全量节点写成 dead）
+ * 混在同一窗口里会把升级后的评分和熔断判定一起带偏。
+ */
+const PROBE_ENGINE_VERSION = 2;
+const PROBE_ENGINE_KEY = 'probe:engine_version';
+
+export async function resetProbeDataIfEngineChanged(storage: HealthStorage): Promise<boolean> {
+  const current = await storage.get(PROBE_ENGINE_KEY);
+  if (current === String(PROBE_ENGINE_VERSION)) return false;
+  for (const prefix of ['health:hist:', 'health:latest:']) {
+    for (const { key } of await storage.list(prefix)) await storage.delete(key);
+  }
+  await storage.put(PROBE_ENGINE_KEY, String(PROBE_ENGINE_VERSION));
+  return true;
+}
+
+/**
  * 全量探测所有节点
  * windowHours 省略时自动取设置页 sub_update_interval（刷新一次测一次，窗口跟着走）
  */
@@ -348,6 +366,7 @@ export async function probeAllNodes(
   };
 }> {
   const win = windowHours ?? (await resolveWindowHours(storage));
+  await resetProbeDataIfEngineChanged(storage);
   const results: ProbeResult[] = [];
   
   // 并发控制：分批 Promise.all

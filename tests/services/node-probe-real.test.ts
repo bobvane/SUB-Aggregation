@@ -10,8 +10,8 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import net from 'node:net';
-import { probeAllNodes, type HealthStorage } from '@/services/node-probe.service';
-import type { Node } from '@/models/node';
+import { probeAllNodes, resetProbeDataIfEngineChanged, type HealthStorage } from '@/services/node-probe.service';
+import { nodeFingerprint, type Node } from '@/models/node';
 
 function memStorage(): HealthStorage {
   const m = new Map<string, string>();
@@ -119,5 +119,41 @@ describe('节点探测引擎（真实 TCP/TLS 握手）', () => {
     expect(latest.status).toBe('alive');
     expect(latest.statusMachine).toBe('active');
     expect(latest.score).toBeGreaterThan(0);
+  });
+
+  it('引擎版本变更 → 首轮探测清掉旧引擎的假历史（否则升级后评分/熔断被带偏）', async () => {
+    const open = await listen();
+    cleanups.push(open.close);
+    const storage = memStorage();
+    const node = makeNode('up', open.port);
+    const fp = nodeFingerprint(node);
+
+    // 模拟 v2.35 假探测留下的数据：连续 dead + latest 已被判熔断
+    for (let i = 0; i < 5; i++) {
+      await storage.put(`health:hist:${fp}:${2000 + i}`, JSON.stringify({
+        fingerprint: fp, status: 'dead', tcpLatency: null, tlsLatency: null, timestamp: 2000 + i, score: 0,
+      }));
+    }
+    await storage.put(`health:latest:${fp}`, JSON.stringify({
+      fingerprint: fp, status: 'dead', statusMachine: 'disabled', score: 0, tcpLatency: null, tlsLatency: null, timestamp: 2003,
+    }));
+
+    const { results } = await probeAllNodes([node], storage);
+
+    expect(results[0].status).toBe('alive');
+    // 假历史若未被清理，可用率≈0 会把评分拉到 50 以下
+    expect(results[0].score).toBeGreaterThanOrEqual(50);
+    expect(await storage.get(`health:hist:${fp}:2000`)).toBeNull();
+    expect(await storage.get('probe:engine_version')).toBe('2');
+    // latest 已被本轮结果覆盖：不再带着 disabled 把节点踢出配置
+    const latest = JSON.parse((await storage.get(`health:latest:${fp}`))!) as { status: string; statusMachine: string };
+    expect(latest.status).toBe('alive');
+    expect(latest.statusMachine).toBe('active');
+  });
+
+  it('同引擎版本重复探测不清理历史（清理只发生一次）', async () => {
+    const storage = memStorage();
+    expect(await resetProbeDataIfEngineChanged(storage)).toBe(true);
+    expect(await resetProbeDataIfEngineChanged(storage)).toBe(false);
   });
 });
