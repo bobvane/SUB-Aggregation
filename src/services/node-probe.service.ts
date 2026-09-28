@@ -114,8 +114,8 @@ async function probeTls(host: string, port: number): Promise<{ latency: number |
   const start = Date.now();
   
   try {
-    // TLS 握手：尝试建立 HTTPS 连接
-    const res = await fetch(`https://${host}:${port}`, {
+    // TLS 握手:尝试建立 HTTPS 连接
+    await fetch(`https://${host}:${port}`, {
       method: 'HEAD',
       signal: controller.signal,
       headers: { 'User-Agent': 'Sub-Aggregation-Probe/1.0' },
@@ -238,7 +238,7 @@ interface ScoreInput {
 }
 
 function calculateScore(input: ScoreInput): number {
-  const { tcpLatency, tlsLatency, httpLatency, tcpOk, tlsOk, httpOk, history, windowHours } = input;
+  const { httpLatency, history, windowHours } = input;
   const now = Date.now();
   const windowMs = windowHours * 3600 * 1000;
   

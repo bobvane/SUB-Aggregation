@@ -71,7 +71,7 @@ export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
   const { repos, auth, subscriptions, config } = deps;
   // v2.32: 配置快照缓存(用于订阅生效)
-  const snapshotCache = createSnapshotCache(deps.storage ?? repos.settings as any);
+  const snapshotCache = createSnapshotCache(deps.storage ?? (repos.settings as unknown as KVStorage));
   // 规则目录同步服务：默认用全局 fetch 拉 GitHub；测试可注入 mock
   const catalogSync: CatalogSyncService =
     deps.catalogSync ??
@@ -327,7 +327,7 @@ export function createApp(deps: AppDeps): Hono {
           try {
             const { probeAllNodes } = await import('@/services/node-probe.service');
             const nodes = deduplicateNodes(await repos.nodes.getAll());
-            await probeAllNodes(nodes, repos.settings as any, config as any);
+            await probeAllNodes(nodes, repos.settings as unknown as KVStorage, 24);
           } catch (e) {
             console.warn(`[SubscriptionUpdate:${id}] 节点测活失败(后台,不阻塞): ${(e as Error).message}`);
           }
@@ -906,25 +906,25 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/operation-log', requireAuth(auth), async (c) => {
     const limit = Math.min(Number(c.req.query('limit') || 50), 200);
     const { getOperationLogs } = await import('@/services/operation-log.service');
-    const logs = await getOperationLogs(repos.settings as any, limit);
+    const logs = await getOperationLogs(repos.settings as unknown as KVStorage, limit);
     return c.json({ success: true, data: logs });
   });
 
   app.delete('/api/operation-log', requireAuth(auth), async (c) => {
     const { clearOperationLogs } = await import('@/services/operation-log.service');
-    await clearOperationLogs(repos.settings as any);
+    await clearOperationLogs(repos.settings as unknown as KVStorage);
     return c.json({ success: true });
   });
 
   // ============ Nodes Health API (v2.32) ============
   app.get('/api/nodes/health', requireAuth(auth), async (c) => {
     const fingerprint = c.req.query('fingerprint');
-    const { getNodeHealthLatest, getNodeHealthHistory, getAllNodeHealth } = await import('@/services/node-probe.service');
+    const { getNodeHealthHistory, getAllNodeHealth } = await import('@/services/node-probe.service');
     if (fingerprint) {
-      const history = await getNodeHealthHistory(fingerprint, repos.settings as any);
+      const history = await getNodeHealthHistory(fingerprint, repos.settings as unknown as KVStorage);
       return c.json({ success: true, data: history });
     }
-    const health = await getAllNodeHealth(repos.settings as any);
+    const health = await getAllNodeHealth(repos.settings as unknown as KVStorage);
     return c.json({ success: true, data: health });
   });
 

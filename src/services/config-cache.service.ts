@@ -23,9 +23,6 @@ export interface SnapshotCache {
   incrementVersion(): Promise<number>;
 }
 
-const FORMATS = ['mihomo', 'singbox', 'clash'] as const;
-type Format = typeof FORMATS[number];
-
 /**
  * 生成内容的 ETag (SHA-256 前 16 字节)
  */

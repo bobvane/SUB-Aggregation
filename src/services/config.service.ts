@@ -19,7 +19,6 @@ import { createCleanRule, applyCleanRules } from '@/models/clean-rule';
 import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
-import { createIpGeoResolver as createIpGeoResolver2 } from './ip-geo.service';
 
 const CLEAN_RULES_KEY = 'clean_rules';
 
@@ -102,11 +101,6 @@ const DISABLED_GROUPS_KEY = 'disabled_groups';
 export function createConfigService(repos: Repositories, kv: KVStorage): ConfigService {
   const snapshotCache = createSnapshotCache(kv);
   const opLog = createOperationLog(kv);
-  
-  // 智能重命名：[旗帜][国家代码] [协议] [延迟ms]
-  function smartRename(nodes: Node[], ipGeoResolver: (server: string) => Promise<string | null>): Promise<Node[]> {
-    return Promise.resolve(nodes);
-  }
 
   return {
 
