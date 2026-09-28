@@ -14,6 +14,7 @@
 
 import { KVStorage } from '@/storage/kv';
 import { KV_KEYS } from '@/models/config';
+import { APP_META } from '@/meta';
 
 export interface SnapshotCache {
   getCachedConfig(format: string): Promise<{ content: string; etag: string; version: number } | null>;
@@ -34,12 +35,18 @@ async function generateETag(content: string): Promise<string> {
 
 /**
  * 创建配置快照缓存服务
+ *
+ * appVersion 参与 key：config_version 只随**数据**变更自增（订阅/规则/分组…），
+ * App 升级不会触发 → 旧镜像生成的快照会被新镜像原样吐给用户。
+ * 把 App 版本编进 key，升级后自动 miss 并重新生成。
+ * （appVersion 可注入仅为可测：见 tests/services/config-cache-version.test.ts）
  */
-export function createSnapshotCache(kv: KVStorage): SnapshotCache {
+export function createSnapshotCache(kv: KVStorage, appVersion: string = APP_META.version): SnapshotCache {
+  const snapVersion = (version: number) => `${appVersion}:${version}`;
   return {
     async getCachedConfig(format: string) {
       const version = await this.getVersion();
-      const key = KV_KEYS.configSnapshot(format, version);
+      const key = KV_KEYS.configSnapshot(format, snapVersion(version));
       const raw = await kv.get(key);
       if (!raw) return null;
       
@@ -54,7 +61,7 @@ export function createSnapshotCache(kv: KVStorage): SnapshotCache {
 
     async setCachedConfig(format: string, content: string, version: number) {
       const etag = await generateETag(content);
-      const key = KV_KEYS.configSnapshot(format, version);
+      const key = KV_KEYS.configSnapshot(format, snapVersion(version));
       await kv.put(key, JSON.stringify({ content, etag, version, timestamp: Date.now() }));
     },
 

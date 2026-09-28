@@ -95,6 +95,8 @@ export interface ConfigService {
   generate(format: OutputFormat): Promise<string>;
   generateOutput(format: OutputFormat): Promise<OutputResult>;
   getNodes(): Promise<Node[]>;
+  /** 自动命名后的节点（展示用：与配置输出同一套命名，不改动库中原始名） */
+  autoNamed(nodes: Node[]): Promise<Node[]>;
   /** 获取禁用的节点指纹列表 */
   getDisabledNodes(): Promise<string[]>;
   /** 设置禁用的节点指纹列表 */
@@ -334,6 +336,25 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
     async deleteCFUsageAccount(id: string): Promise<void> {
       const list = await getCFAccountsRaw(repos);
       await saveCFAccounts(repos, list.filter((a) => a.id !== id));
+    },
+
+    /**
+     * 自动命名后的节点（展示用）。
+     * v2.35 起清洗不再写库，节点名只在输出时生成 → 列表页必须走这里，
+     * 否则用户看到的是订阅原始名，与生成的配置不一致。
+     * 返回重命名后的新数组，不改动入参/库中数据。
+     */
+    async autoNamed(nodes: Node[]): Promise<Node[]> {
+      const copy = nodes.map((n) => ({ ...n }));
+      const ipGeoResolver = createIpGeoResolver({
+        get: (k) => repos.settings.get(k),
+        set: (k, v) => repos.settings.set(k, v),
+      });
+      const healthByFp = new Map<string, NodeHealthLatest>(
+        (await getAllNodeHealth(kv)).map((h) => [h.fingerprint, h])
+      );
+      await smartRename(copy, ipGeoResolver, healthByFp);
+      return copy;
     },
 
     async generate(format: OutputFormat): Promise<string> {

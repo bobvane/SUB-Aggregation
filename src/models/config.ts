@@ -60,7 +60,7 @@ export const KV_KEYS = {
   /** v2.32: 操作日志数据 key: op_log:data:{idx} */
   operationLogData: (idx: number) => `op_log:data:${idx}`,
   /** v2.32: 配置快照缓存 key: config:snap:{format}:{version} */
-  configSnapshot: (format: string, version: number) => `config:snap:${format}:${version}`,
+  configSnapshot: (format: string, version: number | string) => `config:snap:${format}:${version}`,
   /** v2.32: 配置版本号（每次变更自增，用于缓存失效） */
   configVersion: 'setting:config_version',
 } as const;

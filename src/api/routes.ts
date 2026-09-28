@@ -399,7 +399,7 @@ export function createApp(deps: AppDeps): Hono {
       const nodes = await repos.nodes.getBySubscription(subscriptionId);
       return c.json({
         success: true,
-        data: nodes.map(mapper),
+        data: (await config.autoNamed(nodes)).map(mapper),
       });
     }
     const all = await repos.nodes.getAll();
@@ -408,7 +408,7 @@ export function createApp(deps: AppDeps): Hono {
     const geoUnlocated = await config.countUnlocatedGeo(unique.map(n => n.server));
     return c.json({
       success: true,
-      data: unique.map(mapper),
+      data: (await config.autoNamed(unique)).map(mapper),
       stats: { original, duplicates: original - unique.length, unique: unique.length, geoUnlocated },
     });
   });

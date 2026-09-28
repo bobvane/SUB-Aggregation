@@ -13,6 +13,8 @@ import { createApp } from '@/api/routes';
 import { createAuthService, createPasswordHash } from '@/services/auth.service';
 import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
+import { countryDisplayName } from '@/data/country-codes';
+import { nodeFingerprint } from '@/models/node';
 import { KV_KEYS } from '@/models/config';
 
 interface ResData {
@@ -45,11 +47,12 @@ const snapshot = (fingerprint: string, timestamp: number) => ({
 describe('Nodes Health API', () => {
   let app: ReturnType<typeof createApp>;
   let kv: MemoryKvAdapter;
+  let repos: ReturnType<typeof createRepositories>;
   let headers: Record<string, string>;
 
   beforeEach(async () => {
     kv = new MemoryKvAdapter();
-    const repos = createRepositories(kv);
+    repos = createRepositories(kv);
     const { hash, salt } = await createPasswordHash('test-pass');
     await kv.put('admin:hash', JSON.stringify({ hash, salt }));
     const auth = createAuthService(repos.sessions, async () => ({ hash, salt }));
@@ -89,6 +92,23 @@ describe('Nodes Health API', () => {
     const history = json.data as Array<{ fingerprint: string; timestamp: number }>;
     expect(history).toHaveLength(2);
     expect(history.every((h) => h.fingerprint === 'fp-hk-01')).toBe(true);
+  });
+
+  it('GET /api/nodes 返回自动命名后的节点名（与生成的配置一致）', async () => {
+    await repos.nodes.setBySubscription('sub-1', [
+      { name: '香港01-中转', protocol: 'vless', server: 'hk1.example.com', port: 443, tls: true } as never,
+    ]);
+    await repos.settings.set('ip_geo:hk1.example.com', `${Date.now()}|${countryDisplayName('HK')}`);
+    await kv.put(
+      KV_KEYS.healthLatest(nodeFingerprint({ server: 'hk1.example.com', port: 443, protocol: 'vless' } as never)),
+      JSON.stringify(snapshot(nodeFingerprint({ server: 'hk1.example.com', port: 443, protocol: 'vless' } as never), 1700000000000))
+    );
+
+    const res = await app.request('/api/nodes', { headers });
+    expect(res.status).toBe(200);
+    const list = ((await res.json()) as ResData).data as Array<{ name: string }>;
+    // 旧行为：库里存什么显示什么（'香港01-中转'）；修复后：与配置输出同款自动命名
+    expect(list[0].name).toBe('🇭🇰 HK VLESS 80ms-01');
   });
 
   it('GET /api/nodes/health 未登录返回 401', async () => {
