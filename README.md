@@ -60,7 +60,6 @@ docker compose up -d
 - **多格式输出**：mihomo / sing-box / shadowrocket / v2ray / v2rayN / nekoray，不支持的协议自动跳过
 - **DNS 防泄露**：生成配置内置「国内域名→国内 DoH / 国外域名→国外 DoH」分流 + fake-ip 全接管 + 严格路由；若经 OpenClash 导入，请在面板关闭「自定义上游 DNS 服务器」以免覆盖订阅 DNS 段
 - **内置管理后台**：仪表盘 / 订阅 / 节点 / 规则 / 输出 / 设置，自带鉴权
-- **Cloudflare 用量统计**：绑定最多 3 个 Cloudflare 账户，仪表盘显示今日请求量（可选功能，与本项目自身部署方式无关）
 
 ## 支持的协议
 

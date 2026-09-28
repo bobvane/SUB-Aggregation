@@ -13,7 +13,6 @@ import { generateBase64Config } from '@/generator/base64-generator';
 import { nodeToUrl } from '@/generator/node-to-url';
 import { MetaCubeXRule, RULE_GROUPS, CustomRule, mergeCustomRules, findRuleInGroups } from '@/data/metacubex-rules';
 import { createIpGeoResolver, prewarmIpGeo, PrewarmResult, filterUnlocatedServers, countUnlocatedGeo } from './ip-geo.service';
-import { CFUsageAccount, getCFAccountsRaw, saveCFAccounts, newId, CF_USAGE_LIMIT } from './cf-usage.service';
 import { deduplicateNodes } from '@/parser';
 import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
@@ -126,11 +125,6 @@ export interface ConfigService {
   getUnlocatedServers(servers: string[]): Promise<string[]>;
   /** 统计一批 server 中「未识别国家码」的数量（纯读缓存） */
   countUnlocatedGeo(servers: string[]): Promise<number>;
-  // ============ Cloudflare 请求统计账户（v2.18.0，仪表盘显示今日请求数） ============
-  getCFUsageAccounts(): Promise<CFUsageAccount[]>;
-  /** 新增或更新一个 CF 账户；若传 apiToken 则覆盖，否则保留原值 */
-  upsertCFUsageAccount(acc: { id?: string; name: string; accountId: string; apiToken?: string }): Promise<CFUsageAccount>;
-  deleteCFUsageAccount(id: string): Promise<void>;
   /** v2.32: 主动清除配置快照缓存(测试/订阅状态变更时调用) */
   resetCache(): Promise<void>;
 }
@@ -285,10 +279,6 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       );
     },
 
-    async getCFUsageAccounts(): Promise<CFUsageAccount[]> {
-      return getCFAccountsRaw(repos);
-    },
-
     async getNodes(): Promise<Node[]> {
       // 去重：按 server:port:protocol 三项指纹，合并多订阅重复节点
       // （getAll() 已排除停用订阅的节点 —— 用户 2026-09-24）
@@ -315,40 +305,6 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       // 此前按状态机连续 3 次失败才 disabled，用户点一次测活永远看不到"抛弃"效果。
       const health = await getAllNodeHealth(kv);
       return health.filter((h) => h.status === 'dead').map((h) => h.fingerprint);
-    },
-
-    async upsertCFUsageAccount(acc): Promise<CFUsageAccount> {
-      const list = await getCFAccountsRaw(repos);
-      const existing = acc.id ? list.find((a) => a.id === acc.id) : undefined;
-      if (existing) {
-        // token 为空 = 保留原值（编辑时不回显、不要求重填）
-        existing.name = acc.name;
-        existing.accountId = acc.accountId;
-        if (acc.apiToken) existing.apiToken = acc.apiToken;
-        await saveCFAccounts(repos, list);
-        return existing;
-      }
-      // 新增：限制最多 CF_USAGE_LIMIT 个
-      if (list.length >= CF_USAGE_LIMIT) {
-        throw new Error(`最多可添加 ${CF_USAGE_LIMIT} 个 Cloudflare 账户`);
-      }
-      if (!acc.apiToken) throw new Error('新增账户必须填写 API Token');
-      const created: CFUsageAccount = {
-        id: newId(),
-        name: acc.name,
-        accountId: acc.accountId,
-        apiToken: acc.apiToken,
-        enabled: true,
-        sort: list.length,
-      };
-      list.push(created);
-      await saveCFAccounts(repos, list);
-      return created;
-    },
-
-    async deleteCFUsageAccount(id: string): Promise<void> {
-      const list = await getCFAccountsRaw(repos);
-      await saveCFAccounts(repos, list.filter((a) => a.id !== id));
     },
 
     /**

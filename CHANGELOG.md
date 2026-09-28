@@ -2,6 +2,19 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.36.4] - 2026-09-29
+
+### 移除
+- **CF 用量统计功能整体下线**：项目已完整搬迁到 Docker 模式，不再与 Cloudflare 平台有任何交互。删除内容：
+  - `src/services/cf-usage.service.ts`（CF GraphQL 用量/KV 查询服务）
+  - `src/api/routes.ts` 的 5 个 `/api/cf-usage/*` 端点
+  - `src/services/config.service.ts` 的 CF 账户 CRUD（getCFUsageAccounts / upsert / delete）
+  - 前端仪表盘的「Cloudflare 统计（今日）」卡片 + 设置页的「Cloudflare 请求统计」账户管理卡及全部 JS
+  - 对应测试 `tests/services/cf-usage.service.test.ts`、`tests/services/kv-usage.test.ts`
+  - 本地开发文档 `docs/09_CF_USAGE.md` 及相关引用
+- **旧项目文档归档清理**：删除 `docs/archive/`（CF-Workers-SUB-Next 时期的历史 PRD/规格文档，已全部过时）
+- 保留不动：生成配置里客户端用到的 `cloudflare-dns.com` DoH 兜底、`cp.cloudflare.com/generate_204` 测活 URL、MetaCubeX 规则目录（这些是订阅客户端功能，与 CF 平台部署无关）
+
 ## [2.36.3] - 2026-09-29
 
 ### 修复
