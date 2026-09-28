@@ -311,8 +311,10 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
      * 等于永远为空 —— 不通的节点其实从没被抛弃过。节点记录保留、仍参与测活以便恢复。
      */
     async getDroppedNodes(): Promise<string[]> {
+      // v2.36.2：最新一轮探测 dead 即从配置剔除（立即生效、可自愈）。
+      // 此前按状态机连续 3 次失败才 disabled，用户点一次测活永远看不到"抛弃"效果。
       const health = await getAllNodeHealth(kv);
-      return health.filter((h) => h.statusMachine === 'disabled').map((h) => h.fingerprint);
+      return health.filter((h) => h.status === 'dead').map((h) => h.fingerprint);
     },
 
     async upsertCFUsageAccount(acc): Promise<CFUsageAccount> {

@@ -2,6 +2,15 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.36.2] - 2026-09-28
+
+### 修复
+- **节点列表「协议」列显示 `undefined`**：v2.36.0 改写列表渲染时把 `displayProtocol(node)` 错写成 `displayProtocol(node.protocol)`，函数收节点对象却收到字符串，取 `.protocol` 得 undefined。已改回，并在函数内兼容直接传字符串的调用，防止同类传参错误。
+- **CDN 前置节点被误判为不通**：TCP 通、但 TLS 握手 `HANDSHAKE_FAILURE`（如 Cloudflare 节点 `162.159.198.1`。裸握手不带 SNI 必被拒，节点本身是好的）。探测改用节点真实的 `sni` 参数做 servername（旧实现只在 host 为域名时才带 SNI）。
+
+### 变更
+- **「不通的节点要抛弃」立即生效**：原来按状态机要连续 3 次失败才 `disabled`，点一次测活永远看不到抛弃效果。现改为**最新一轮探测 dead 即从配置剔除**（列表里仍显示、标 🚫，下一轮通了自动回来）。状态机记录继续用于健康历史与排序。
+
 ## [2.36.1] - 2026-09-28
 
 ### 修复

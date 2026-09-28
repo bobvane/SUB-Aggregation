@@ -1456,7 +1456,8 @@ function parseVlessLink(n) {
   return out;
 }
 function displayProtocol(n) {
-  const p = n.protocol;
+  // 兼容直接传 protocol 字符串（历史调用点）：字符串没有 .protocol，取自身
+  const p = typeof n === 'string' ? n : n.protocol;
   if (p === 'vmess') return 'VMess';
   if (p === 'trojan') return 'Trojan';
   if (p === 'ss') return 'Shadowsocks';
@@ -1561,7 +1562,7 @@ function renderNodes() {
     return \`<tr\${rowStyle}>
       <td><input type="checkbox" data-fp="\${escHtml(n.fingerprint)}" \${n.enabled ? 'checked' : ''} onchange="updateNodeEnabled(this)"></td>
       <td>\${escHtml(n.name)}</td>
-      <td><span class="tag \${tagClass}">\${displayProtocol(n.protocol)}</span></td>
+      <td><span class="tag \${tagClass}">\${displayProtocol(n)}</span></td>
       <td style="font-size:14px">\${escHtml(n.server)}</td>
       <td>\${n.port}</td>
       <td>\${n.tls ? '✅' : '❌'}</td>

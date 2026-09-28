@@ -109,17 +109,19 @@ function probeTcp(host: string, port: number): Promise<{ latency: number | null;
  * TLS 握手探测 —— 真实 handshake RTT
  * 只量握手耗时，不校验证书链（自签/过期证书不影响节点可用性判断）
  */
-function probeTls(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
+function probeTls(host: string, port: number, sni?: string): Promise<{ latency: number | null; error: string | null }> {
   return new Promise((resolve) => {
     const start = Date.now();
     let sock: tls.TLSSocket;
     try {
-      // 裸 IP 节点不能设 servername（Node 直接抛错），只有域名才带 SNI
+      // 优先用节点的真实 SNI（CDN/Reality 节点 host 常为 IP，必须带 SNI 才握手成功；
+      // 裸 IP 强设 servername 会抛错，故 IP 且无 sni 时省略）
+      const servername = (sni ? sni.split(':')[0] : undefined) || (net.isIP(host) === 0 ? host : undefined);
       const opts: tls.ConnectionOptions = {
         host,
         port,
         rejectUnauthorized: false,
-        ...(net.isIP(host) === 0 ? { servername: host } : {}),
+        ...(servername ? { servername } : {}),
       };
       sock = tls.connect(opts);
     } catch (e) {
@@ -160,7 +162,7 @@ async function probeNode(node: Node): Promise<ProbeResult> {
 
   // 明文协议（ss / 无 tls 的 vmess 等）不做 TLS 握手：必然失败，不代表节点坏
   if (node.tls) {
-    const handshake = await probeTls(node.server, node.port);
+    const handshake = await probeTls(node.server, node.port, node.sni);
     if (handshake.latency === null) {
       return {
         nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
