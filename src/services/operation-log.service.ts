@@ -12,7 +12,7 @@ import { KV_KEYS } from '@/models/config';
 export interface OperationLogEntry {
   id: number;
   timestamp: number;
-  type: 'subscription_update' | 'geoip_update' | 'node_disabled' | 'node_recovered' | 'manual_action' | 'cache_invalidated';
+  type: 'subscription_update' | 'geoip_update' | 'node_disabled' | 'node_recovered' | 'manual_action' | 'cache_invalidated' | 'probe';
   message: string;
 }
 
@@ -21,7 +21,8 @@ const LOG_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 天
 /**
  * 创建操作日志服务
  */
-export function createOperationLog(kv: KVStorage) {
+// 只依赖 KV 的 get/put/delete 三方法：调用方可以传 HealthStorage 这类更窄的存储接口
+export function createOperationLog(kv: Pick<KVStorage, 'get' | 'put' | 'delete'>) {
   return {
     /**
      * 写入一条日志
@@ -158,6 +159,10 @@ export function createOperationLog(kv: KVStorage) {
 
     async logCacheInvalidated(formats: string[]) {
       await this.log('cache_invalidated', `配置缓存已失效（${formats.join(', ')}）`);
+    },
+
+    async logProbe(total: number, alive: number, dead: number, dropped: number) {
+      await this.log('probe', `测活完成：${total} 节点，${alive} 存活 / ${dead} 不通 / ${dropped} 已禁用`);
     },
   };
 }

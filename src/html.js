@@ -107,6 +107,7 @@ a:hover { text-decoration: underline; }
 .card-value { font-size: 28px; font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; font-feature-settings: 'tnum'; }
 /* ===== Stats Grid ===== */
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 28px; }
+.card-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
 /* ===== Forms ===== */
 input, select {
   padding: 10px 14px; border: 1px solid var(--border);
@@ -350,9 +351,11 @@ tbody tr:hover { background: var(--accent-soft); }
       <div class="card"><div class="card-title">订阅数量</div><div class="card-value" id="statSubs">-</div></div>
       <div class="card"><div class="card-title">已启用订阅</div><div class="card-value" id="statEnabledSubs">-</div></div>
       <div class="card"><div class="card-title">已禁用订阅</div><div class="card-value" id="statDisabledSubs">-</div></div>
-      <div class="card"><div class="card-title">节点总数</div><div class="card-value" id="statNodes">-</div></div>
-      <div class="card"><div class="card-title">已启用节点</div><div class="card-value" id="statEnabled">-</div></div>
-      <div class="card"><div class="card-title">已禁用节点</div><div class="card-value" id="statDisabled">-</div></div>
+      <div class="card"><div class="card-title">节点总数</div><div class="card-value" id="statNodes">-</div><div class="card-sub" id="statNodesSub"></div></div>
+      <div class="card"><div class="card-title">🟢 存活</div><div class="card-value" id="statAlive" style="color:var(--success)">-</div></div>
+      <div class="card"><div class="card-title">🔴 不通</div><div class="card-value" id="statDead" style="color:var(--danger)">-</div></div>
+      <div class="card"><div class="card-title">🚫 已抛弃</div><div class="card-value" id="statDropped" style="color:var(--danger)">-</div></div>
+      <div class="card"><div class="card-title">🕒 上次测活</div><div class="card-value" style="font-size:14px" id="statLastProbe">未测活</div></div>
       <div class="card"><div class="card-title">协议分布</div><div class="card-value" style="font-size:14px" id="statProto">-</div></div>
       <div class="card"><div class="card-title">最近更新</div><div class="card-value" style="font-size:14px" id="statUpdate">-</div></div>
     </div>
@@ -1099,9 +1102,14 @@ function renderDashboard(d) {
   document.getElementById('statSubs').textContent = d.subscriptions;
   document.getElementById('statEnabledSubs').textContent = d.enabledSubscriptions ?? '-';
   document.getElementById('statDisabledSubs').textContent = d.disabledSubscriptions ?? '-';
-  document.getElementById('statNodes').textContent = d.nodes;
-  document.getElementById('statEnabled').textContent = d.enabledNodes ?? '-';
-  document.getElementById('statDisabled').textContent = d.disabledNodes ?? '-';
+  // v2.36.3：节点口径与「节点列表」页一致 —— 去重后实际数 + 测活健康
+  document.getElementById('statNodes').textContent = d.uniqueNodes ?? d.nodes;
+  const sub = document.getElementById('statNodesSub');
+  if (sub) sub.textContent = (d.duplicates ? \`含重复 \${d.nodes}（去重 -\${d.duplicates}）\` : '无重复');
+  document.getElementById('statAlive').textContent = d.alive ?? 0;
+  document.getElementById('statDead').textContent = d.dead ?? 0;
+  document.getElementById('statDropped').textContent = d.droppedNodes ?? 0;
+  document.getElementById('statLastProbe').textContent = d.lastProbe ? new Date(d.lastProbe).toLocaleString('zh-CN', { hour12: false }) : '未测活';
   // 协议分布
   const proto = d.protoCount || {};
   const protoNames = { vmess:'VMess', vless:'VLESS', trojan:'Trojan', shadowsocks:'SS', ss:'SS' };
@@ -1140,15 +1148,16 @@ async function loadOperationLogs() {
       const timeStr = t.toLocaleString('zh-CN', { hour12: false });
       const icon = l.type === 'subscription_update' ? '🔄'
         : l.type === 'geoip_update' ? '🌐'
-        : l.type === 'node_disable' ? '🚫'
-        : l.type === 'node_enable' ? '✅'
-        : l.type === 'manual' ? '⚙️'
+        : l.type === 'node_disabled' ? '🚫'
+        : l.type === 'node_recovered' ? '✅'
+        : l.type === 'probe' ? '⚡'
+        : l.type === 'manual_action' ? '⚙️'
         : l.type === 'cache_invalidated' ? '💾'
         : '📝';
       return \`<div style="padding:6px 8px;border-bottom:1px solid var(--border);line-height:1.5">
         <span style="color:var(--text2);font-size:12px">\${timeStr}</span>
         <span>\${icon}</span>
-        <span style="margin-left:4px">\${escHtml(l.detail)}</span>
+        <span style="margin-left:4px">\${escHtml(l.message)}</span>
       </div>\`;
     }).join('');
   } catch { list.innerHTML = '<div style="padding:8px;color:var(--red)">加载失败</div>'; }

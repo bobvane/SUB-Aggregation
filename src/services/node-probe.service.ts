@@ -438,6 +438,16 @@ export async function probeAllNodes(
   const mss = [...machineStatus.values()];
   const latencies = results.map(r => nodeLatencyMs(r)).filter((v): v is number => v !== null);
 
+  // v2.36.3: 测活完成统一落操作日志（手动/订阅刷新/自动更新 4 个入口共用此处，一处全覆盖）
+  try {
+    const { createOperationLog } = await import('@/services/operation-log.service');
+    await createOperationLog(storage).logProbe(
+      results.length, alive, dead, mss.filter(s => s === 'disabled').length
+    );
+  } catch (e) {
+    console.warn(`[Probe] 操作日志写入失败(不影响测活): ${(e as Error).message}`);
+  }
+
   return {
     results,
     stats: {

@@ -59,7 +59,8 @@ describe('Dashboard API', () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as { success: boolean; data: {
       subscriptions: number; enabledSubscriptions: number; disabledSubscriptions: number;
-      nodes: number; enabledNodes: number; disabledNodes: number;
+      nodes: number; uniqueNodes: number; duplicates: number; enabledNodes: number; disabledNodes: number;
+      alive: number; dead: number; droppedNodes: number; lastProbe: number | null;
       protoCount: Record<string, number>; lastUpdate: number | null; status: string;
     } };
     expect(json.success).toBe(true);
@@ -67,6 +68,12 @@ describe('Dashboard API', () => {
     expect(json.data.enabledSubscriptions).toBe(1);
     expect(json.data.disabledSubscriptions).toBe(0);
     expect(json.data.nodes).toBe(2);
+    // v2.36.3：与节点列表页同口径的去重 + 测活健康字段
+    expect(json.data.uniqueNodes).toBe(2);
+    expect(json.data.alive).toBe(0); // 未测活时存活/不通/已抛弃均为 0
+    expect(json.data.dead).toBe(0);
+    expect(json.data.droppedNodes).toBe(0);
+    expect(json.data.lastProbe).toBe(null);
     expect(json.data.enabledNodes).toBe(2);
     expect(json.data.disabledNodes).toBe(0);
     expect(json.data.protoCount.vmess).toBe(1);

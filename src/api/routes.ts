@@ -208,6 +208,7 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // 仪表盘数据计算：/api/dashboard 与首屏 bootstrap 共用，避免两处重复
+  // v2.36.3：节点口径与「节点列表」页对齐 —— 去重 + 测活健康（存活/不通/已抛弃/上次测活）
   const buildDashboard = async () => {
     const subs = await subscriptions.list();
     // 两种口径各取一次（并行）：enabled=启用订阅的节点，all=含停用订阅的全部节点（用户 2026-09-24）
@@ -215,6 +216,19 @@ export function createApp(deps: AppDeps): Hono {
     const lastUpdate = subs.reduce((max, s) => Math.max(max, s.updatedAt), 0);
     const disabled = await config.getDisabledNodes();
     const enabledNodes = nodes.filter(n => !disabled.includes(nodeFingerprint(n)));
+    // 与 /api/nodes 同口径：统一按 server:port:protocol 去重
+    const unique = deduplicateNodes(allNodes);
+    // 测活健康（与节点列表页同一数据源 health:latest）
+    const { getAllNodeHealth } = await import('@/services/node-probe.service');
+    const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
+    const dropped = new Set(await config.getDroppedNodes());
+    let alive = 0, dead = 0, lastProbe = 0;
+    unique.forEach(n => {
+      const h = healthByFp.get(nodeFingerprint(n));
+      if (!h) return;
+      if (h.status === 'alive') alive++; else dead++;
+      if (h.timestamp > lastProbe) lastProbe = h.timestamp;
+    });
     // 按协议统计：口径与「节点总数」一致（全部订阅）
     const protoCount: Record<string, number> = {};
     allNodes.forEach(n => { const p = n.protocol || 'unknown'; protoCount[p] = (protoCount[p] || 0) + 1; });
@@ -223,8 +237,13 @@ export function createApp(deps: AppDeps): Hono {
       enabledSubscriptions: subs.filter(s => s.enabled).length,
       disabledSubscriptions: subs.filter(s => !s.enabled).length,
       nodes: allNodes.length,
+      duplicates: allNodes.length - unique.length,
+      uniqueNodes: unique.length,
       enabledNodes: enabledNodes.length,
       disabledNodes: disabled.length,
+      alive, dead,
+      droppedNodes: unique.filter(n => dropped.has(nodeFingerprint(n))).length,
+      lastProbe: lastProbe || null,
       protoCount,
       lastUpdate: lastUpdate || null,
       status: 'ok',
