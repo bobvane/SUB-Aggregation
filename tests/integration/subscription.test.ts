@@ -13,6 +13,7 @@ import { createSubscriptionService, isNodeLink } from '@/services/subscription.s
 import { createConfigService } from '@/services/config.service';
 import { validateMihomo } from '@/generator/mihomo';
 import { validateSingbox } from '@/generator/singbox';
+import { countryDisplayName } from '@/data/country-codes';
 
 const TEST_SUBSCRIPTION = [
   'ss://aes-256-gcm:pass1@jp1.example.com:8388#JP-1',
@@ -26,7 +27,7 @@ describe('subscription pipeline integration', () => {
   let service: ReturnType<typeof createSubscriptionService>;
   let configService: ReturnType<typeof createConfigService>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
     // fetchRaw 直接返回测试内容（绕过网络）
@@ -38,6 +39,12 @@ describe('subscription pipeline integration', () => {
       kv
     );
     configService = createConfigService(repos, kv);
+    // 预填 ip-geo 缓存（前缀 ip_geo: = IP_GEO_KEY_PREFIX），使智能重命名能解析出地理前缀
+    const ts = Date.now();
+    for (const [host, code] of [['jp1.example.com', 'JP'], ['us1.example.com', 'US'], ['hk1.example.com', 'HK']] as const) {
+      const d = countryDisplayName(code);
+      if (d) await repos.settings.set(`ip_geo:${host}`, `${ts}|${d}`);
+    }
   });
 
   it('should create and update subscription end-to-end', async () => {
@@ -68,8 +75,9 @@ describe('subscription pipeline integration', () => {
       json: async () => [],
     }));
     const yaml = await configService.generate('mihomo');
-    expect(yaml).toContain('JP-1');
-    expect(yaml).toContain('US-1');
+    // 智能重命名（v2.34）：[旗帜][国家代码] [协议] [延迟ms]-NN
+    expect(yaml).toContain('🇯🇵 JP Shadowsocks');
+    expect(yaml).toContain('🇺🇸 US VLESS');
     expect(validateMihomo(yaml)).toBe(true);
   }, 10000);
 
@@ -77,7 +85,8 @@ describe('subscription pipeline integration', () => {
     const sub = await service.create('T', 'https://example.com/sub');
     await service.update(sub.id, async () => TEST_SUBSCRIPTION);
     const json = await configService.generate('singbox');
-    expect(json).toContain('JP-1');
+    // 智能重命名（v2.34）：所有输出格式统一新命名
+    expect(json).toContain('🇯🇵 JP Shadowsocks');
     expect(validateSingbox(json)).toBe(true);
   });
 
@@ -182,7 +191,7 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
   let svcB: ReturnType<typeof createSubscriptionService>;
   let configService: ReturnType<typeof createConfigService>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
     const fa = async () => 'ss://aes-256-gcm:p1@node-a.example.com:8388#NODE-A';
@@ -190,6 +199,11 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     svcA = createSubscriptionService(repos, fa, async () => [], async () => [], kv);
     svcB = createSubscriptionService(repos, fb, async () => [], async () => [], kv);
     configService = createConfigService(repos, kv);
+    // 预填 ip-geo 缓存，使智能重命名解析出地理前缀（A→美国 B→香港）
+    const ts = Date.now();
+    const us = countryDisplayName('US'), hk = countryDisplayName('HK');
+    if (us) await repos.settings.set('ip_geo:node-a.example.com', `${ts}|${us}`);
+    if (hk) await repos.settings.set('ip_geo:node-b.example.com', `${ts}|${hk}`);
   });
 
   it('停用订阅的节点不进输出，重新启用后恢复', async () => {
@@ -199,8 +213,8 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     await svcB.update(b.id, async () => 'ss://aes-256-gcm:p2@node-b.example.com:8388#NODE-B');
 
     const withBoth = await configService.generate('mihomo');
-    expect(withBoth).toContain('NODE-A');
-    expect(withBoth).toContain('NODE-B');
+    expect(withBoth).toContain('🇺🇸 US Shadowsocks');
+    expect(withBoth).toContain('🇭🇰 HK Shadowsocks');
 
     // 停用 B
     const disabled = await svcB.setEnabled(b.id, false);
@@ -215,14 +229,14 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     // 显式重置缓存以确保 freshConfigService 不命中旧缓存
     await configService.resetCache();
     const onlyA = await configService.generate('mihomo');
-    expect(onlyA).toContain('NODE-A');
-    expect(onlyA).not.toContain('NODE-B');
+    expect(onlyA).toContain('🇺🇸 US Shadowsocks');
+    expect(onlyA).not.toContain('🇭🇰 HK Shadowsocks');
 
     // 重新启用 B
     await svcB.setEnabled(b.id, true);
     // 再次重置缓存
     await configService.resetCache();
     const bothBack = await configService.generate('mihomo');
-    expect(bothBack).toContain('NODE-B');
+    expect(bothBack).toContain('🇭🇰 HK Shadowsocks');
   });
 });

@@ -19,8 +19,66 @@ import { createCleanRule, applyCleanRules } from '@/models/clean-rule';
 import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
+import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
+import { getAllNodeHealth, NodeHealthLatest } from './node-probe.service';
 
 const CLEAN_RULES_KEY = 'clean_rules';
+
+/** 协议 → 配置显示名（与前端 displayProtocol 一致） */
+const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
+  vless: 'VLESS', vmess: 'VMESS', trojan: 'Trojan', ss: 'Shadowsocks', ssr: 'ShadowsocksR',
+  hysteria2: 'Hysteria2', tuic: 'TUIC', wireguard: 'WireGuard', anytls: 'AnyTLS',
+};
+
+/** 地理显示名（"🇭🇰 香港"，即 ip-geo 缓存存的值）→ ISO 码（逆向查表） */
+const DISPLAY_TO_CODE: Record<string, string> = {};
+for (const code of Object.keys(COUNTRIES)) {
+  const d = countryDisplayName(code);
+  if (d) DISPLAY_TO_CODE[d] = code;
+}
+
+/**
+ * 自动命名（v2.34：废弃人工清洗规则，生成时统一重命名所有输出格式）。
+ * 格式: [旗帜][国家代码] [协议] [延迟ms]-NN，NN = 批次连续序号（01 起，每个节点都带号，2026-09-28 定稿）。
+ * - 旗帜+国家码：来自 ip-geo 缓存（复用地理分组同一数据源）
+ * - 延迟：node_health.http_latency（无则回退 tcp_latency，冷启动无数据显示 --）
+ */
+async function smartRename(
+  nodes: Node[],
+  ipGeoResolver: (server: string) => Promise<string | null>,
+  healthByFp: Map<string, NodeHealthLatest>
+): Promise<void> {
+  const geoCache = new Map<string, string | null>();
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    let country = '';
+    if (!geoCache.has(n.server)) {
+      geoCache.set(n.server, ipGeoResolver ? await ipGeoResolver(n.server) : null);
+    }
+    const geoName = geoCache.get(n.server);
+    if (geoName) country = DISPLAY_TO_CODE[geoName] || '';
+    const flag = country ? countryFlag(country) : '';
+    const h = healthByFp.get(nodeFingerprint(n));
+    const lat = h ? (h.httpLatency ?? h.tcpLatency) : null;
+    const proto = PROTOCOL_LABELS[n.protocol] || n.protocol;
+    const head = country ? `${flag} ${country} ${proto}` : proto;
+    const nn = String(i + 1).padStart(2, '0');
+    // 有延迟: 45ms-01；无延迟（冷启动）: --01
+    n.name = lat != null ? `${head} ${lat}ms-${nn}` : `${head} --${nn}`;
+  }
+}
+
+/** node 名 → 健康得分（地理组内排序用，未知分返回 undefined 靠后） */
+function buildScoreOf(
+  nodes: Node[],
+  healthByFp: Map<string, NodeHealthLatest>
+): (name: string) => number | undefined {
+  return (name: string) => {
+    const n = nodes.find((x) => x.name === name);
+    const h = n ? healthByFp.get(nodeFingerprint(n)) : undefined;
+    return h ? h.score : undefined;
+  };
+}
 
 export type OutputFormat =
   | 'mihomo'
@@ -356,13 +414,16 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
 
       // 获取已过滤的节点（去重 + 禁用/死节点过滤）
       const nodes = await this.getNodes();
-      
-      // 智能重命名：废弃清洗规则，改为 [旗帜][国家代码] [协议] [延迟ms]
+
+      // 自动命名（v2.34 废弃人工清洗）：[旗帜][国家代码] [协议] [延迟ms]-NN
       const ipGeoResolver = createIpGeoResolver({
         get: (k) => repos.settings.get(k),
         set: (k, v) => repos.settings.set(k, v),
       });
-      
+      const healthList = await getAllNodeHealth(kv);
+      const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));
+      await smartRename(nodes, ipGeoResolver, healthByFp);
+
       let content = '';
       switch (format) {
         case 'mihomo':
@@ -371,7 +432,8 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
             await this.getSelectedRules(),
             await this.getMergedGroups(),
             ipGeoResolver,
-            new Set(await this.getDisabledGroupKeys())
+            new Set(await this.getDisabledGroupKeys()),
+            buildScoreOf(nodes, healthByFp)
           );
           // 写缓存
           const newVersion = await snapshotCache.getVersion();

@@ -329,7 +329,8 @@ export async function generateProxyGroups(
   selectedRules: MetaCubeXRule[] = [],
   ruleGroups: RuleGroup[] = [],
   ipGeoResolver?: GeoResolver,
-  disabledGroupKeys: Set<string> = new Set()
+  disabledGroupKeys: Set<string> = new Set(),
+  scoreOf?: (name: string) => number | undefined
 ): Promise<Record<string, unknown>[]> {
   // 判断某规则大类是否有规则被勾选（v2.27.0：含 fixed 项即视为选中——内置规则全部锁死）
   const hasSelected = (key: string): boolean =>
@@ -338,6 +339,12 @@ export async function generateProxyGroups(
 
   // 1. 地理分组（emoji/名字优先 + 三字码补充 + IP 兜底）
   const geoGroups = await groupNodesByGeo(nodes, ipGeoResolver);
+  // 组内节点按 node_health.score 降序（v2.34）：得分高的在前，未知分靠后（稳定排序保持其余顺序）
+  if (scoreOf) {
+    for (const g of geoGroups) {
+      g.nodes.sort((a, b) => (scoreOf(b) ?? -1) - (scoreOf(a) ?? -1));
+    }
+  }
   const geoGroupNames = geoGroups.map(g => g.name);
   const allGeoNodes = geoGroups.flatMap(g => g.nodes);
 
@@ -707,7 +714,8 @@ export async function generateMihomoConfig(
   selectedRules: MetaCubeXRule[] = [],
   ruleGroups: RuleGroup[] = [],
   ipGeoResolver?: GeoResolver,
-  disabledGroupKeys: Set<string> = new Set()
+  disabledGroupKeys: Set<string> = new Set(),
+  scoreOf?: (name: string) => number | undefined
 ): Promise<string> {
   // 注：v2.12.2 按用户指令去除全部硬编码头字段（mixed-port/allow-lan/mode/log-level/ipv6/
   // external-controller/secret）及 profile/dns/sniffer 段，配置仅输出 proxies/proxy-groups/rules。
@@ -716,7 +724,7 @@ export async function generateMihomoConfig(
   // url/interval/tolerance 移到 type 正下方便于阅读，测速地址统一用 google generate_204）。
   const uniqueNodes = makeUniqueNames(nodes);
   const proxies = uniqueNodes.map(nodeToMihomoProxy);
-  const groups = await generateProxyGroups(uniqueNodes, selectedRules, ruleGroups, ipGeoResolver, disabledGroupKeys);
+  const groups = await generateProxyGroups(uniqueNodes, selectedRules, ruleGroups, ipGeoResolver, disabledGroupKeys, scoreOf);
 
   const config: Record<string, unknown> = {
     'mixed-port': 7893,
