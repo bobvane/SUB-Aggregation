@@ -356,6 +356,14 @@ tbody tr:hover { background: var(--accent-soft); }
       <div class="card"><div class="card-title">协议分布</div><div class="card-value" style="font-size:14px" id="statProto">-</div></div>
       <div class="card"><div class="card-title">最近更新</div><div class="card-value" style="font-size:14px" id="statUpdate">-</div></div>
     </div>
+    <!-- v2.32: 操作日志「最近动态」卡片 -->
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="card-title" style="margin:0">最近动态</div>
+        <button class="btn btn-sm btn-danger" onclick="clearOperationLogs()">🗑 清空</button>
+      </div>
+      <div id="opLogList" style="font-size:14px;color:var(--text2);max-height:220px;overflow-y:auto"></div>
+    </div>
 
     <!-- Dashboard CF 请求统计（v2.18.0 + v2.26.0：同卡合并请求量+KV 写） -->
     <div style="display:none" id="cfUsageSection">
@@ -1106,6 +1114,46 @@ async function loadDashboard() {
     renderDashboard(prefetched || (await api('/dashboard')).data);
   } catch { toast('加载仪表盘失败', 'error'); }
   loadCFUsageDashboard();
+  loadOperationLogs();
+}
+
+// v2.32: 仪表盘「最近动态」卡片（操作日志，最近 10 条）
+async function loadOperationLogs() {
+  const list = document.getElementById('opLogList');
+  if (!list) return;
+  try {
+    const res = await api('/api/operation-log?limit=10');
+    const logs = res.data || [];
+    if (logs.length === 0) {
+      list.innerHTML = '<div style="padding:8px;color:var(--text2)">暂无操作记录</div>';
+      return;
+    }
+    list.innerHTML = logs.map(l => {
+      const t = new Date(l.timestamp);
+      const timeStr = t.toLocaleString('zh-CN', { hour12: false });
+      const icon = l.type === 'subscription_update' ? '🔄'
+        : l.type === 'geoip_update' ? '🌐'
+        : l.type === 'node_disable' ? '🚫'
+        : l.type === 'node_enable' ? '✅'
+        : l.type === 'manual' ? '⚙️'
+        : l.type === 'cache_invalidated' ? '💾'
+        : '📝';
+      return \`<div style="padding:6px 8px;border-bottom:1px solid var(--border);line-height:1.5">
+        <span style="color:var(--text2);font-size:12px">\${timeStr}</span>
+        <span>\${icon}</span>
+        <span style="margin-left:4px">\${escHtml(l.detail)}</span>
+      </div>\`;
+    }).join('');
+  } catch { list.innerHTML = '<div style="padding:8px;color:var(--red)">加载失败</div>'; }
+}
+
+async function clearOperationLogs() {
+  if (!confirm('确定清空全部操作日志？此操作不可恢复。')) return;
+  try {
+    await api('/api/operation-log', { method: 'DELETE' });
+    toast('操作日志已清空');
+    loadOperationLogs();
+  } catch (e) { toast('清空失败: ' + e.message, 'error'); }
 }
 
 // ============ Dashboard CF 请求统计（v2.18.0） ============

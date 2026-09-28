@@ -128,6 +128,14 @@ export interface Node {
   fingerprint?: string;
   metadata: NodeMetadata;
   version: number;
+  /** v2.32: 首次入库原始订阅地址（永久保留，用于 Diff 追溯） */
+  original_address?: string;
+  /** v2.32: 首次入库时间戳 */
+  first_seen_at?: number;
+  /** v2.32: 节点状态机（active | suspect | disabled | removed） */
+  status?: 'active' | 'suspect' | 'disabled' | 'removed';
+  /** v2.32: 被标记为 removed 的时间戳（订阅更新时节点消失，tombstone 机制） */
+  removed_at?: number | null;
 }
 
 /**
@@ -191,6 +199,10 @@ export function createNode(partial: Partial<Node> & { name: string }): Node {
       originalUrl: partial.metadata?.originalUrl,
     },
     version: 1,
+    original_address: partial.original_address,
+    first_seen_at: partial.first_seen_at,
+    status: partial.status ?? 'active',
+    removed_at: partial.removed_at ?? null,
   };
 }
 

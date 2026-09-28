@@ -23,6 +23,7 @@ import { prewarmIpGeo } from '@/services/ip-geo.service';
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
 import { RuleCatalogMeta } from '@/models/rule-catalog';
+import { createSnapshotCache } from '@/services/config-cache.service';
 
 /**
  * 请求是否走 https。
@@ -69,6 +70,8 @@ export interface AppDeps {
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono();
   const { repos, auth, subscriptions, config } = deps;
+  // v2.32: 配置快照缓存(用于订阅生效)
+  const snapshotCache = createSnapshotCache(deps.storage ?? repos.settings as any);
   // 规则目录同步服务：默认用全局 fetch 拉 GitHub；测试可注入 mock
   const catalogSync: CatalogSyncService =
     deps.catalogSync ??
@@ -297,7 +300,7 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ success: true });
   });
 
-  // 启用/停用订阅（不删除，留待以后再用）
+  // 启用/停用订阅(不删除,留待以后再用)
   app.post('/api/subscriptions/:id/enabled', async (c) => {
     const id = c.req.param('id') as string;
     const body = await readBody<{ enabled?: boolean }>(c);
@@ -306,16 +309,31 @@ export function createApp(deps: AppDeps): Hono {
     }
     const sub = await subscriptions.setEnabled(id, body.enabled);
     if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
+    // v2.32: 禁用/启用节点时失效缓存
+    await snapshotCache.invalidateAll();
     return c.json({ success: true, data: { id: sub.id, enabled: sub.enabled } });
   });
 
   // 更新订阅（重新抓取解析）
   // 更新订阅（重新抓取解析）。加 KV 限流防资源滥用（v2.23.0）
+  // v2.32: 返回 Subscription Diff 结果（新增/删除/保持/变化）
   app.post('/api/subscriptions/:id/update', sensitiveOpRateLimit, async (c) => {
     const id = c.req.param('id') as string;
     try {
-      const { nodeCount } = await subscriptions.update(id, deps.fetchRaw);
-      // v2.16.0：IP 地理预填充改为后台执行（waitUntil），不再同步阻塞订阅更新响应
+      const { nodeCount, diff } = await subscriptions.update(id, deps.fetchRaw);
+      // v2.32: 更新完成后触发节点测活引擎（全量扫描）
+      c.executionCtx?.waitUntil(
+        (async () => {
+          try {
+            const { probeAllNodes } = await import('@/services/node-probe.service');
+            const nodes = deduplicateNodes(await repos.nodes.getAll());
+            await probeAllNodes(nodes, repos.settings as any, config as any);
+          } catch (e) {
+            console.warn(`[SubscriptionUpdate:${id}] 节点测活失败(后台,不阻塞): ${(e as Error).message}`);
+          }
+        })()
+      );
+      // v2.32: IP 地理预填充改为后台执行（waitUntil），不再同步阻塞订阅更新响应
       // 之前同步 prewarmIpGeo 会让手动更新在节点多/未识别多时拖到 >15s，被前端 AbortController 掐断报「signal is aborted without reason」
       // v2.21.0：executionCtx 空值防御——Hono 未传第三参时（某些调用路径），
       // c.executionCtx 为 undefined，直接 waitUntil 会抛 'This context has no ExecutionContext'
@@ -338,7 +356,7 @@ export function createApp(deps: AppDeps): Hono {
           }
         })()
       );
-      return c.json({ success: true, data: { nodeCount } });
+      return c.json({ success: true, data: { nodeCount, diff } });
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw ERRORS.FETCH_FAILED((err as Error).message);
@@ -882,6 +900,32 @@ export function createApp(deps: AppDeps): Hono {
     if (token) await auth.logout(token);
     c.header('Set-Cookie', createClearCookie(isHttpsRequest(c)));
     return c.json({ success: true, data: { relogin: true } });
+  });
+
+  // ============ Operation Log API (v2.32) ============
+  app.get('/api/operation-log', requireAuth(auth), async (c) => {
+    const limit = Math.min(Number(c.req.query('limit') || 50), 200);
+    const { getOperationLogs } = await import('@/services/operation-log.service');
+    const logs = await getOperationLogs(repos.settings as any, limit);
+    return c.json({ success: true, data: logs });
+  });
+
+  app.delete('/api/operation-log', requireAuth(auth), async (c) => {
+    const { clearOperationLogs } = await import('@/services/operation-log.service');
+    await clearOperationLogs(repos.settings as any);
+    return c.json({ success: true });
+  });
+
+  // ============ Nodes Health API (v2.32) ============
+  app.get('/api/nodes/health', requireAuth(auth), async (c) => {
+    const fingerprint = c.req.query('fingerprint');
+    const { getNodeHealthLatest, getNodeHealthHistory, getAllNodeHealth } = await import('@/services/node-probe.service');
+    if (fingerprint) {
+      const history = await getNodeHealthHistory(fingerprint, repos.settings as any);
+      return c.json({ success: true, data: history });
+    }
+    const health = await getAllNodeHealth(repos.settings as any);
+    return c.json({ success: true, data: health });
   });
 
   // ============ 根路径（前端由 static 服务，后续实现） ============

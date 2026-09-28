@@ -33,9 +33,11 @@ describe('subscription pipeline integration', () => {
     service = createSubscriptionService(
       repos,
       async () => TEST_SUBSCRIPTION,
-      async () => []
+      async () => [],
+      async () => [],
+      kv
     );
-    configService = createConfigService(repos);
+    configService = createConfigService(repos, kv);
   });
 
   it('should create and update subscription end-to-end', async () => {
@@ -96,7 +98,9 @@ describe('subscription pipeline integration', () => {
     const filteredService = createSubscriptionService(
       repos,
       async () => TEST_SUBSCRIPTION,
-      async () => [{ type: 'exclude', pattern: 'US', enabled: true }]
+      async () => [{ type: 'exclude', pattern: 'US', enabled: true }],
+      async () => [],
+      kv
     );
     const result = await filteredService.update(sub.id, async () => TEST_SUBSCRIPTION);
     // 排除 US-1
@@ -152,7 +156,7 @@ describe('single node subscription (direct link)', () => {
   beforeEach(() => {
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
-    service = createSubscriptionService(repos, async () => '', async () => []);
+    service = createSubscriptionService(repos, async () => '', async () => [], async () => [], kv);
   });
 
   it('should parse direct vless node as subscription', async () => {
@@ -183,9 +187,9 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     repos = createRepositories(kv);
     const fa = async () => 'ss://aes-256-gcm:p1@node-a.example.com:8388#NODE-A';
     const fb = async () => 'ss://aes-256-gcm:p2@node-b.example.com:8388#NODE-B';
-    svcA = createSubscriptionService(repos, fa, async () => []);
-    svcB = createSubscriptionService(repos, fb, async () => []);
-    configService = createConfigService(repos);
+    svcA = createSubscriptionService(repos, fa, async () => [], async () => [], kv);
+    svcB = createSubscriptionService(repos, fb, async () => [], async () => [], kv);
+    configService = createConfigService(repos, kv);
   });
 
   it('停用订阅的节点不进输出，重新启用后恢复', async () => {
@@ -204,15 +208,20 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     // 节点列表 / 总数统计 / 重复节点整理 都走 nodes.getAll() → 必须排除停用订阅
     const allNodes = await repos.nodes.getAll();
     expect(allNodes.map((n) => n.name)).toEqual(['NODE-A']);
-    // 原始数据仍保留在 KV（启用回来不用重新抓）
+    // 原始数据仍保留在 KV(启用回来不用重新抓)
     expect((await repos.nodes.getBySubscription(b.id)).map((n) => n.name)).toEqual(['NODE-B']);
 
+    // v2.32: 缓存因订阅状态变化已失效，生成新配置
+    // 显式重置缓存以确保 freshConfigService 不命中旧缓存
+    await configService.resetCache();
     const onlyA = await configService.generate('mihomo');
     expect(onlyA).toContain('NODE-A');
     expect(onlyA).not.toContain('NODE-B');
 
     // 重新启用 B
     await svcB.setEnabled(b.id, true);
+    // 再次重置缓存
+    await configService.resetCache();
     const bothBack = await configService.generate('mihomo');
     expect(bothBack).toContain('NODE-B');
   });

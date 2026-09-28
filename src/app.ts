@@ -88,10 +88,11 @@ export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
       const raw = await repos.settings.get('clean_rules');
       if (!raw) return [];
       try { return JSON.parse(raw) as CleanRule[]; } catch { return []; }
-    }
+    },
+    kv
   );
 
-  const config = createConfigService(repos);
+  const config = createConfigService(repos, kv);
 
   // 规则目录同步服务（供 scheduled handler + API 共用）
   const catalogSync = createCatalogSyncService(repos, createCatalogFetcher(env.GITHUB_TOKEN));
@@ -275,7 +276,8 @@ export async function runScheduled(
       const raw = await repos.settings.get('clean_rules');
       if (!raw) return [];
       try { return JSON.parse(raw) as CleanRule[]; } catch { return []; }
-    }
+    },
+    kv
   );
   const results: string[] = [];
   for (const s of await subs.list()) {
@@ -293,6 +295,20 @@ export async function runScheduled(
   }
   // 记下本次自动更新的时刻（无论个别订阅成败），下一次间隔从这个点开始算
   await repos.settings.set('sub_update_last_at', String(now));
+
+  // v2.32: 订阅更新完成后，触发节点测活引擎（全量扫描）
+  // 异步执行，不阻塞订阅更新流程
+  try {
+    const { probeAllNodes } = await import('@/services/node-probe.service');
+    const allNodes = deduplicateNodes(await repos.nodes.getAll());
+    // 后台触发，不等待结果
+    probeAllNodes(allNodes, kv).catch((e) => {
+      console.warn(`[SubAutoUpdate] 节点测活触发失败(后台,不阻塞): ${(e as Error).message}`);
+    });
+  } catch (e) {
+    console.warn(`[SubAutoUpdate] 节点测活模块加载失败: ${(e as Error).message}`);
+  }
+
   // 主动预填充 IP 地理缓存：全部订阅更新后，批量查一遍 server 归属地
   // v2.25.0：cache 统一走 repos.settings（setting: 前缀，与手动更新/前端统计同口径）；
   //          预热后若有未识别 IP 则激活 GeoRetry 门闩，唤醒每分钟 cron 继续重查

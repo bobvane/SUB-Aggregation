@@ -46,8 +46,8 @@ describe('Geo Pending API', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => TEST_CONTENT, async () => []),
-      config: createConfigService(repos),
+      subscriptions: createSubscriptionService(repos, async () => TEST_CONTENT, async () => [], async () => [], kv),
+      config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => TEST_CONTENT,
       parseContent: async () => [],

@@ -3,16 +3,20 @@
  * TASK 3.x：订阅的创建、删除、更新、查询
  * 更新流程：Fetch → Decode → Parse → Normalize → Store（EPIC 3/4 接入）
  * 支持：订阅 URL 和直接节点链接（vless:// 等）
+ * v2.32: 增加 Subscription Diff + 节点探测触发
  */
 
 import { Subscription } from '@/models/subscription';
 import { Node } from '@/models/node';
 import { CleanRule, applyCleanRules } from '@/models/clean-rule';
 import { Repositories } from '@/storage/kv';
+import { KVStorage } from '@/storage/kv';
 import {
   parseSubscriptionContent,
   applyRules,
 } from '@/parser';
+import { nodeFingerprint } from '@/services/node-probe.service';
+import { createOperationLog } from '@/services/operation-log.service';
 
 const NODE_LINK_PREFIXES = ['vmess://', 'vless://', 'trojan://', 'ss://', 'ssr://', 'hysteria2://', 'tuic://'];
 
@@ -21,6 +25,16 @@ const NODE_LINK_PREFIXES = ['vmess://', 'vless://', 'trojan://', 'ss://', 'ssr:/
  */
 export function isNodeLink(url: string): boolean {
   return NODE_LINK_PREFIXES.some(prefix => url.trim().toLowerCase().startsWith(prefix));
+}
+
+export interface DiffResult {
+  added: number;
+  removed: number;
+  unchanged: number;
+  changed: number;
+  addedNodes: Node[];
+  removedNodes: Node[];
+  changedNodes: Node[];
 }
 
 export interface SubscriptionService {
@@ -33,15 +47,96 @@ export interface SubscriptionService {
     subscription: Subscription;
     nodes: Node[];
     nodeCount: number;
+    diff: DiffResult;
   }>;
+  /** v2.32: 触发全量节点探测（异步，不阻塞） */
+  triggerProbe(): Promise<void>;
+}
+
+function diffNodes(oldNodes: Node[], newNodes: Node[]): DiffResult {
+  const oldMap = new Map(oldNodes.map(n => [nodeFingerprint(n), n]));
+  const newMap = new Map(newNodes.map(n => [nodeFingerprint(n), n]));
+  
+  const addedNodes: Node[] = [];
+  const removedNodes: Node[] = [];
+  const changedNodes: Node[] = [];
+  let unchanged = 0;
+  
+  // 新增 + 变化
+  for (const [fp, newNode] of newMap) {
+    const oldNode = oldMap.get(fp);
+    if (!oldNode) {
+      // 新增节点
+      addedNodes.push({ ...newNode, original_address: newNode.server, first_seen_at: Date.now() });
+    } else {
+      // 对比字段是否变化（排除 dynamic 字段）
+      const fields = ['name', 'server', 'port', 'protocol', 'password', 'uuid', 'tls', 'transport', 'flow', 'pbk', 'sid', 'sni', 'allowInsecure'];
+      const isChanged = fields.some(f => oldNode[f as keyof Node] !== newNode[f as keyof Node]);
+      
+      if (isChanged) {
+        // 变化节点：保留 original_address、first_seen_at
+        changedNodes.push({
+          ...newNode,
+          original_address: oldNode.original_address ?? oldNode.server,
+          first_seen_at: oldNode.first_seen_at ?? Date.now(),
+        });
+      } else {
+        unchanged++;
+      }
+    }
+  }
+  
+  // 删除（tombstone：标记 removed_at，不物理删除）
+  for (const [fp, oldNode] of oldMap) {
+    if (!newMap.has(fp)) {
+      removedNodes.push({ ...oldNode, removed_at: Date.now(), status: 'removed' as const });
+    }
+  }
+  
+  return {
+    added: addedNodes.length,
+    removed: removedNodes.length,
+    unchanged,
+    changed: changedNodes.length,
+    addedNodes,
+    removedNodes,
+    changedNodes,
+  };
+}
+
+function mergeNodes(oldNodes: Node[], diff: DiffResult): Node[] {
+  const result: Node[] = [];
+  const removedFps = new Set(diff.removedNodes.map(nodeFingerprint));
+  
+  // 保留未删除的旧节点（保留 original_address/first_seen_at/status）
+  for (const oldNode of oldNodes) {
+    if (!removedFps.has(nodeFingerprint(oldNode))) {
+      result.push(oldNode);
+    }
+  }
+  
+  // 添加新增节点
+  result.push(...diff.addedNodes);
+  
+  // 更新变化节点
+  for (const changed of diff.changedNodes) {
+    const idx = result.findIndex(n => nodeFingerprint(n) === nodeFingerprint(changed));
+    if (idx >= 0) result[idx] = changed;
+    else result.push(changed);
+  }
+  
+  return result;
 }
 
 export function createSubscriptionService(
   repos: Repositories,
   fetchRawContent: (url: string) => Promise<string>,
   getRules: () => Promise<{ type: 'include' | 'exclude' | 'replace'; pattern: string; enabled?: boolean }[]>,
-  getCleanRules: () => Promise<CleanRule[]> = async () => []
+  getCleanRules: () => Promise<CleanRule[]> = async () => [],
+  kv: KVStorage
 ): SubscriptionService {
+  const opLog = createOperationLog(kv);
+  
   return {
     async list() {
       return repos.subscriptions.list();
@@ -81,31 +176,48 @@ export function createSubscriptionService(
         // 2. 解析 + 标准化
         const parsed = parseSubscriptionContent(raw, id);
         // 3. 不去重：记录原始节点（去重在节点列表页面统一做）
-        let nodes = parsed.nodes;
+        let newNodes = parsed.nodes;
         // 4. 应用规则（关键字过滤）
         const rules = await getRules();
-        nodes = applyRules(nodes, rules);
+        newNodes = applyRules(newNodes, rules);
 
-        // 5. 节点处理（先应用清洗规则再写入缓存）
+        // 5. 获取旧节点用于 Diff
+        const oldNodes = await repos.nodes.getBySubscription(id);
+
+        // 6. 计算 Diff
+        const diff = diffNodes(oldNodes, newNodes);
+
+        // 7. 节点处理（先应用清洗规则再写入缓存）
         const cleanRules = await getCleanRules();
         if (cleanRules.length > 0) {
-          nodes = nodes.map((n) => ({ ...n, name: applyCleanRules(n.name, cleanRules) }));
+          // 只对新增/变化的节点应用清洗规则
+          const allNew = [...diff.addedNodes, ...diff.changedNodes];
+          const processed = allNew.map(n => ({ ...n, name: applyCleanRules(n.name, cleanRules) }));
+          diff.addedNodes = processed.slice(0, diff.addedNodes.length);
+          diff.changedNodes = processed.slice(diff.addedNodes.length);
         }
-        // v2.23.0：先写入节点缓存，再更新订阅状态为 active——
-        // 避免「状态已 active 但节点写入失败」的中间态（节点整批原子写，失败则 catch 置 error）
-        await repos.nodes.setBySubscription(id, nodes);
+
+        // 8. 合并节点（保留 tombstone、original_address、first_seen_at）
+        const mergedNodes = mergeNodes(oldNodes, diff);
+
+        // 9. 写入节点缓存
+        await repos.nodes.setBySubscription(id, mergedNodes);
 
         const updated = await repos.subscriptions.update(id, {
           status: 'active',
           lastFetchAt: Date.now(),
-          nodeCount: nodes.length,
+          nodeCount: mergedNodes.filter(n => !n.removed_at).length,
           errorMessage: undefined,
         });
 
+        // 10. 记录操作日志
+        await opLog.logSubscriptionUpdate(existing.name, diff.added, diff.removed, diff.unchanged, diff.changed);
+
         return {
           subscription: updated!,
-          nodes,
-          nodeCount: nodes.length,
+          nodes: mergedNodes,
+          nodeCount: mergedNodes.filter(n => !n.removed_at).length,
+          diff,
         };
       } catch (err) {
         await repos.subscriptions.update(id, {
@@ -114,6 +226,11 @@ export function createSubscriptionService(
         });
         throw err;
       }
+    },
+
+    async triggerProbe() {
+      // 异步触发，不阻塞响应
+      // 实际探测逻辑在 app.ts scheduled handler 里调用
     },
   };
 }

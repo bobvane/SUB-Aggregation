@@ -9,7 +9,7 @@ describe('ConfigService 分流规则注入', () => {
   it('未保存规则时，mihomo 配置仍包含 base 规则（如 MATCH），且 native 固定规则自动注入', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
 
     const yaml = await svc.generate('mihomo');
 
@@ -24,7 +24,7 @@ describe('ConfigService 分流规则注入', () => {
   it('保存 googlefcm 规则后，mihomo 配置输出原生 GEOSITE 规则', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
 
     // 保存 googlefcm 规则（v2.11.6 起为 native 原生规则，走 GEOSITE 路径）
     await repos.settings.set('selected_rules', JSON.stringify(['googlefcm']));
@@ -39,7 +39,7 @@ describe('ConfigService 分流规则注入', () => {
   it('不生成 rule-providers 块（全组原生化）', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
 
     const yaml = await svc.generate('mihomo');
 

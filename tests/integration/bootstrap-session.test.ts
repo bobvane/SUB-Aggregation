@@ -37,8 +37,8 @@ describe('首屏 bootstrap - /api/auth/session', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => []),
-      config: createConfigService(repos),
+      subscriptions: createSubscriptionService(repos, async () => '', async () => [], async () => [], kv),
+      config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',
       parseContent: async () => [],

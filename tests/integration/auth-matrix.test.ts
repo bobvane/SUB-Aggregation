@@ -21,8 +21,8 @@ function createTestApp() {
     return createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => []),
-      config: createConfigService(repos),
+      subscriptions: createSubscriptionService(repos, async () => '', async () => [], async () => [], kv),
+      config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',
       parseContent: async () => [],
@@ -102,8 +102,8 @@ describe('Authorization Matrix（受保护端点未登录应 401）', () => {
     const appWithKey = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => []),
-      config: createConfigService(repos),
+      subscriptions: createSubscriptionService(repos, async () => '', async () => [], async () => [], kv),
+      config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',
       parseContent: async () => [],

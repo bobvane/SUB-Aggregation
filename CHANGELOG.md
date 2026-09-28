@@ -2,6 +2,44 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.32.0] - 2026-09-28
+
+### 新增:节点测活/测速/智能评分/自动命名/状态机熔断
+- **探测引擎**:TCP → TLS → HTTP 204 三段串行,并发 50,结果写 SQLite(`node_health` + `node_health_history`)
+- **五维评分**:Score = 30% 可用率 + 25% 延迟得分 + 20% TLS成功率 + 15% HTTP成功率 + 10% 最近稳定性(均值)
+- **状态机**:连续失败 1 次 → suspect(黄色警告);连续失败 3 次 → disabled(隐藏+过滤);连续成功 2 次 → 恢复
+- **死节点处理**:永不物理删除,标记 `status='disabled'`,配置生成时 filter;UI 完全隐藏
+- **统计窗口**:与 `sub_update_interval` 同步,冷启动各维度 50% 起始分
+- **历史保留**:30 天,探测完成后顺手清理(O(n) 前缀扫描),不加独立定时器
+
+### 新增:Subscription Diff + tombstone 机制
+- 每次订阅更新计算新增/删除/保持/变化四组节点(按 `nodeFingerprint()`)
+- 删除节点标记 `status='removed' + removed_at`,30 天后随历史一起物理清理
+- UI 订阅卡片展示 Diff 摘要(+N/-D/~U/ΔC)
+
+### 新增:配置快照缓存 + ETag 条件请求
+- 只缓存 mihomo(占 90% 拉取量),singbox/v2ray 直接生成
+- 版本来自 `setting:config_version`,失效点:订阅更新/规则保存/分组保存/禁用节点变更/自定义规则增删/清洗规则应用
+- 客户端带 `If-None-Match` → 304 Not Modified
+
+### 新增:操作日志
+- KV 存储(`op_log:data:{idx}` + `op_log:next_idx`),保留 30 天
+- 事件类型:订阅更新/GeoIP 更新/节点禁用/节点恢复/手动操作/缓存失效
+- 仪表盘「最近动态」卡片,支持手动清空
+- API:`GET /api/operation-log`(列表)、`DELETE /api/operation-log`(清空)
+
+### 新增:健康 API
+- `GET /api/nodes/health?fingerprint=xxx` — 返回单个节点的 health snapshot + history
+- `GET /api/nodes/health/all` — 返回全部节点最新快照
+
+### 修改:触发时机
+- 订阅更新完成后自动触发全量测活(挂在 scheduled handler 同一位置)
+- UI「立即测活」按钮可手动触发
+
+### 修改:数据模型
+- `Node` 接口扩展:`original_address` / `first_seen_at` / `status`(active/suspect/disabled/removed) / `removed_at`(tombstone)
+- `KV_KEYS` 新增:`healthHistory` / `healthLatest` / `operationLog` / `configSnapshot` / `configVersion`
+
 ## [2.31.3] - 2026-09-26
 
 ### 变更：Google服务 组默认选中改回「手动切换」

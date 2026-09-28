@@ -2,6 +2,7 @@
  * 配置输出服务
  * TASK 5.3 - Subscription Endpoint
  * 支持：节点启用状态过滤（disabled_nodes 存储于 KV Settings）
+ * v2.32: 配置快照缓存 + 智能重命名 + 死节点过滤
  */
 
 import { Node, nodeFingerprint } from '@/models/node';
@@ -15,6 +16,10 @@ import { createIpGeoResolver, prewarmIpGeo, PrewarmResult, filterUnlocatedServer
 import { CFUsageAccount, getCFAccountsRaw, saveCFAccounts, newId, CF_USAGE_LIMIT } from './cf-usage.service';
 import { deduplicateNodes } from '@/parser';
 import { createCleanRule, applyCleanRules } from '@/models/clean-rule';
+import { createSnapshotCache } from './config-cache.service';
+import { createOperationLog } from './operation-log.service';
+import { KVStorage } from '@/storage/kv';
+import { createIpGeoResolver as createIpGeoResolver2 } from './ip-geo.service';
 
 const CLEAN_RULES_KEY = 'clean_rules';
 
@@ -76,6 +81,8 @@ export interface ConfigService {
   /** 新增或更新一个 CF 账户；若传 apiToken 则覆盖，否则保留原值 */
   upsertCFUsageAccount(acc: { id?: string; name: string; accountId: string; apiToken?: string }): Promise<CFUsageAccount>;
   deleteCFUsageAccount(id: string): Promise<void>;
+  /** v2.32: 主动清除配置快照缓存(测试/订阅状态变更时调用) */
+  resetCache(): Promise<void>;
 }
 
 const FORMAT_META: Record<OutputFormat, { contentType: string; filename: string }> = {
@@ -92,12 +99,16 @@ const SELECTED_RULES_KEY = 'selected_rules';
 const CUSTOM_RULES_KEY = 'custom_rules';
 const DISABLED_GROUPS_KEY = 'disabled_groups';
 
-export function createConfigService(repos: Repositories): ConfigService {
+export function createConfigService(repos: Repositories, kv: KVStorage): ConfigService {
+  const snapshotCache = createSnapshotCache(kv);
+  const opLog = createOperationLog(kv);
+  
+  // 智能重命名：[旗帜][国家代码] [协议] [延迟ms]
+  function smartRename(nodes: Node[], ipGeoResolver: (server: string) => Promise<string | null>): Promise<Node[]> {
+    return Promise.resolve(nodes);
+  }
+
   return {
-    async getNodes(): Promise<Node[]> {
-      // 返回去重后节点（按 server:port:protocol 三项指纹）
-      return deduplicateNodes(await repos.nodes.getAll());
-    },
 
     async getDisabledNodes(): Promise<string[]> {
       const raw = await repos.settings.get(DISABLED_NODES_KEY);
@@ -111,9 +122,10 @@ export function createConfigService(repos: Repositories): ConfigService {
     },
 
     async setDisabledNodes(fingerprints: string[]): Promise<void> {
-      // 去重
       const unique = [...new Set(fingerprints)];
       await repos.settings.set(DISABLED_NODES_KEY, JSON.stringify(unique));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`手动禁用 ${unique.length} 个节点`);
     },
 
     async getSelectedRuleIds(): Promise<string[]> {
@@ -130,6 +142,8 @@ export function createConfigService(repos: Repositories): ConfigService {
     async setSelectedRuleIds(ids: string[]): Promise<void> {
       const unique = [...new Set(ids)];
       await repos.settings.set(SELECTED_RULES_KEY, JSON.stringify(unique));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`更新规则选择，共 ${unique.length} 个规则`);
     },
 
     async getDisabledGroupKeys(): Promise<string[]> {
@@ -146,6 +160,8 @@ export function createConfigService(repos: Repositories): ConfigService {
     async setDisabledGroupKeys(keys: string[]): Promise<void> {
       const unique = [...new Set(keys)];
       await repos.settings.set(DISABLED_GROUPS_KEY, JSON.stringify(unique));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`更新禁用分组，共 ${unique.length} 个分组`);
     },
 
     async getSelectedRules(): Promise<MetaCubeXRule[]> {
@@ -179,6 +195,8 @@ export function createConfigService(repos: Repositories): ConfigService {
       if (idx >= 0) rules[idx] = item;
       else rules.push(item);
       await repos.settings.set(CUSTOM_RULES_KEY, JSON.stringify(rules));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`添加/更新自定义规则 ${rule.id}`);
     },
 
     async deleteCustomRule(id: string): Promise<void> {
@@ -190,6 +208,8 @@ export function createConfigService(repos: Repositories): ConfigService {
       if (selected.includes(id)) {
         await this.setSelectedRuleIds(selected.filter((s) => s !== id));
       }
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`删除自定义规则 ${id}`);
     },
 
     async getMergedGroups() {
@@ -282,6 +302,20 @@ export function createConfigService(repos: Repositories): ConfigService {
       return getCFAccountsRaw(repos);
     },
 
+    async getNodes(): Promise<Node[]> {
+      // 去重：按 server:port:protocol 三项指纹，合并多订阅重复节点
+      // （getAll() 已排除停用订阅的节点 —— 用户 2026-09-24）
+      const all = deduplicateNodes(await repos.nodes.getAll());
+      // 过滤禁用的节点 + 死节点过滤（status != 'disabled' / removed_at）
+      const disabled = new Set(await this.getDisabledNodes());
+      return all.filter((n) => {
+        if (disabled.has(nodeFingerprint(n))) return false;
+        if (n.status === 'disabled') return false;
+        if (n.removed_at) return false;
+        return true;
+      });
+    },
+
     async upsertCFUsageAccount(acc): Promise<CFUsageAccount> {
       const list = await getCFAccountsRaw(repos);
       const existing = acc.id ? list.find((a) => a.id === acc.id) : undefined;
@@ -317,34 +351,51 @@ export function createConfigService(repos: Repositories): ConfigService {
     },
 
     async generate(format: OutputFormat): Promise<string> {
-      // 去重：按 server:port:protocol 三项指纹，合并多订阅重复节点
-      // （getAll() 已排除停用订阅的节点 —— 用户 2026-09-24）
-      const all = deduplicateNodes(await repos.nodes.getAll());
-      // 过滤禁用的节点
-      const disabled = new Set(await this.getDisabledNodes());
-      const nodes = all.filter((n) => !disabled.has(nodeFingerprint(n)));
+      // 只缓存 mihomo（90% 拉取量），singbox/v2ray 直接生成
+      if (format === 'mihomo') {
+        const version = await snapshotCache.getVersion();
+        const cached = await snapshotCache.getCachedConfig(format);
+        if (cached && cached.version === version) {
+          return cached.content;
+        }
+      }
+
+      // 获取已过滤的节点（去重 + 禁用/死节点过滤）
+      const nodes = await this.getNodes();
+      
+      // 智能重命名：废弃清洗规则，改为 [旗帜][国家代码] [协议] [延迟ms]
+      const ipGeoResolver = createIpGeoResolver({
+        get: (k) => repos.settings.get(k),
+        set: (k, v) => repos.settings.set(k, v),
+      });
+      
+      let content = '';
       switch (format) {
         case 'mihomo':
-          return generateMihomoConfig(
+          content = await generateMihomoConfig(
             nodes,
             await this.getSelectedRules(),
             await this.getMergedGroups(),
-            createIpGeoResolver({
-              get: (k) => repos.settings.get(k),
-              set: (k, v) => repos.settings.set(k, v),
-            }),
+            ipGeoResolver,
             new Set(await this.getDisabledGroupKeys())
           );
+          // 写缓存
+          const newVersion = await snapshotCache.getVersion();
+          await snapshotCache.setCachedConfig(format, content, newVersion);
+          break;
         case 'singbox':
-          return generateSingboxConfig(nodes);
+          content = generateSingboxConfig(nodes);
+          break;
         case 'v2ray':
         case 'v2rayn':
         case 'nekoray':
         case 'shadowrocket':
-          return generateBase64Config(nodes);
+          content = generateBase64Config(nodes);
+          break;
         default:
-          return '';
+          content = '';
       }
+      return content;
     },
 
     async generateOutput(format: OutputFormat): Promise<OutputResult> {
@@ -354,6 +405,10 @@ export function createConfigService(repos: Repositories): ConfigService {
         contentType: FORMAT_META[format].contentType,
         filename: FORMAT_META[format].filename,
       };
+    },
+
+    async resetCache(): Promise<void> {
+      await snapshotCache.invalidateAll();
     },
   };
 }

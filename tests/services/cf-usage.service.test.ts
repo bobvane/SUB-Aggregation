@@ -59,7 +59,7 @@ describe('CFUsageAccount CRUD（config.service）', () => {
   it('新增/读取，token 与 accountId 正确持久化', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
 
     const created = await svc.upsertCFUsageAccount({ name: '主站', accountId: 'abc123', apiToken: 'secret-token' });
     expect(created.id).toBeTruthy();
@@ -75,7 +75,7 @@ describe('CFUsageAccount CRUD（config.service）', () => {
   it('达到上限 3 后新增抛错', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
     for (let i = 1; i <= CF_USAGE_LIMIT; i++) {
       await svc.upsertCFUsageAccount({ name: `账户${i}`, accountId: `a${i}`, apiToken: `t${i}` });
     }
@@ -87,7 +87,7 @@ describe('CFUsageAccount CRUD（config.service）', () => {
   it('编辑时 apiToken 留空保留原值', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
     const created = await svc.upsertCFUsageAccount({ name: 'A', accountId: 'acc', apiToken: 'tok-1' });
     await svc.upsertCFUsageAccount({ id: created.id, name: 'A2', accountId: created.accountId });
     const list = await svc.getCFUsageAccounts();
@@ -98,7 +98,7 @@ describe('CFUsageAccount CRUD（config.service）', () => {
   it('删除账户后列表为空', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
-    const svc = createConfigService(repos);
+    const svc = createConfigService(repos, kv);
     const created = await svc.upsertCFUsageAccount({ name: 'X', accountId: 'x1', apiToken: 'tk' });
     await svc.deleteCFUsageAccount(created.id);
     expect(await svc.getCFUsageAccounts()).toEqual([]);

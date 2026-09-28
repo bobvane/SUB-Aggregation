@@ -51,4 +51,16 @@ export const KV_KEYS = {
   ruleCatalogRemoved: 'rule-catalog-removed',
   /** 规则目录元信息（版本/时间/状态） */
   ruleCatalogMeta: 'rule-catalog-meta',
+  /** v2.32: 节点健康历史（时序，追加写）key: health:hist:{fingerprint}:{timestamp} */
+  healthHistory: (fingerprint: string, timestamp: number) => `health:hist:${fingerprint}:${timestamp}`,
+  /** v2.32: 节点健康最新快照（覆盖写）key: health:latest:{fingerprint} */
+  healthLatest: (fingerprint: string) => `health:latest:${fingerprint}`,
+  /** v2.32: 操作日志索引 */
+  operationLogIndex: 'op_log:next_idx',
+  /** v2.32: 操作日志数据 key: op_log:data:{idx} */
+  operationLogData: (idx: number) => `op_log:data:${idx}`,
+  /** v2.32: 配置快照缓存 key: config:snap:{format}:{version} */
+  configSnapshot: (format: string, version: number) => `config:snap:${format}:${version}`,
+  /** v2.32: 配置版本号（每次变更自增，用于缓存失效） */
+  configVersion: 'setting:config_version',
 } as const;
