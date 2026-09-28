@@ -1,31 +1,35 @@
 /**
  * v2.32: 节点探测引擎 + 五维评分 + 状态机
- * 
+ * v2.36: 探测改为真实握手（node:net / node:tls）
+ *
  * 拓扑：
  * Subscription → Parser → Node Pool → Health Engine
  *                                           ↓
  *                               ┌──────────┴──────────┐
  *                               ↓                     ↓
- *                          TCP Test              TLS Test
+ *                          TCP Connect           TLS Handshake（仅 tls 节点）
  *                               ↓                     ↓
- *                          HTTP Test (Google 204)
+ *                          Latency / Reachability
  *                               ↓
- *                          Latency / Handshake / Availability
- *                               ↓
- *                          五维 Score
+ *                          评分（可用率/延迟/TLS/稳定性）
  *                               ↓
  *                          状态机熔断
- * 
+ *
  * 存储：KV 抽象（health:hist:{fingerprint}:{ts} / health:latest:{fingerprint}）
+ *
+ * 说明：不再测「HTTP 204 穿节点」。穿透必须实现 VLESS/VMess 客户端，本机 fetch
+ * Google 测的是服务器自己而非节点（旧实现如此，已删）。可达性由 TCP/TLS 握手判定，
+ * 延迟取 TLS RTT（有）否则 TCP RTT。
  */
 
+import net from 'node:net';
+import tls from 'node:tls';
 import { KV_KEYS } from '@/models/config';
 import { Node } from '@/models/node';
 import { KVStorage } from '@/storage/kv';
 
 const PROBE_TIMEOUT_MS = 3000;
 const PROBE_CONCURRENCY = 50;
-const TEST_URL = 'https://www.google.com/generate_204';
 const HEALTH_HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 天
 
 export interface ProbeResult {
@@ -33,6 +37,7 @@ export interface ProbeResult {
   fingerprint: string;
   tcpLatency: number | null;
   tlsLatency: number | null;
+  /** @deprecated v2.36 起恒为 null：无法在不实现代理协议的情况下测"穿节点 HTTP" */
   httpLatency: number | null;
   status: 'alive' | 'dead' | 'timeout' | 'error';
   error: string | null;
@@ -46,10 +51,12 @@ export interface NodeHealthLatest {
   timestamp: number;
   tcpLatency: number | null;
   tlsLatency: number | null;
+  /** @deprecated v2.36 起恒为 null */
   httpLatency: number | null;
   status: 'alive' | 'dead' | 'timeout' | 'error';
   error: string | null;
   score: number;
+  statusMachine?: 'active' | 'suspect' | 'disabled';
 }
 
 export interface NodeHealthHistory {
@@ -58,6 +65,7 @@ export interface NodeHealthHistory {
   timestamp: number;
   tcpLatency: number | null;
   tlsLatency: number | null;
+  /** @deprecated v2.36 起恒为 null */
   httpLatency: number | null;
   status: 'alive' | 'dead' | 'timeout' | 'error';
   error: string | null;
@@ -79,137 +87,106 @@ export interface StateMachineResult {
 }
 
 /**
- * TCP Connect 探测
+ * TCP Connect 探测 —— 真实 TCP 三次握手 RTT
+ * 节点端口不是 WebSocket 服务，不能拿 wss:// 当连通性测试（v2.35 及以前如此，全部误判为 dead）
  */
-async function probeTcp(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  const start = Date.now();
-  
-  try {
-    // 使用 fetch 的 CONNECT 模拟 TCP 连接（简化：用 HTTP HEAD 代替，实际应用需原生 socket）
-    // 这里用简单的 TCP 连接模拟：创建 socket 连接
-    const socket = new WebSocket(`wss://${host}:${port}`);
-    
-    await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => { socket.close(); resolve(); };
-      socket.onerror = () => reject(new Error('TCP connection failed'));
-      socket.onclose = () => { if (socket.readyState === WebSocket.CLOSED) resolve(); };
-    });
-    
-    clearTimeout(timeout);
-    return { latency: Date.now() - start, error: null };
-  } catch (e) {
-    clearTimeout(timeout);
-    return { latency: null, error: (e as Error).message };
-  }
+function probeTcp(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const sock = net.connect({ host, port });
+    const done = (r: { latency: number | null; error: string | null }) => {
+      sock.destroy();
+      resolve(r);
+    };
+    sock.setTimeout(PROBE_TIMEOUT_MS);
+    sock.once('connect', () => done({ latency: Date.now() - start, error: null }));
+    sock.once('timeout', () => done({ latency: null, error: 'TCP 超时' }));
+    sock.once('error', (e: NodeJS.ErrnoException) => done({ latency: null, error: `TCP ${e.code ?? e.message}` }));
+  });
 }
 
 /**
- * TLS Handshake 探测
+ * TLS 握手探测 —— 真实 handshake RTT
+ * 只量握手耗时，不校验证书链（自签/过期证书不影响节点可用性判断）
  */
-async function probeTls(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  const start = Date.now();
-  
-  try {
-    // TLS 握手:尝试建立 HTTPS 连接
-    await fetch(`https://${host}:${port}`, {
-      method: 'HEAD',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Sub-Aggregation-Probe/1.0' },
-    });
-    
-    clearTimeout(timeout);
-    return { latency: Date.now() - start, error: null };
-  } catch (e) {
-    clearTimeout(timeout);
-    return { latency: null, error: (e as Error).message };
-  }
-}
-
-/**
- * HTTP 204 探测（测速目标：Google 204）
- */
-async function probeHttp(): Promise<{ latency: number | null; error: string | null }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  const start = Date.now();
-  
-  try {
-    const res = await fetch(TEST_URL, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Sub-Aggregation-Probe/1.0' },
-    });
-    
-    clearTimeout(timeout);
-    
-    if (res.status === 204) {
-      return { latency: Date.now() - start, error: null };
+function probeTls(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let sock: tls.TLSSocket;
+    try {
+      // 裸 IP 节点不能设 servername（Node 直接抛错），只有域名才带 SNI
+      const opts: tls.ConnectionOptions = {
+        host,
+        port,
+        rejectUnauthorized: false,
+        ...(net.isIP(host) === 0 ? { servername: host } : {}),
+      };
+      sock = tls.connect(opts);
+    } catch (e) {
+      resolve({ latency: null, error: `TLS ${(e as Error).message}` });
+      return;
     }
-    return { latency: null, error: `HTTP ${res.status}` };
-  } catch (e) {
-    clearTimeout(timeout);
-    return { latency: null, error: (e as Error).message };
-  }
+    const done = (r: { latency: number | null; error: string | null }) => {
+      sock.destroy();
+      resolve(r);
+    };
+    sock.setTimeout(PROBE_TIMEOUT_MS);
+    sock.once('secureConnect', () => done({ latency: Date.now() - start, error: null }));
+    sock.once('timeout', () => done({ latency: null, error: 'TLS 超时' }));
+    sock.once('error', (e: NodeJS.ErrnoException) => done({ latency: null, error: `TLS ${e.code ?? e.message}` }));
+  });
 }
 
 /**
  * 单节点三段串行探测
  */
+/**
+ * 单节点探测：TCP 握手 →（tls 节点才做）TLS 握手
+ * 判定：TCP 不通 = dead；tls 节点 TLS 握手不过 = dead。
+ * 延迟取 TLS RTT，无 TLS 时取 TCP RTT。
+ */
 async function probeNode(node: Node): Promise<ProbeResult> {
   const fingerprint = nodeFingerprint(node);
   const timestamp = Date.now();
-  
-  let tcpLatency: number | null = null;
-  let tlsLatency: number | null = null;
-  let httpLatency: number | null = null;
-  let status: 'alive' | 'dead' | 'timeout' | 'error' = 'dead';
-  let error: string | null = null;
-  
-  // 1. TCP Connect
+  const httpLatency: number | null = null; // 穿节点 HTTP 不可测，恒 null（见文件头说明）
+
   const tcp = await probeTcp(node.server, node.port);
-  tcpLatency = tcp.latency;
-  if (!tcpLatency) {
-    error = tcp.error ?? 'TCP timeout';
-    return { nodeId: node.id, fingerprint, tcpLatency, tlsLatency, httpLatency, status, error, score: 0, timestamp };
+  if (tcp.latency === null) {
+    return {
+      nodeId: node.id, fingerprint, tcpLatency: null, tlsLatency: null, httpLatency,
+      status: 'dead', error: tcp.error, score: 0, timestamp,
+    };
   }
-  
-  // 2. TLS Handshake
-  const tls = await probeTls(node.server, node.port);
-  tlsLatency = tls.latency;
-  if (!tlsLatency) {
-    error = tls.error ?? 'TLS timeout';
-    status = 'timeout';
-    return { nodeId: node.id, fingerprint, tcpLatency, tlsLatency, httpLatency, status, error, score: 0, timestamp };
+
+  // 明文协议（ss / 无 tls 的 vmess 等）不做 TLS 握手：必然失败，不代表节点坏
+  if (node.tls) {
+    const handshake = await probeTls(node.server, node.port);
+    if (handshake.latency === null) {
+      return {
+        nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
+        status: 'dead', error: handshake.error, score: 0, timestamp,
+      };
+    }
+    return {
+      nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: handshake.latency, httpLatency,
+      status: 'alive', error: null,
+      score: calculateScore({
+        tcpLatency: tcp.latency, tlsLatency: handshake.latency,
+        tcpOk: true, tlsOk: true, history: [], windowHours: 24,
+      }),
+      timestamp,
+    };
   }
-  
-  // 3. HTTP 204
-  const http = await probeHttp();
-  httpLatency = http.latency;
-  if (!httpLatency) {
-    error = http.error ?? 'HTTP timeout';
-    status = 'timeout';
-    return { nodeId: node.id, fingerprint, tcpLatency, tlsLatency, httpLatency, status, error, score: 0, timestamp };
-  }
-  
-  status = 'alive';
-  
-  // 评分（简化版，后续用历史数据计算五维）
-  const score = calculateScore({
-    tcpLatency,
-    tlsLatency,
-    httpLatency,
-    tcpOk: true,
-    tlsOk: true,
-    httpOk: true,
-    history: [],
-    windowHours: 24,
-  });
-  
-  return { nodeId: node.id, fingerprint, tcpLatency, tlsLatency, httpLatency, status, error, score, timestamp };
+
+  return {
+    nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
+    status: 'alive', error: null,
+    score: calculateScore({
+      tcpLatency: tcp.latency, tlsLatency: null,
+      tcpOk: true, tlsOk: true, history: [], windowHours: 24,
+    }),
+    timestamp,
+  };
 }
 
 /**
@@ -220,73 +197,69 @@ export function nodeFingerprint(node: Node): string {
 }
 
 /**
- * 五维 Score 计算
- * Score = 30% 可用率 + 25% 延迟得分 + 20% TLS成功率 + 15% HTTP成功率 + 10% 最近稳定性（均值）
- * 
- * 冷启动：各维度 50% 起始分
+ * 四维 Score 计算（v2.36：删除测不到的 HTTP 维度，权重重新归一）
+ * Score = 35% 可用率 + 30% 延迟得分 + 25% TLS成功率 + 10% 最近稳定性
+ *
+ * 冷启动：历史不足 3 条时各维度 50% 起始分
  * 窗口：sub_update_interval 小时
  */
 interface ScoreInput {
   tcpLatency: number | null;
   tlsLatency: number | null;
-  httpLatency: number | null;
   tcpOk: boolean;
   tlsOk: boolean;
-  httpOk: boolean;
-  history: Array<{ timestamp: number; tcpLatency: number | null; tlsLatency: number | null; httpLatency: number | null; status: string; score: number }>;
+  history: Array<{ timestamp: number; tcpLatency: number | null; tlsLatency: number | null; status: string; score: number }>;
   windowHours: number;
 }
 
+/** 延迟口径：TLS RTT 优先，无 TLS 用 TCP RTT，都没有则 null */
+export function nodeLatencyMs(h: { tlsLatency: number | null; tcpLatency: number | null }): number | null {
+  return h.tlsLatency ?? h.tcpLatency ?? null;
+}
+
 function calculateScore(input: ScoreInput): number {
-  const { httpLatency, history, windowHours } = input;
+  const { tcpLatency, tlsLatency, history, windowHours } = input;
   const now = Date.now();
   const windowMs = windowHours * 3600 * 1000;
-  
+
   // 窗口内的历史记录
   const recent = history.filter(h => now - h.timestamp <= windowMs);
   const total = recent.length || 1; // 避免除零
-  
-  // 1. 可用率 (30%) - 窗口内 alive 次数 / 总次数
+
+  // 1. 可用率 (35%) - 窗口内 alive 次数 / 总次数
   const aliveCount = recent.filter(h => h.status === 'alive').length;
   const availability = aliveCount / total;
-  
-  // 2. 延迟得分 (25%) - 1 - min(httpLatency)/1000，封顶 1.0
-  // 使用最新 httpLatency，没有则用历史最小值
-  const latencies = recent.filter(h => h.httpLatency).map(h => h.httpLatency!);
-  const minLatency = httpLatency ? Math.min(httpLatency, ...latencies) : (latencies.length ? Math.min(...latencies) : 1000);
+
+  // 2. 延迟得分 (30%) - 1 - 延迟/1000，封顶 1.0
+  const measured = nodeLatencyMs({ tlsLatency, tcpLatency });
+  const past = recent.map(h => nodeLatencyMs(h)).filter((v): v is number => v !== null);
+  const minLatency = measured !== null ? Math.min(measured, ...(past.length ? past : [measured])) : (past.length ? Math.min(...past) : 1000);
   const latencyScore = Math.max(0, 1 - minLatency / 1000);
-  
-  // 3. TLS成功率 (20%) - 窗口内 TLS 成功次数 / 总次数
+
+  // 3. TLS成功率 (25%) - 窗口内 TLS 握手成功次数 / 总次数
   const tlsOkCount = recent.filter(h => h.tlsLatency !== null).length;
   const tlsSuccess = tlsOkCount / total;
-  
-  // 4. HTTP成功率 (15%) - 窗口内 HTTP 成功次数 / 总次数
-  const httpOkCount = recent.filter(h => h.httpLatency !== null).length;
-  const httpSuccess = httpOkCount / total;
-  
-  // 5. 最近稳定性 (10%) - 近 N 次 score 均值
-  // 取最近 5 次或窗口内所有
+
+  // 4. 最近稳定性 (10%) - 近 5 次 score 均值（score 是 0-100，必须归一）
   const recentScores = recent.slice(-5).map(h => h.score);
-  const stability = recentScores.length ? recentScores.reduce((a, b) => a + b, 0) / recentScores.length : 0.5;
-  
+  const stability = recentScores.length ? recentScores.reduce((a, b) => a + b, 0) / recentScores.length / 100 : 0.5;
+
   // 冷启动：历史不足时各维度 50%
   const hasHistory = recent.length >= 3;
   const base = hasHistory ? 0 : 0.5;
-  
+
   const finalAvailability = hasHistory ? availability : base;
   const finalLatency = hasHistory ? latencyScore : base;
   const finalTls = hasHistory ? tlsSuccess : base;
-  const finalHttp = hasHistory ? httpSuccess : base;
   const finalStability = hasHistory ? stability : base;
-  
+
   const totalScore = Math.round(
-    (finalAvailability * 0.30 +
-     finalLatency * 0.25 +
-     finalTls * 0.20 +
-     finalHttp * 0.15 +
+    (finalAvailability * 0.35 +
+     finalLatency * 0.30 +
+     finalTls * 0.25 +
      finalStability * 0.10) * 100
   );
-  
+
   return Math.max(0, Math.min(100, totalScore));
 }
 
@@ -364,7 +337,15 @@ export async function probeAllNodes(
   windowHours?: number
 ): Promise<{
   results: ProbeResult[];
-  stats: { total: number; alive: number; dead: number; suspect: number; disabled: number };
+  stats: {
+    total: number;
+    alive: number;
+    dead: number;
+    suspect: number;
+    disabled: number;
+    avgLatency: number | null;
+    minLatency: number | null;
+  };
 }> {
   const win = windowHours ?? (await resolveWindowHours(storage));
   const results: ProbeResult[] = [];
@@ -377,6 +358,7 @@ export async function probeAllNodes(
   }
   
   // 写入历史 + 计算评分 + 状态机 + 写最新快照
+  const machineStatus = new Map<string, 'active' | 'suspect' | 'disabled'>();
   for (const result of results) {
     // 读取历史用于评分和状态机
     const historyKeys = await storage.list(`${KV_KEYS.healthHistory(result.fingerprint, 0).split(':').slice(0, -1).join(':')}:`);
@@ -391,12 +373,11 @@ export async function probeAllNodes(
       }
     }
     
-    // 计算五维评分
+    // 计算四维评分
     const historyForScore = history.map(h => ({
       timestamp: h.timestamp,
       tcpLatency: h.tcpLatency,
       tlsLatency: h.tlsLatency,
-      httpLatency: h.httpLatency,
       status: h.status,
       score: h.score,
     }));
@@ -404,16 +385,15 @@ export async function probeAllNodes(
     result.score = calculateScore({
       tcpLatency: result.tcpLatency,
       tlsLatency: result.tlsLatency,
-      httpLatency: result.httpLatency,
       tcpOk: result.tcpLatency !== null,
       tlsOk: result.tlsLatency !== null,
-      httpOk: result.httpLatency !== null,
       history: historyForScore,
       windowHours: win,
     });
     
     // 状态机判定
     const stateMachine = evaluateStateMachine(history.map(h => ({ status: h.status, timestamp: h.timestamp })));
+    machineStatus.set(result.fingerprint, stateMachine.status);
     
     // 写历史（追加）
     await storage.put(
@@ -431,13 +411,23 @@ export async function probeAllNodes(
   // 清理 30 天前历史
   await cleanupOldHistory(storage, results.map(r => r.fingerprint));
   
-  // 统计
+  // 统计（供前端测活结果反馈用）
   const alive = results.filter(r => r.status === 'alive').length;
-  const dead = results.filter(r => r.status !== 'alive').length;
-  
+  const dead = results.length - alive;
+  const mss = [...machineStatus.values()];
+  const latencies = results.map(r => nodeLatencyMs(r)).filter((v): v is number => v !== null);
+
   return {
     results,
-    stats: { total: results.length, alive, dead, suspect: 0, disabled: 0 },
+    stats: {
+      total: results.length,
+      alive,
+      dead,
+      suspect: mss.filter(s => s === 'suspect').length,
+      disabled: mss.filter(s => s === 'disabled').length,
+      avgLatency: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null,
+      minLatency: latencies.length ? Math.min(...latencies) : null,
+    },
   };
 }
 

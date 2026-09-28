@@ -35,15 +35,14 @@ for (const code of Object.keys(COUNTRIES)) {
 }
 
 /**
- * 自动命名（v2.34：废弃人工清洗规则，生成时统一重命名所有输出格式）。
- * 格式: [旗帜][国家代码] [协议] [延迟ms]-NN，NN = 批次连续序号（01 起，每个节点都带号，2026-09-28 定稿）。
+ * 自动命名（v2.36 起不含延迟：延迟每次都变，写进名字会让客户端把节点当新节点）
+ * - 格式：🇭🇰 HK VLESS-01（无国家信息时降级为 VLESS-01）
  * - 旗帜+国家码：来自 ip-geo 缓存（复用地理分组同一数据源）
- * - 延迟：node_health.http_latency（无则回退 tcp_latency，冷启动无数据显示 --）
+ * - 同时把国家码写回 metadata.country，供列表页按国家分组排序
  */
 async function smartRename(
   nodes: Node[],
-  ipGeoResolver: (server: string) => Promise<string | null>,
-  healthByFp: Map<string, NodeHealthLatest>
+  ipGeoResolver: (server: string) => Promise<string | null>
 ): Promise<void> {
   const geoCache = new Map<string, string | null>();
   for (let i = 0; i < nodes.length; i++) {
@@ -55,13 +54,11 @@ async function smartRename(
     const geoName = geoCache.get(n.server);
     if (geoName) country = DISPLAY_TO_CODE[geoName] || '';
     const flag = country ? countryFlag(country) : '';
-    const h = healthByFp.get(nodeFingerprint(n));
-    const lat = h ? (h.httpLatency ?? h.tcpLatency) : null;
     const proto = PROTOCOL_LABELS[n.protocol] || n.protocol;
     const head = country ? `${flag} ${country} ${proto}` : proto;
     const nn = String(i + 1).padStart(2, '0');
-    // 有延迟: 45ms-01；无延迟（冷启动）: --01
-    n.name = lat != null ? `${head} ${lat}ms-${nn}` : `${head} --${nn}`;
+    n.name = `${head}-${nn}`;
+    if (country) n.metadata = { ...n.metadata, country };
   }
 }
 
@@ -99,6 +96,8 @@ export interface ConfigService {
   autoNamed(nodes: Node[]): Promise<Node[]>;
   /** 获取禁用的节点指纹列表 */
   getDisabledNodes(): Promise<string[]>;
+  /** 熔断抛弃的节点指纹（连续失败 3 次），不输出到配置但保留记录继续测活 */
+  getDroppedNodes(): Promise<string[]>;
   /** 设置禁用的节点指纹列表 */
   setDisabledNodes(fingerprints: string[]): Promise<void>;
   /** 获取用户勾选的规则 id 列表 */
@@ -294,14 +293,26 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       // 去重：按 server:port:protocol 三项指纹，合并多订阅重复节点
       // （getAll() 已排除停用订阅的节点 —— 用户 2026-09-24）
       const all = deduplicateNodes(await repos.nodes.getAll());
-      // 过滤禁用的节点 + 死节点过滤（status != 'disabled' / removed_at）
+      // 过滤：手动禁用 + 熔断抛弃 + removed
       const disabled = new Set(await this.getDisabledNodes());
+      const dropped = new Set(await this.getDroppedNodes());
       return all.filter((n) => {
         if (disabled.has(nodeFingerprint(n))) return false;
+        if (dropped.has(nodeFingerprint(n))) return false;
         if (n.status === 'disabled') return false;
         if (n.removed_at) return false;
         return true;
       });
+    },
+
+    /**
+     * 熔断抛弃的节点（状态机连续失败 3 次）。
+     * v2.36 前这里读的是 node.status，而状态机只写 health 记录的 statusMachine，
+     * 等于永远为空 —— 不通的节点其实从没被抛弃过。节点记录保留、仍参与测活以便恢复。
+     */
+    async getDroppedNodes(): Promise<string[]> {
+      const health = await getAllNodeHealth(kv);
+      return health.filter((h) => h.statusMachine === 'disabled').map((h) => h.fingerprint);
     },
 
     async upsertCFUsageAccount(acc): Promise<CFUsageAccount> {
@@ -350,10 +361,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
         get: (k) => repos.settings.get(k),
         set: (k, v) => repos.settings.set(k, v),
       });
-      const healthByFp = new Map<string, NodeHealthLatest>(
-        (await getAllNodeHealth(kv)).map((h) => [h.fingerprint, h])
-      );
-      await smartRename(copy, ipGeoResolver, healthByFp);
+      await smartRename(copy, ipGeoResolver);
       return copy;
     },
 
@@ -377,7 +385,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       });
       const healthList = await getAllNodeHealth(kv);
       const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));
-      await smartRename(nodes, ipGeoResolver, healthByFp);
+      await smartRename(nodes, ipGeoResolver);
 
       let content = '';
       switch (format) {

@@ -402,6 +402,10 @@ tbody tr:hover { background: var(--accent-soft); }
       <span>🔀 重复 <b id="statsDuplicates">0</b></span>
       <span>✅ 实际 <b id="statsUnique">0</b></span>
       <span >🌐 未识别国家码 <b id="statsGeoUnlocated" style="color:var(--danger)">0</b></span>
+      <span>🟢 存活 <b id="statsAlive" style="color:var(--success)">0</b></span>
+      <span>🔴 不通 <b id="statsDead" style="color:var(--danger)">0</b></span>
+      <span>🚫 已抛弃 <b id="statsDropped" style="color:var(--danger)">0</b></span>
+      <span>🕒 上次测活 <b id="statsLastProbe">未测活</b></span>
       <span style="color:var(--text2)">（去重依据：IP + 端口 + 协议）</span>
       <span style="margin-left:auto">
         <button class="btn btn-sm" onclick="redetectGeo()">🔄 重新检测国家码</button>
@@ -410,7 +414,7 @@ tbody tr:hover { background: var(--accent-soft); }
     <div id="geoPendingBanner" class="card" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px;border-left:4px solid var(--danger);box-shadow:var(--shadow-sm)"></div>
     <div class="card" style="margin:0 0 12px;padding:10px 16px;font-size:14px;display:flex;gap:8px;align-items:center">
       <span>🏷 节点名自动生成</span>
-      <span style="color:var(--text2)">格式：旗帜 国家码 协议 延迟-序号（如 🇭🇰 HK VLESS 45ms-01），无需手工清洗</span>
+      <span style="color:var(--text2)">格式：旗帜 国家码 协议-序号（如 🇭🇰 HK VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
     </div>
     <table id="nodesTable">
       <thead><tr><th style="width:40px"><input type="checkbox" id="nodeSelectAll" onchange="toggleSelectAll(this)" checked></th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
@@ -1365,8 +1369,14 @@ async function loadNodes(forceRefresh = false) {
       try {
         const hr = await api('/nodes/health');
         const map = {};
-        for (const h of (hr.data || [])) map[h.fingerprint] = h;
+        let last = 0;
+        for (const h of (hr.data || [])) {
+          map[h.fingerprint] = h;
+          if (h.timestamp > last) last = h.timestamp;
+        }
         state.nodeHealth = map;
+        const el = document.getElementById('statsLastProbe');
+        if (el) el.textContent = last ? new Date(last).toLocaleString('zh-CN', { hour12: false }) : '未测活';
       } catch { state.nodeHealth = {}; }
       renderNodes();
     } catch { toast('加载节点失败', 'error'); }
@@ -1480,10 +1490,22 @@ function protocolTagClass(protocol) {
   return 'tag-' + (known.indexOf(protocol) >= 0 ? protocol : 'other');
 }
 
-// 节点最新延迟（计划定稿：取 http_latency，无则回退 tcp_latency）
+// 节点最新延迟（v2.36：TLS RTT 优先，无则 TCP RTT；接口已带 latency 字段）
 function nodeLatency(n) {
+  if (n.latency != null) return n.latency;
   const h = state.nodeHealth[n.fingerprint];
-  return h ? (h.httpLatency ?? h.tcpLatency) : null;
+  return h ? (h.tlsLatency ?? h.tcpLatency) : null;
+}
+
+// 默认排序：同国家聚在一起，国家内健康得分高的在前（无分/无国家靠后）
+function defaultNodeOrder(a, b) {
+  const ca = a.country || 'ZZ';
+  const cb = b.country || 'ZZ';
+  if (ca !== cb) return ca < cb ? -1 : 1;
+  const sa = a.score ?? -1;
+  const sb = b.score ?? -1;
+  if (sa !== sb) return sb - sa;
+  return (nodeLatency(a) ?? 1e9) - (nodeLatency(b) ?? 1e9);
 }
 
 // 点击「延迟」表头切换 升序 → 降序 → 取消
@@ -1496,19 +1518,27 @@ function renderNodes() {
   const tbody = document.getElementById('nodesTableBody');
   const empty = document.getElementById('nodesEmpty');
   const search = document.getElementById('nodeSearch').value.toLowerCase();
-  // 死节点（熔断 disabled / tombstone removed）UI 完全隐藏：仅隐藏，不删除，仍参与后续测活以便恢复
-  let filtered = state.nodes.filter(n => n.status !== 'disabled' && n.status !== 'removed');
+  // v2.36：被熔断抛弃的节点也列出并标 🚫 —— 用户要能看到"哪些被抛弃了"（仅不输出到配置，记录保留、继续测活）
+  let filtered = state.nodes.slice();
   if (search) filtered = filtered.filter(n => (n.name + ' ' + n.server).toLowerCase().includes(search));
   if (state.nodeLatencySort) {
     const dir = state.nodeLatencySort === 'asc' ? 1 : -1;
-    filtered = filtered.slice().sort((a, b) => {
+    filtered = filtered.sort((a, b) => {
       const la = nodeLatency(a), lb = nodeLatency(b);
       if (la == null && lb == null) return 0;
       if (la == null) return 1;  // 未测到延迟的节点恒排末尾
       if (lb == null) return -1;
       return (la - lb) * dir;
     });
+  } else {
+    filtered = filtered.sort(defaultNodeOrder);
   }
+  // 顶部健康统计
+  const cnt = (f) => state.nodes.filter(f).length;
+  const setStat2 = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
+  setStat2('statsAlive', cnt(n => n.healthStatus === 'alive'));
+  setStat2('statsDead', cnt(n => n.healthStatus && n.healthStatus !== 'alive'));
+  setStat2('statsDropped', cnt(n => n.dropped));
   const mark = document.getElementById('latencySortMark');
   if (mark) mark.textContent = state.nodeLatencySort === 'asc' ? '▲' : (state.nodeLatencySort === 'desc' ? '▼' : '');
   if (filtered.length === 0) {
@@ -1522,24 +1552,27 @@ function renderNodes() {
     const h = state.nodeHealth[n.fingerprint];
     const latency = nodeLatency(n);
     const latencyStr = latency != null ? latency + 'ms' : '—';
-    const icon = !h ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[h.status] || '❓');
-    const tip = h ? \`得分 \${h.score}\${h.error ? ' · ' + h.error : ''} · 点击看趋势\` : '尚未测活 · 点击看趋势';
-    const suspect = n.status === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
-    return \`<tr>
+    const icon = !n.healthStatus ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[n.healthStatus] || '❓');
+    const scoreStr = n.score != null ? \` 得分 \${n.score}\` : '';
+    const tip = n.healthStatus ? \`得分 \${n.score}\${n.error ? ' · ' + n.error : ''} · 点击看趋势\` : '尚未测活 · 点击看趋势';
+    const dropped = n.dropped ? '<span title="连续测活失败，已从生成的配置中抛弃（记录保留，恢复后自动回来）" style="color:var(--danger)">🚫 已抛弃</span>' : '';
+    const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
+    const rowStyle = n.dropped ? ' style="opacity:0.55"' : '';
+    return \`<tr\${rowStyle}>
       <td><input type="checkbox" data-fp="\${escHtml(n.fingerprint)}" \${n.enabled ? 'checked' : ''} onchange="updateNodeEnabled(this)"></td>
       <td>\${escHtml(n.name)}</td>
-      <td><span class="tag \${tagClass}">\${displayProtocol(n)}</span></td>
+      <td><span class="tag \${tagClass}">\${displayProtocol(n.protocol)}</span></td>
       <td style="font-size:14px">\${escHtml(n.server)}</td>
       <td>\${n.port}</td>
       <td>\${n.tls ? '✅' : '❌'}</td>
       <td style="font-size:14px;\${latency != null && latency > 2000 ? 'color:var(--red)' : ''}">\${latencyStr}</td>
-      <td style="font-size:14px;cursor:pointer" title="\${escHtml(tip)}" onclick="showNodeHistory('\${escHtml(n.fingerprint)}')">\${suspect}\${icon}</td>
+      <td style="font-size:14px;cursor:pointer" title="\${escHtml(tip)}" onclick="showNodeHistory('\${escHtml(n.fingerprint)}')">\${suspect}\${icon}\${scoreStr} \${dropped}</td>
       <td><button class="btn btn-sm" onclick="copyNodeLink('\${escHtml(n.fingerprint)}')">📋 复制</button></td>
     </tr>\`;
   }).join('');
 }
 
-// ⚡ 立即测活：全量 TCP/TLS/HTTP 探测（同步等待，走通用进度弹窗）
+// ⚡ 立即测活：全量 TCP/TLS 探测（同步等待，走通用进度弹窗）
 async function probeAllNodes() {
   try {
     const res = await runWithProgress({
@@ -1547,7 +1580,11 @@ async function probeAllNodes() {
       capMs: 180000,
       fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
     });
-    toast(\`测活完成（\${res.nodeCount ?? 0} 个节点）\`);
+    const s = res.stats || {};
+    const parts = [\`共 \${s.total ?? res.nodeCount ?? 0}\`, \`存活 \${s.alive ?? 0}\`, \`不通 \${s.dead ?? 0}\`];
+    if (s.avgLatency != null) parts.push(\`平均 \${s.avgLatency}ms\`);
+    if (s.disabled) parts.push(\`已抛弃 \${s.disabled}\`);
+    toast(\`测活完成 · \${parts.join(' · ')}\`);
     await loadNodes(true);
   } catch (e) { /* runWithProgress 已弹出失败提示 */ }
 }

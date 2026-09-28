@@ -54,7 +54,7 @@ docker compose up -d
 
 - **多订阅聚合**：添加 / 删除 / 手动更新任意数量订阅，定时自动重抓
 - **节点解析**：内置 12 种协议解析器，自动识别 vmess / vless / trojan / ss / ssr / hysteria2 / tuic / wireguard / anytls，兼容 Clash YAML
-- **节点去重与命名**：按 `server:port:protocol` 去重；节点名按「旗帜 国家码 协议 延迟-序号」自动生成（如 `🇭🇰 HK VLESS 45ms-01`）；节点启用管理
+- **节点去重与命名**：按 `server:port:protocol` 去重；节点名按「旗帜 国家码 协议-序号」自动生成（如 `🇭🇰 HK VLESS-01`，延迟不写进名字，见列表「延迟」列）；节点启用管理
 - **分流规则引擎**：13 组固定策略组（全部原生 GEOSITE）+ 动态规则目录（MetaCubeX 分类）+ 自定义规则，Web 面板可切换
 - **IP 归属识别**：自动解析节点 IP → GeoIP → 国家归属；后台自动重试未识别 IP
 - **多格式输出**：mihomo / sing-box / shadowrocket / v2ray / v2rayN / nekoray，不支持的协议自动跳过

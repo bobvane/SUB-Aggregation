@@ -94,7 +94,7 @@ describe('Nodes Health API', () => {
     expect(history.every((h) => h.fingerprint === 'fp-hk-01')).toBe(true);
   });
 
-  it('GET /api/nodes 返回自动命名后的节点名（与生成的配置一致）', async () => {
+  it('GET /api/nodes 返回自动命名后的节点名 + 健康字段（v2.36：名字不带延迟）', async () => {
     await repos.nodes.setBySubscription('sub-1', [
       { name: '香港01-中转', protocol: 'vless', server: 'hk1.example.com', port: 443, tls: true } as never,
     ]);
@@ -106,9 +106,39 @@ describe('Nodes Health API', () => {
 
     const res = await app.request('/api/nodes', { headers });
     expect(res.status).toBe(200);
-    const list = ((await res.json()) as ResData).data as Array<{ name: string }>;
-    // 旧行为：库里存什么显示什么（'香港01-中转'）；修复后：与配置输出同款自动命名
-    expect(list[0].name).toBe('🇭🇰 HK VLESS 80ms-01');
+    const list = ((await res.json()) as ResData).data as Array<{
+      name: string; country: string; latency: number | null; score: number | null;
+      healthStatus: string | null; dropped: boolean;
+    }>;
+    // 旧行为：库里存什么显示什么（'香港01-中转'）；v2.35.1 起与配置输出同款自动命名
+    // v2.36：延迟不再写进名字（否则每次生成名字都变，客户端会当新节点）
+    expect(list[0].name).toBe('🇭🇰 HK VLESS-01');
+    // 列表页排序/状态列需要的数据由接口一次给全
+    expect(list[0].country).toBe('HK');
+    expect(list[0].latency).toBe(45); // TLS RTT 优先（tcp 30 / http 80 都不该被选中）
+    expect(list[0].score).toBe(92);
+    expect(list[0].healthStatus).toBe('alive');
+    expect(list[0].dropped).toBe(false);
+  });
+
+  it('熔断抛弃的节点在列表页可见（dropped=true）且不进入生成的配置', async () => {
+    await repos.nodes.setBySubscription('sub-1', [
+      { name: 'dead-1', protocol: 'vless', server: 'dead.example.com', port: 443, tls: true } as never,
+    ]);
+    const fp = nodeFingerprint({ server: 'dead.example.com', port: 443, protocol: 'vless' } as never);
+    await kv.put(
+      KV_KEYS.healthLatest(fp),
+      JSON.stringify({ ...snapshot(fp, 1700000000000), status: 'dead', tcpLatency: null, tlsLatency: null, httpLatency: null, score: 0, statusMachine: 'disabled' })
+    );
+
+    const res = await app.request('/api/nodes', { headers });
+    const list = ((await res.json()) as ResData).data as Array<{ fingerprint: string; dropped: boolean }>;
+    expect(list.find((n) => n.fingerprint === fp)?.dropped).toBe(true);
+
+    // 抛弃 = 不输出到配置：getNodes（生成配置的节点来源）必须过滤掉它
+    const config = createConfigService(repos, kv);
+    expect((await config.getNodes()).some((n) => nodeFingerprint(n) === fp)).toBe(false);
+    expect(await config.getDroppedNodes()).toContain(fp);
   });
 
   it('GET /api/nodes/health 未登录返回 401', async () => {

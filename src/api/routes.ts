@@ -385,16 +385,31 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/nodes', async (c) => {
     const subscriptionId = c.req.query('subscriptionId');
     const disabled = new Set(await config.getDisabledNodes());
-    const mapper = (n: { name: string; protocol: string; server: string; port: number; tls?: boolean }) => ({
-      name: n.name,
-      protocol: n.protocol,
-      server: n.server,
-      port: n.port,
-      tls: n.tls ?? false,
-      link: nodeToLink(n as import('@/models/node').Node),
-      fingerprint: nodeFingerprint(n as import('@/models/node').Node),
-      enabled: !disabled.has(nodeFingerprint(n as import('@/models/node').Node)),
-    });
+    // 熔断抛弃（连续失败 3 次）—— 前端要能看到"哪些被抛弃了"
+    const dropped = new Set(await config.getDroppedNodes());
+    const { getAllNodeHealth, nodeLatencyMs } = await import('@/services/node-probe.service');
+    const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
+    const mapper = (n: import('@/models/node').Node) => {
+      const fp = nodeFingerprint(n);
+      const h = healthByFp.get(fp);
+      return {
+        name: n.name,
+        protocol: n.protocol,
+        server: n.server,
+        port: n.port,
+        tls: n.tls ?? false,
+        country: n.metadata?.country ?? '',
+        link: nodeToLink(n),
+        fingerprint: fp,
+        enabled: !disabled.has(fp),
+        dropped: dropped.has(fp),
+        healthStatus: h?.status ?? null,
+        statusMachine: h?.statusMachine ?? null,
+        score: h?.score ?? null,
+        latency: h ? nodeLatencyMs(h) : null,
+        error: h?.error ?? null,
+      };
+    };
     if (subscriptionId) {
       const nodes = await repos.nodes.getBySubscription(subscriptionId);
       return c.json({
@@ -905,8 +920,8 @@ export function createApp(deps: AppDeps): Hono {
     try {
       const { probeAllNodes } = await import('@/services/node-probe.service');
       const nodes = deduplicateNodes(await repos.nodes.getAll());
-      await probeAllNodes(nodes, storage);
-      return c.json({ success: true, nodeCount: nodes.length });
+      const { stats } = await probeAllNodes(nodes, storage);
+      return c.json({ success: true, nodeCount: nodes.length, stats });
     } catch (e) {
       return c.json({ success: false, error: { code: 'PROBE_FAILED', message: (e as Error).message } }, 500);
     }
