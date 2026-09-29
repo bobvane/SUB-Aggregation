@@ -18,7 +18,7 @@ import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
-import { getAllNodeHealth, nodeLatencyMs, NodeHealthLatest } from './node-probe.service';
+import { getAllNodeHealth, nodeLatencyMs, getNodeHealthHistory, NodeHealthLatest } from './node-probe.service';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -308,9 +308,18 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
         if (Number.isFinite(raw) && raw >= 100 && raw <= 2000) threshold = raw;
       } catch { /* 读设置失败用默认值 */ }
       const health = await getAllNodeHealth(kv);
-      return health
-        .filter((h) => h.status === 'dead' || (nodeLatencyMs(h) ?? 0) > threshold)
-        .map((h) => h.fingerprint);
+      const dropped: string[] = [];
+      for (const h of health) {
+        if (h.status === 'dead') { dropped.push(h.fingerprint); continue; }
+        const latency = nodeLatencyMs(h);
+        if (latency == null || latency <= threshold) continue;
+        // 超阈值：单次尖峰不算数（实测 VPS 单轮 1000ms、平时 150ms，单轮即抛会误杀）
+        // 最近 3 条记录里 ≥2 条超阈值才抛弃；历史不足 3 条时维持原行为（最新 1 次即抛）
+        const history = await getNodeHealthHistory(h.fingerprint, kv, 3);
+        const overCount = history.filter(x => (nodeLatencyMs(x) ?? 0) > threshold).length;
+        if (history.length < 3 || overCount >= 2) dropped.push(h.fingerprint);
+      }
+      return dropped;
     },
 
     /**

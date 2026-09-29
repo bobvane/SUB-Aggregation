@@ -45,4 +45,37 @@ describe('getDroppedNodes 慢节点抛弃阈值', () => {
     expect(dropped).toContain('dead-fast');
     expect(dropped).toContain('alive-2100');
   });
+
+  it('单次尖峰不算数：最近 3 条只 1 条超阈值 → 不抛弃', async () => {
+    const kv = new MemoryKvAdapter();
+    await kv.put(KV_KEYS.setting('node_drop_latency_ms'), '400');
+    // VPS 场景：平时 150ms，偶发一轮 1000ms
+    const ts = [1_700_000_000_000, 1_700_000_300_000, 1_700_000_600_000];
+    const lat = [150, 150, 1000];
+    for (let i = 0; i < 3; i++) {
+      await kv.put(KV_KEYS.healthHistory('vps', ts[i]), JSON.stringify({
+        fingerprint: 'vps', status: 'alive', timestamp: ts[i],
+        tcpLatency: lat[i], tlsLatency: null, score: 50,
+      }));
+    }
+    await putHealth(kv, 'vps', 'alive', 1000); // 最新一次是尖峰
+    const svc = createConfigService(createRepositories(kv), kv);
+    expect(await svc.getDroppedNodes()).not.toContain('vps');
+  });
+
+  it('持续慢：最近 3 条里 2 条超阈值 → 抛弃', async () => {
+    const kv = new MemoryKvAdapter();
+    await kv.put(KV_KEYS.setting('node_drop_latency_ms'), '400');
+    const ts = [1_700_000_000_000, 1_700_000_300_000, 1_700_000_600_000];
+    const lat = [150, 900, 1100];
+    for (let i = 0; i < 3; i++) {
+      await kv.put(KV_KEYS.healthHistory('slow-node', ts[i]), JSON.stringify({
+        fingerprint: 'slow-node', status: 'alive', timestamp: ts[i],
+        tcpLatency: lat[i], tlsLatency: null, score: 50,
+      }));
+    }
+    await putHealth(kv, 'slow-node', 'alive', 1100);
+    const svc = createConfigService(createRepositories(kv), kv);
+    expect(await svc.getDroppedNodes()).toContain('slow-node');
+  });
 });
