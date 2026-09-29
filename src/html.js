@@ -89,6 +89,8 @@ a:hover { text-decoration: underline; }
 .btn-danger { color: var(--red); border-color: rgba(234,34,97,0.3); }
 .btn-danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
 .btn-sm { padding: 4px 11px; font-size: 14px; }
+.node-lock-btn { padding: 3px 7px; line-height: 1; background: transparent; border: 1px solid var(--border); color: var(--text2); }
+.node-lock-on { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 700; }
 /* ===== Page ===== */
 .page { display: none; padding: 28px 32px; max-width: 1060px; width: 100%; margin: 0 auto; }
 .page.active { display: block; animation: fadeUp .3s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -414,7 +416,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <span style="color:var(--text2)">格式：旗帜 国家码 协议-序号（如 🇭🇰 HK VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
     </div>
     <table id="nodesTable">
-      <thead><tr><th style="width:40px"><input type="checkbox" id="nodeSelectAll" onchange="toggleSelectAll(this)" checked></th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th style="width:40px" title="锁定后无视测活/延迟，强制进配置">锁定</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
       <tbody id="nodesTableBody"></tbody>
     </table>
     <p class="text-center" id="nodesEmpty" style="color:var(--text2);padding:24px">暂无节点数据</p>
@@ -1483,7 +1485,7 @@ function renderNodes() {
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
     const rowStyle = n.dropped ? ' style="opacity:0.55"' : '';
     return \`<tr\${rowStyle}>
-      <td><input type="checkbox" data-fp="\${escHtml(n.fingerprint)}" \${n.enabled ? 'checked' : ''} onchange="updateNodeEnabled(this)"></td>
+      <td><button class="btn btn-sm node-lock-btn\${n.locked ? ' node-lock-on' : ''}" title="\${n.locked ? '已锁定：无视测活/延迟，强制进配置（点击解锁）' : '未锁定：跟随测活/延迟决定进出配置（点击锁定）'}" onclick="toggleNodeLock('\${escHtml(n.fingerprint)}', !n.locked)">\${n.locked ? '🔒' : '🔓'}</button></td>
       <td>\${escHtml(n.name)}</td>
       <td><span class="tag \${tagClass}">\${displayProtocol(n)}</span></td>
       <td style="font-size:14px">\${escHtml(n.server)}</td>
@@ -1595,39 +1597,21 @@ function copyNodeLink(fingerprint) {
   copyText(node.link, '已复制单节点链接');
 }
 
-function toggleSelectAll(cb) {
-  document.querySelectorAll('#nodesTableBody input[type="checkbox"][data-fp]').forEach(c => { c.checked = cb.checked; });
-  // 同步 state.nodes 的 enabled
-  state.nodes.forEach(n => { n.enabled = cb.checked; });
-  saveNodeEnabled();
-}
-
-function updateNodeEnabled(cb) {
-  // 联动全选框状态
-  const all = document.querySelectorAll('#nodesTableBody input[type="checkbox"][data-fp]');
-  const allChecked = [...all].every(c => c.checked);
-  document.getElementById('nodeSelectAll').checked = allChecked;
-  // 同步 state.nodes 的 enabled（立即反映到输出节点数）
-  const fp = cb.dataset.fp;
-  if (fp) {
-    const node = state.nodes.find(n => n.fingerprint === fp);
-    if (node) node.enabled = cb.checked;
+// v2.36.9：节点锁定（替换原勾选框）—— 锁定 = 无视测活/延迟，强制进配置
+async function toggleNodeLock(fp, locked) {
+  const node = state.nodes.find(n => n.fingerprint === fp);
+  if (!node) return;
+  node.locked = locked;
+  renderNodes();
+  refreshNodeCount();
+  try {
+    await api('/nodes/locked', { method: 'POST', body: JSON.stringify({ fingerprint: fp, locked }) });
+    toast(locked ? '🔒 已锁定：该节点将强制进配置' : '🔓 已解锁：跟随测活/延迟判定');
+  } catch (e) {
+    node.locked = !locked;
+    renderNodes();
+    toast('保存失败: ' + e.message, 'error');
   }
-  saveNodeEnabled();
-}
-
-// 保存启用列表（防抖，避免连续点击频繁请求）
-let nodeSaveTimer = null;
-function saveNodeEnabled() {
-  clearTimeout(nodeSaveTimer);
-  nodeSaveTimer = setTimeout(async () => {
-    // 基于 state.nodes 全量数据构建（不受搜索过滤影响）
-    const enabled = state.nodes.filter(n => n.enabled).map(n => n.fingerprint);
-    try {
-      await api('/nodes/enabled', { method: 'PUT', body: JSON.stringify({ enabled }) });
-      toast('节点选择已保存');
-    } catch (e) { toast('保存失败: ' + e.message, 'error'); }
-  }, 400);
 }
 
 // ============ Output ============
@@ -1641,9 +1625,10 @@ async function refreshNodeCount() {
     const data = await api('/nodes');
     state.nodes = data.data || [];
     const total = state.nodes.length;
-    const enabled = state.nodes.filter(n => n.enabled !== false).length;
-    document.getElementById('outputNodeCount').textContent = \`\${enabled} 个节点（共 \${total}）\`;
-    // 同步节点页勾选状态（如果已加载）
+    // 进配置 = 未被抛弃（锁定节点即使被抛弃也进配置），与 getNodes 同口径
+    const inConfig = state.nodes.filter(n => !(n.dropped && !n.locked)).length;
+    document.getElementById('outputNodeCount').textContent = \`\${inConfig} 个节点进配置（共 \${total}）\`;
+    // 同步节点页锁定状态（如果已加载）
     if (state.currentPage === 'nodes') renderNodes();
   } catch { toast('刷新节点数失败', 'error'); }
 }
