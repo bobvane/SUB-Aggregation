@@ -1481,7 +1481,7 @@ function renderNodes() {
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
     const rowStyle = n.dropped ? ' style="opacity:0.55"' : '';
     return `<tr${rowStyle}>
-      <td><button class="btn btn-sm node-lock-btn${n.locked ? ' node-lock-on' : ''}" title="${n.locked ? '已锁定：无视测活/延迟，强制进配置（点击解锁）' : '未锁定：跟随测活/延迟决定进出配置（点击锁定）'}" onclick="toggleNodeLock('${escHtml(n.fingerprint)}', !n.locked)">${n.locked ? '🔒' : '🔓'}</button></td>
+      <td><button class="btn btn-sm node-lock-btn${n.locked ? ' node-lock-on' : ''}" title="${n.locked ? '已锁定：无视测活/延迟，强制进配置（点击解锁）' : '未锁定：跟随测活/延迟决定进出配置（点击锁定）'}" onclick="toggleNodeLock('${escHtml(n.fingerprint)}', ${!n.locked})">${n.locked ? '🔒' : '🔓'}</button></td>
       <td>${escHtml(n.name)}</td>
       <td><span class="tag ${tagClass}">${displayProtocol(n)}</span></td>
       <td style="font-size:14px">${escHtml(n.server)}</td>

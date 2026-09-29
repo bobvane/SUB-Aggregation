@@ -2,6 +2,11 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.37.0] - 2026-09-29
+
+### 修复
+- **锁按钮点不动**：onclick 模板里 `!n.locked` 是字面字符串而非求值表达式（`!undefined` 恒为 false），点击后参数永远是 false 且不刷新。改为在模板字符串求值时写入 `${!n.locked}` 布尔值
+
 ## [2.36.9] - 2026-09-29
 
 ### 新功能
