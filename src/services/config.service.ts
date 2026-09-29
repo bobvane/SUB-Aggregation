@@ -18,7 +18,7 @@ import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
-import { getAllNodeHealth, NodeHealthLatest } from './node-probe.service';
+import { getAllNodeHealth, nodeLatencyMs, NodeHealthLatest } from './node-probe.service';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -296,15 +296,21 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
     },
 
     /**
-     * 熔断抛弃的节点（状态机连续失败 3 次）。
-     * v2.36 前这里读的是 node.status，而状态机只写 health 记录的 statusMachine，
-     * 等于永远为空 —— 不通的节点其实从没被抛弃过。节点记录保留、仍参与测活以便恢复。
+     * 熔断抛弃的节点。
+     * v2.36.2：最新一轮探测 dead 即从配置剔除（立即生效、可自愈）。
+     * v2.36.6：延迟超过用户设定阈值（设置页 node_drop_latency_ms，100-2000ms，默认 2000）
+     * 的节点同样抛弃——通着但太慢，进配置无意义。
      */
     async getDroppedNodes(): Promise<string[]> {
-      // v2.36.2：最新一轮探测 dead 即从配置剔除（立即生效、可自愈）。
-      // 此前按状态机连续 3 次失败才 disabled，用户点一次测活永远看不到"抛弃"效果。
+      let threshold = 2000;
+      try {
+        const raw = Number((await repos.settings.get('node_drop_latency_ms')) ?? '');
+        if (Number.isFinite(raw) && raw >= 100 && raw <= 2000) threshold = raw;
+      } catch { /* 读设置失败用默认值 */ }
       const health = await getAllNodeHealth(kv);
-      return health.filter((h) => h.status === 'dead').map((h) => h.fingerprint);
+      return health
+        .filter((h) => h.status === 'dead' || (nodeLatencyMs(h) ?? 0) > threshold)
+        .map((h) => h.fingerprint);
     },
 
     /**

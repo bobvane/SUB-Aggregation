@@ -505,6 +505,11 @@ tbody tr:hover { background: var(--accent-soft); }
         <input id="settingSubUpdateInterval" type="number" min="0" max="24" placeholder="24">
         <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">每隔设定的小时数自动拉取全部订阅（按整点判断，实际误差不超过 1 小时）</div>
       </div>
+      <div class="form-group">
+        <label>慢节点抛弃阈值（毫秒，100-2000；默认 2000）</label>
+        <input id="settingNodeDropLatency" type="number" min="100" max="2000" placeholder="2000">
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">测活延迟超过该值的节点视为「已抛弃」：不写入生成的配置，节点记录保留、延迟回落后自动恢复</div>
+      </div>
       <button class="btn btn-primary mt-12" onclick="saveSettings()">💾 保存</button>
     </div>
     <div class="card" style="margin-top:16px">
@@ -651,7 +656,7 @@ tbody tr:hover { background: var(--accent-soft); }
 
 <script>
 // ============ State ============
-let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
+let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
 
 // ============ Theme ============
 const themes = ['light', 'dark'];
@@ -1275,6 +1280,7 @@ async function loadNodes(forceRefresh = false) {
         setStat('statsDuplicates', res.stats.duplicates);
         setStat('statsUnique', res.stats.unique);
         setStat('statsGeoUnlocated', res.stats.geoUnlocated);
+        if (res.stats.dropLatencyMs) state.nodeDropLatency = res.stats.dropLatencyMs;
       }
       // v2.32：并行拉健康快照（延迟/状态列数据源）。失败不阻断节点列表。
       try {
@@ -1411,6 +1417,8 @@ function nodeLatency(n) {
 
 // 默认排序：同国家聚在一起，国家内健康得分高的在前（无分/无国家靠后）
 function defaultNodeOrder(a, b) {
+  // v2.36.6：已抛弃节点恒排末尾（通着但太慢/不通的沉底，便于扫视）
+  if (!!a.dropped !== !!b.dropped) return a.dropped ? 1 : -1;
   const ca = a.country || 'ZZ';
   const cb = b.country || 'ZZ';
   if (ca !== cb) return ca < cb ? -1 : 1;
@@ -1445,7 +1453,7 @@ function renderNodes() {
   } else {
     filtered = filtered.sort(defaultNodeOrder);
   }
-  // 顶部健康统计
+  // 顶部健康统计（v2.36.6：与仪表盘同口径 —— 有测活记录且非 alive 都算不通）
   const cnt = (f) => state.nodes.filter(f).length;
   const setStat2 = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
   setStat2('statsAlive', cnt(n => n.healthStatus === 'alive'));
@@ -1467,7 +1475,7 @@ function renderNodes() {
     const icon = !n.healthStatus ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[n.healthStatus] || '❓');
     const scoreStr = n.score != null ? ` 得分 ${n.score}` : '';
     const tip = n.healthStatus ? `得分 ${n.score}${n.error ? ' · ' + n.error : ''} · 点击看趋势` : '尚未测活 · 点击看趋势';
-    const dropped = n.dropped ? '<span title="连续测活失败，已从生成的配置中抛弃（记录保留，恢复后自动回来）" style="color:var(--danger)">🚫 已抛弃</span>' : '';
+    const dropped = n.dropped ? '<span title="测活不通或延迟超过阈值，已从生成的配置中抛弃（记录保留，恢复后自动回来）" style="color:var(--danger)">🚫 已抛弃</span>' : '';
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
     const rowStyle = n.dropped ? ' style="opacity:0.55"' : '';
     return `<tr${rowStyle}>
@@ -1477,7 +1485,7 @@ function renderNodes() {
       <td style="font-size:14px">${escHtml(n.server)}</td>
       <td>${n.port}</td>
       <td>${n.tls ? '✅' : '❌'}</td>
-      <td style="font-size:14px;${latency != null && latency > 2000 ? 'color:var(--red)' : ''}">${latencyStr}</td>
+      <td style="font-size:14px;${latency != null && latency > state.nodeDropLatency ? 'color:var(--red)' : ''}">${latencyStr}</td>
       <td style="font-size:14px;cursor:pointer" title="${escHtml(tip)}" onclick="showNodeHistory('${escHtml(n.fingerprint)}')">${suspect}${icon}${scoreStr} ${dropped}</td>
       <td><button class="btn btn-sm" onclick="copyNodeLink('${escHtml(n.fingerprint)}')">📋 复制</button></td>
     </tr>`;
@@ -1813,6 +1821,7 @@ async function loadSettings() {
     const data = await api('/settings');
     document.getElementById('settingAppName').value = data.data?.app_name || '';
     document.getElementById('settingSubUpdateInterval').value = data.data?.sub_update_interval ?? 24;
+    document.getElementById('settingNodeDropLatency').value = data.data?.node_drop_latency_ms ?? 2000;
   } catch {}
   loadCatalogStatus();
   searchCatalog(); // 默认显示前 100 个分类
@@ -1824,8 +1833,11 @@ async function saveSettings() {
   const intervalRaw = document.getElementById('settingSubUpdateInterval').value.trim();
   const subInterval = intervalRaw === '' ? 24 : parseInt(intervalRaw, 10);
   if (Number.isNaN(subInterval) || subInterval < 0 || subInterval > 24) { toast('自动更新间隔须为 0-24 的整数（0 = 不更新）', 'error'); return; }
+  const dropRaw = document.getElementById('settingNodeDropLatency').value.trim();
+  const dropLat = dropRaw === '' ? 2000 : parseInt(dropRaw, 10);
+  if (Number.isNaN(dropLat) || dropLat < 100 || dropLat > 2000) { toast('慢节点抛弃阈值须为 100-2000 的整数（毫秒）', 'error'); return; }
   try {
-    await api('/settings', { method: 'PUT', body: JSON.stringify({ app_name: appName, sub_update_interval: subInterval }) });
+    await api('/settings', { method: 'PUT', body: JSON.stringify({ app_name: appName, sub_update_interval: subInterval, node_drop_latency_ms: dropLat }) });
     toast('设置已保存');
     // 立即刷新页面标题
     document.getElementById('sidebarLogo').textContent = appName;

@@ -4,7 +4,7 @@
  */
 export const APP_META = {
   name: 'SUB-Aggregation',
-  version: '2.36.5',
+  version: '2.36.6',
   repo: 'https://github.com/bobvane/SUB-Aggregation',
   repoShort: 'bobvane/SUB-Aggregation',
   author: 'Bob Vane',

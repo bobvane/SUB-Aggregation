@@ -436,14 +436,18 @@ export function createApp(deps: AppDeps): Hono {
         data: (await config.autoNamed(nodes)).map(mapper),
       });
     }
-    const all = await repos.nodes.getAll();
+    // v2.36.6：与仪表盘同口径 —— 含停用订阅的全部节点（此前仅启用订阅，两页数字对不上）
+    const all = await repos.nodes.getAll(true);
     const original = all.length;
     const unique = deduplicateNodes(all);
     const geoUnlocated = await config.countUnlocatedGeo(unique.map(n => n.server));
+    // 前端用同一阈值做延迟红字高亮（与 getDroppedNodes 同口径）
+    const dropLatRaw = Number((await repos.settings.get('node_drop_latency_ms')) ?? '');
+    const dropLatencyMs = Number.isFinite(dropLatRaw) && dropLatRaw >= 100 && dropLatRaw <= 2000 ? dropLatRaw : 2000;
     return c.json({
       success: true,
       data: (await config.autoNamed(unique)).map(mapper),
-      stats: { original, duplicates: original - unique.length, unique: unique.length, geoUnlocated },
+      stats: { original, duplicates: original - unique.length, unique: unique.length, geoUnlocated, dropLatencyMs },
     });
   });
 
@@ -775,17 +779,19 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/settings', requireAuth(auth), async (c) => {
     const appName = await repos.settings.get('app_name');
     const intervalRaw = await repos.settings.get('sub_update_interval');
+    const dropLatRaw = await repos.settings.get('node_drop_latency_ms');
     return c.json({
       success: true,
       data: {
         app_name: appName ?? 'SUB-Aggregation',
         sub_update_interval: intervalRaw !== null ? parseInt(intervalRaw, 10) : 24,
+        node_drop_latency_ms: dropLatRaw !== null ? parseInt(dropLatRaw, 10) : 2000,
       },
     });
   });
 
   app.put('/api/settings', requireAuth(auth), async (c) => {
-    const body = await readBody<{ app_name?: string; sub_update_interval?: number }>(c);
+    const body = await readBody<{ app_name?: string; sub_update_interval?: number; node_drop_latency_ms?: number }>(c);
     if (body.app_name) {
       await repos.settings.set('app_name', body.app_name);
     }
@@ -795,6 +801,13 @@ export function createApp(deps: AppDeps): Hono {
         return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '自动更新间隔须为 0-24 的整数（小时，0 = 不更新）' } }, 400);
       }
       await repos.settings.set('sub_update_interval', String(h));
+    }
+    if (body.node_drop_latency_ms !== undefined) {
+      const v = Number(body.node_drop_latency_ms);
+      if (!Number.isInteger(v) || v < 100 || v > 2000) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '抛弃延迟阈值须为 100-2000 的整数（毫秒）' } }, 400);
+      }
+      await repos.settings.set('node_drop_latency_ms', String(v));
     }
     return c.json({ success: true });
   });
