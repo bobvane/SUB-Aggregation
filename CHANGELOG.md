@@ -2,6 +2,11 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [2.36.5] - 2026-09-29
+
+### 修复
+- **仪表盘「最近动态」加载失败**：`loadOperationLogs` / `clearOperationLogs` 调用 `api('/api/operation-log...')`，而 `api()` 助手内部已自动补 `/api` 前缀，实际请求了不存在的 `/api/api/operation-log`（404），前端渲染红色「加载失败」。两处改为 `api('/operation-log...')`，与路由 `app.get('/api/operation-log')` 对齐。v2.36.3 只修了字段名（detail→message）未修路径，导致该卡片自 v2.36.2 起一直报错
+
 ## [2.36.4] - 2026-09-29
 
 ### 移除

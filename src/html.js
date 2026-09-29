@@ -1119,7 +1119,7 @@ async function loadOperationLogs() {
   const list = document.getElementById('opLogList');
   if (!list) return;
   try {
-    const res = await api('/api/operation-log?limit=10');
+    const res = await api('/operation-log?limit=10');
     const logs = res.data || [];
     if (logs.length === 0) {
       list.innerHTML = '<div style="padding:8px;color:var(--text2)">暂无操作记录</div>';
@@ -1148,7 +1148,7 @@ async function loadOperationLogs() {
 async function clearOperationLogs() {
   if (!confirm('确定清空全部操作日志？此操作不可恢复。')) return;
   try {
-    await api('/api/operation-log', { method: 'DELETE' });
+    await api('/operation-log', { method: 'DELETE' });
     toast('操作日志已清空');
     loadOperationLogs();
   } catch (e) { toast('清空失败: ' + e.message, 'error'); }
