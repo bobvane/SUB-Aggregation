@@ -99,6 +99,10 @@ export interface ConfigService {
   getDroppedNodes(): Promise<string[]>;
   /** 设置禁用的节点指纹列表 */
   setDisabledNodes(fingerprints: string[]): Promise<void>;
+  /** 获取锁定的节点指纹列表（v2.36.9：锁定节点无视测活/延迟/禁用，强制进配置） */
+  getLockedNodes(): Promise<string[]>;
+  /** 设置锁定的节点指纹列表 */
+  setLockedNodes(fingerprints: string[]): Promise<void>;
   /** 获取用户勾选的规则 id 列表 */
   getSelectedRuleIds(): Promise<string[]>;
   /** 设置用户勾选的规则 id 列表 */
@@ -139,6 +143,7 @@ const FORMAT_META: Record<OutputFormat, { contentType: string; filename: string 
 };
 
 const DISABLED_NODES_KEY = 'disabled_nodes';
+const LOCKED_NODES_KEY = 'locked_nodes';
 const SELECTED_RULES_KEY = 'selected_rules';
 const CUSTOM_RULES_KEY = 'custom_rules';
 const DISABLED_GROUPS_KEY = 'disabled_groups';
@@ -165,6 +170,24 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       await repos.settings.set(DISABLED_NODES_KEY, JSON.stringify(unique));
       await snapshotCache.invalidateAll();
       await opLog.logManualAction(`手动禁用 ${unique.length} 个节点`);
+    },
+
+    async getLockedNodes(): Promise<string[]> {
+      const raw = await repos.settings.get(LOCKED_NODES_KEY);
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async setLockedNodes(fingerprints: string[]): Promise<void> {
+      const unique = [...new Set(fingerprints)];
+      await repos.settings.set(LOCKED_NODES_KEY, JSON.stringify(unique));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`锁定 ${unique.length} 个节点（强制进配置）`);
     },
 
     async getSelectedRuleIds(): Promise<string[]> {
@@ -283,10 +306,12 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       // 去重：按 server:port:protocol 三项指纹，合并多订阅重复节点
       // （getAll() 已排除停用订阅的节点 —— 用户 2026-09-24）
       const all = deduplicateNodes(await repos.nodes.getAll());
-      // 过滤：手动禁用 + 熔断抛弃 + removed
+      // 过滤：手动禁用 + 熔断抛弃 + removed（v2.36.9：锁定节点全部豁免，强制进配置）
       const disabled = new Set(await this.getDisabledNodes());
       const dropped = new Set(await this.getDroppedNodes());
+      const locked = new Set(await this.getLockedNodes());
       return all.filter((n) => {
+        if (locked.has(nodeFingerprint(n))) return true;
         if (disabled.has(nodeFingerprint(n))) return false;
         if (dropped.has(nodeFingerprint(n))) return false;
         if (n.status === 'disabled') return false;

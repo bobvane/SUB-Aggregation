@@ -406,6 +406,8 @@ export function createApp(deps: AppDeps): Hono {
     const disabled = new Set(await config.getDisabledNodes());
     // 熔断抛弃（连续失败 3 次）—— 前端要能看到"哪些被抛弃了"
     const dropped = new Set(await config.getDroppedNodes());
+    // v2.36.9：锁定节点（无视测活/延迟，强制进配置）
+    const locked = new Set(await config.getLockedNodes());
     const { getAllNodeHealth, nodeLatencyMs } = await import('@/services/node-probe.service');
     const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
     const mapper = (n: import('@/models/node').Node) => {
@@ -421,6 +423,7 @@ export function createApp(deps: AppDeps): Hono {
         link: nodeToLink(n),
         fingerprint: fp,
         enabled: !disabled.has(fp),
+        locked: locked.has(fp),
         dropped: dropped.has(fp),
         healthStatus: h?.status ?? null,
         statusMachine: h?.statusMachine ?? null,
@@ -551,6 +554,20 @@ export function createApp(deps: AppDeps): Hono {
     const disabled = allFingerprints.filter((fp) => !enabledSet.has(fp));
     await config.setDisabledNodes(disabled);
     return c.json({ success: true, data: { disabledCount: disabled.length } });
+  });
+
+  // v2.36.9：切换节点锁定（锁定 = 无视测活/延迟/禁用，强制进配置）
+  app.post('/api/nodes/locked', async (c) => {
+    const body = await readBody<{ fingerprint?: string; locked?: boolean }>(c);
+    if (!body.fingerprint || typeof body.locked !== 'boolean') {
+      throw ERRORS.INVALID_PARAMETER('fingerprint and locked are required');
+    }
+    const current = await config.getLockedNodes();
+    const next = body.locked
+      ? [...new Set([...current, body.fingerprint])]
+      : current.filter((fp) => fp !== body.fingerprint);
+    await config.setLockedNodes(next);
+    return c.json({ success: true, data: { fingerprint: body.fingerprint, locked: body.locked, lockedCount: next.length } });
   });
 
   // ============ Rule API ============
