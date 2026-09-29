@@ -23,7 +23,7 @@ async function makeSvc() {
 
 describe('节点锁定（强制进配置）', () => {
   it('未锁定：dead 节点被抛弃，不进 getNodes', async () => {
-    const { kv, repos, svc, dead } = await makeSvc();
+    const { kv, svc, dead } = await makeSvc();
     await kv.put('health:latest:' + fp(dead), healthLatest(fp(dead), 'dead', null));
     const nodes = await svc.getNodes();
     expect(nodes.map(n => n.name)).not.toContain('D');
@@ -31,7 +31,7 @@ describe('节点锁定（强制进配置）', () => {
   });
 
   it('锁定 dead 节点：强制进 getNodes', async () => {
-    const { kv, repos, svc, dead } = await makeSvc();
+    const { kv, svc, dead } = await makeSvc();
     await kv.put('health:latest:' + fp(dead), healthLatest(fp(dead), 'dead', null));
     await svc.setLockedNodes([fp(dead)]);
     const nodes = await svc.getNodes();
@@ -39,7 +39,7 @@ describe('节点锁定（强制进配置）', () => {
   });
 
   it('锁定 + 禁用同时命中：锁定优先，仍进 getNodes', async () => {
-    const { repos, svc, dead } = await makeSvc();
+    const { svc, dead } = await makeSvc();
     await svc.setDisabledNodes([fp(dead)]);
     await svc.setLockedNodes([fp(dead)]);
     const nodes = await svc.getNodes();
