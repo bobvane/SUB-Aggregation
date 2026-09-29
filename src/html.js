@@ -1423,6 +1423,8 @@ function nodeLatency(n) {
 
 // 默认排序：同国家聚在一起，国家内健康得分高的在前（无分/无国家靠后）
 function defaultNodeOrder(a, b) {
+  // v2.37.1：锁定节点恒排最前（显性，直到解锁）
+  if (!!a.locked !== !!b.locked) return a.locked ? -1 : 1;
   // v2.36.6：已抛弃节点恒排末尾（通着但太慢/不通的沉底，便于扫视）
   if (!!a.dropped !== !!b.dropped) return a.dropped ? 1 : -1;
   const ca = a.country || 'ZZ';
@@ -1483,7 +1485,7 @@ function renderNodes() {
     const tip = n.healthStatus ? \`得分 \${n.score}\${n.error ? ' · ' + n.error : ''} · 点击看趋势\` : '尚未测活 · 点击看趋势';
     const dropped = n.dropped ? '<span title="测活不通或延迟超过阈值，已从生成的配置中抛弃（记录保留，恢复后自动回来）" style="color:var(--danger)">🚫 已抛弃</span>' : '';
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
-    const rowStyle = n.dropped ? ' style="opacity:0.55"' : '';
+    const rowStyle = (n.dropped && !n.locked) ? ' style="opacity:0.55"' : '';
     return \`<tr\${rowStyle}>
       <td><button class="btn btn-sm node-lock-btn\${n.locked ? ' node-lock-on' : ''}" title="\${n.locked ? '已锁定：无视测活/延迟，强制进配置（点击解锁）' : '未锁定：跟随测活/延迟决定进出配置（点击锁定）'}" onclick="toggleNodeLock('\${escHtml(n.fingerprint)}', \${!n.locked})">\${n.locked ? '🔒' : '🔓'}</button></td>
       <td>\${escHtml(n.name)}</td>
