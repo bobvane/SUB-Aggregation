@@ -140,19 +140,32 @@ function probeTls(host: string, port: number, sni?: string): Promise<{ latency: 
 }
 
 /**
- * 单节点三段串行探测
+ * 3 次并行探测：成功次数取延迟中位（丢最高丢最低），成败按多数票 —— 3 次全死才 dead
+ * （v2.36.8：单次抖动既不会把延迟打飞，也不会把活节点误判死）
  */
+export async function probe3(probe: () => Promise<{ latency: number | null; error: string | null }>): Promise<{ latency: number | null; error: string | null }> {
+  const [a, b, c] = await Promise.all([probe(), probe(), probe()]);
+  const ok = [a, b, c].filter(r => r.latency !== null).map(r => r.latency!).sort((x, y) => x - y);
+  if (ok.length < 2) {
+    const failed = [a, b, c].find(r => r.latency === null);
+    return { latency: null, error: failed?.error ?? '3 轮探测全部失败' };
+  }
+  // 3 成功 → 中间值；2 成功 → 两者取高（保守）；排序后都是 [1]
+  return { latency: ok[1], error: null };
+}
+
 /**
  * 单节点探测：TCP 握手 →（tls 节点才做）TLS 握手
  * 判定：TCP 不通 = dead；tls 节点 TLS 握手不过 = dead。
  * 延迟取 TLS RTT，无 TLS 时取 TCP RTT。
+ * v2.36.8：TCP/TLS 各 3 次取中位，历史与抛弃判定都基于中位值
  */
 async function probeNode(node: Node): Promise<ProbeResult> {
   const fingerprint = nodeFingerprint(node);
   const timestamp = Date.now();
   const httpLatency: number | null = null; // 穿节点 HTTP 不可测，恒 null（见文件头说明）
 
-  const tcp = await probeTcp(node.server, node.port);
+  const tcp = await probe3(() => probeTcp(node.server, node.port));
   if (tcp.latency === null) {
     return {
       nodeId: node.id, fingerprint, tcpLatency: null, tlsLatency: null, httpLatency,
@@ -162,7 +175,7 @@ async function probeNode(node: Node): Promise<ProbeResult> {
 
   // 明文协议（ss / 无 tls 的 vmess 等）不做 TLS 握手：必然失败，不代表节点坏
   if (node.tls) {
-    const handshake = await probeTls(node.server, node.port, node.sni);
+    const handshake = await probe3(() => probeTls(node.server, node.port, node.sni));
     if (handshake.latency === null) {
       return {
         nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
