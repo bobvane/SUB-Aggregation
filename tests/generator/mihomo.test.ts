@@ -451,29 +451,33 @@ describe('generateMihomoConfig', () => {
     }
   });
 
-  it('地理组排序：自动测速+负载均衡地区在前，其他 select 地区在后（2026-09-24 用户指令）', async () => {
+  it('地理组：v2.37.2 起全部 url-test（单节点也测速），负载均衡组仍限多节点地区', async () => {
     const ipResolver = async (s: string) => (s.startsWith('us') ? '🇺🇸 美国' : s.startsWith('de') ? '🇩🇪 德国' : null);
     const groups = await generateProxyGroups(
       [
         makeNode({ name: 'US-01', server: 'us1.example.com' }),
         makeNode({ name: 'US-02', server: 'us2.example.com' }),
-        makeNode({ name: 'DE-01', server: 'de1.example.com' }), // 单节点 → select，无负载均衡组
+        makeNode({ name: 'DE-01', server: 'de1.example.com' }), // 单节点：仍 url-test，但无负载均衡组
       ],
       [],
       [],
       ipResolver
     );
     const names = groups.map(g => String(g.name));
-    // 地理组定义区：美国(测速)+美国-负载均衡 排在 德国(select) 之前
-    expect(names.indexOf('🇺🇸 美国')).toBeLessThan(names.indexOf('🇩🇪 德国'));
-    expect(names.indexOf('🇺🇸 美国-负载均衡')).toBeLessThan(names.indexOf('🇩🇪 德国'));
+    // 所有国家地理组一律 url-test，不再产出 select 手动选择组
+    for (const n of ['🇺🇸 美国', '🇩🇪 德国']) {
+      const g = groups.find(x => x.name === n);
+      expect(g?.type, n).toBe('url-test');
+      expect(g?.interval, n).toBe(300);
+      expect(g?.tolerance, n).toBe(50);
+    }
     expect(names).not.toContain('🇩🇪 德国-负载均衡'); // 单节点地区不产负载均衡组
-    // 候选列表同序：所有自动测速地区及其负载均衡组在普通 select 地区之前
+    // 候选列表含全部地区组（含单节点德国）
     const nj = groups.find(g => g.name === '节点选择')?.proxies as string[]
       | undefined;
-    expect(nj!.indexOf('🇺🇸 美国')).toBeLessThan(nj!.indexOf('🇩🇪 德国'));
-    expect(nj!.indexOf('🇺🇸 美国-负载均衡')).toBeLessThan(nj!.indexOf('🇩🇪 德国'));
-    expect(nj!.indexOf('🇺🇸 美国-负载均衡')).toBe(nj!.indexOf('🇺🇸 美国') + 1); // 仍紧跟
+    expect(nj).toContain('🇺🇸 美国');
+    expect(nj).toContain('🇩🇪 德国');
+    expect(nj!.indexOf('🇺🇸 美国-负载均衡')).toBe(nj!.indexOf('🇺🇸 美国') + 1); // 负载均衡组紧跟其地区组
   });
 
   it('香港组：手工选定改为 url-test 自动测速 + 负载均衡（2026-09-24 用户指令）', async () => {

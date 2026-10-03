@@ -315,8 +315,8 @@ export interface GeoResolver {
  *   由函数末尾 PANEL_ORDER 排序实现。结构为：
  *   顶层切换组（节点选择/手动切换/自动选择）
  *   → 业务分类组（用户规则/广告拦截/AI 平台/YouTube/GitHub/Google服务/微软服务/苹果服务/社交/国外媒体/加密货币/游戏平台）
- *   → 漏网之鱼（MATCH 兜底）→ GLOBAL（显式定义）→ 地理组（🇭🇰 香港 / 🇯🇵 日本 / ...，除指定 7 地区外全部 select；
- *     香港/美国/马来西亚/日本/新加坡/台湾/韩国 7 组 url-test 自动测速，且各自另配一组 load-balance 负载均衡组）
+ *   → 漏网之鱼（MATCH 兜底）→ GLOBAL（显式定义）→ 地理组（🇭🇰 香港 / 🇯🇵 日本 / ...，v2.37.2 起全部 url-test 自动测速组，
+ *     不再产出 select 手动选择组；香港/美国/马来西亚/日本/新加坡/台湾/韩国 7 组另配一组 load-balance 负载均衡组）
  *
  * 不生成「全球直连」「国内媒体」策略组：国内直连规则在 rule-providers 中直接写 RULE-SET,xxx,DIRECT。
  * 应用净化已移除（CATEGORY-ADS⊂CATEGORY-ADS-ALL，93% 重叠，并入广告拦截）。
@@ -348,21 +348,18 @@ export async function generateProxyGroups(
   const geoGroupNames = geoGroups.map(g => g.name);
   const allGeoNodes = geoGroups.flatMap(g => g.nodes);
 
-  // 测速地区：指定地区自动测速(url-test)，其余 select。美国/马来西亚/日本/新加坡/台湾/韩国（用户 2026-08-30 指定）
-  // + 香港（用户 2026-09-24：原手工选定改为自动测速组）。
-  // 单节点自动降级为 select（用户 2026-08-30 拍板：url-test 组仅 1 个节点时测速无意义），此时也不产出负载均衡组。
-  const URL_TEST_REGIONS = ['香港', '美国', '马来西亚', '日本', '新加坡', '台湾', '韩国'];
-  const testRegionNames = new Set(
-    geoGroups.filter(g => URL_TEST_REGIONS.some(r => g.name.includes(r)) && g.nodes.length > 1).map(g => g.name)
+  // v2.37.2：所有国家地理组统一为 url-test 自动测速组，不再产出 select 手动选择组（用户指令）
+  // 单节点也照做 url-test —— 手动选择组一律不产出。
+  // 负载均衡组维持现状：仅下列 7 个地区额外生成，且节点数 > 1 时才有意义（用户 2026-09-29 拍板）。
+  const LB_REGIONS = ['香港', '美国', '马来西亚', '日本', '新加坡', '台湾', '韩国'];
+  const lbRegionNames = new Set(
+    geoGroups.filter(g => LB_REGIONS.some(r => g.name.includes(r)) && g.nodes.length > 1).map(g => g.name)
   );
-  // 排序（用户 2026-09-24 指令，硬编码）：自动测速地区在前（其负载均衡组紧跟），其他 select 地区在后。
-  // 稳定排序 → 测试组内部、普通组内部各自保持原相对顺序；仅整体把测试组提到最前。
-  geoGroups.sort((a, b) => Number(testRegionNames.has(b.name)) - Number(testRegionNames.has(a.name)));
 
-  // 候选列表用（用户 2026-09-24）：凡引用地理组的组，同时给出该地区的负载均衡组，紧跟地区组之后。
+  // 候选列表用：引用地理组的组里，只有带负载均衡的地区组，才在其后紧跟同地区负载均衡组。
   // 注意 geoGroupNames 保持「纯地区组」——下面的下标查找依赖它与 geoGroups 一一对应。
   const geoChoices = geoGroups.flatMap(g =>
-    testRegionNames.has(g.name) ? [g.name, `${g.name}-负载均衡`] : [g.name]
+    lbRegionNames.has(g.name) ? [g.name, `${g.name}-负载均衡`] : [g.name]
   );
   const groups: Record<string, unknown>[] = [];
 
@@ -506,37 +503,33 @@ export async function generateProxyGroups(
     'default-selected': '自动选择',
   });
 
-  // 11. 地理组：testRegionNames 内的走 url-test 自动测速（并另配负载均衡组），其余 select
+  // 11. 地理组：v2.37.2 起全部为 url-test 自动测速组（不再产出 select 手动选择组）
   // 地理组图标：国家码 → Qure IconSet 国旗（缺失/无法识别的回落 Area.png）
   const geoIcon = (name: string): string => {
     const code = GEO_CODE_BY_NAME[name];
     return code && GEO_ICON_CODES.has(code) ? GEO_ICON_BASE + code + '.png' : GEO_ICON_FALLBACK;
   };
   for (const geo of geoGroups) {
-    // 与候选列表（geoChoices）同源，避免两处判断跑偏
-    const useUrlTest = testRegionNames.has(geo.name);
     // 键顺序：name → type →（url/interval/timeout/tolerance）→ proxies，让测速参数紧跟 type 下方，排版更清晰（用户 2026-09-02 拍板）
     const group: Record<string, unknown> = {
       name: geo.name,
-      type: useUrlTest ? 'url-test' : 'select',
+      type: 'url-test',
     };
     group.icon = geoIcon(geo.name);
-    if (useUrlTest) {
-      group.url = 'http://www.gstatic.com/generate_204';
-      group.interval = 300;
-      group.timeout = 5000;
-      group.tolerance = 50;
-      // 2026-09-24（吸收 Perfect-Rules）：只认 generate_204 的 204 为存活；连续 3 次失败触发强制复检
-      group['expected-status'] = 204;
-      group['max-failed-times'] = 3;
-    }
+    group.url = 'http://www.gstatic.com/generate_204';
+    group.interval = 300;
+    group.timeout = 5000;
+    group.tolerance = 50;
+    // 2026-09-24（吸收 Perfect-Rules）：只认 generate_204 的 204 为存活；连续 3 次失败触发强制复检
+    group['expected-status'] = 204;
+    group['max-failed-times'] = 3;
     group.proxies = geo.nodes;
     groups.push(group);
 
-    // 地理负载均衡组（用户 2026-09-24 拍板：保留原 url-test 组，同地区另加一组 load-balance，紧随其地区组之后）。
+    // 地理负载均衡组：仅原 7 地区保留（用户 2026-09-29 拍板维持现状）。
     // strategy 硬编码 consistent-hashing（与内核默认一致，但显式输出，用户 2026-09-24）；
     // tolerance 是 url-test 专有参数，load-balance 不认，故此处不输出。
-    if (useUrlTest) {
+    if (lbRegionNames.has(geo.name)) {
       groups.push({
         name: `${geo.name}-负载均衡`,
         type: 'load-balance',
