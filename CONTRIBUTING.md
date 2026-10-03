@@ -56,13 +56,13 @@ chore: root directory cleanup
 测试命令：
 
 ```bash
-npm test          # 运行 Vitest（475 项）
+npm test          # 运行 Vitest（505 项）
 npm run lint      # ESLint 检查
 npx tsc --noEmit  # TypeScript 类型检查
 npm run build     # 构建（含前端内嵌）
 ```
 
-**测试覆盖率**：当前测试基线 475 项，提交前必须保证全绿。
+**测试覆盖率**：当前测试基线 505 项，提交前必须保证全绿。
 
 ## 📐 代码规范
 
@@ -82,10 +82,13 @@ src/
 │   └── rate-limit.ts  # 登录限流
 ├── services/      # 业务逻辑层
 │   ├── auth.service.ts
-│   ├── config.service.ts
+│   ├── config.service.ts          # 配置生成 / 输出缓存
+│   ├── config-cache.service.ts    # mihomo 输出缓存（App 版本变更即失效）
 │   ├── subscription.service.ts
+│   ├── node-probe.service.ts      # 节点测活 / 测速
 │   ├── ip-geo.service.ts
-│   └── cf-usage.service.ts
+│   ├── catalog-sync.service.ts    # 规则目录同步
+│   └── operation-log.service.ts
 ├── engine/        # 网络层（fetchSubscription 抓取）
 ├── parser/        # 协议解析层
 ├── generator/     # 配置生成层（mihomo/singbox/shadowrocket/base64）

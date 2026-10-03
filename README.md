@@ -1,128 +1,174 @@
 # SUB-Aggregation
 
-订阅聚合与配置生成平台的 V2 实现（v2.35.0）。
+把手上所有机场订阅合成一份，自动剔除连不通和太慢的节点、按国家归类、自动测速选最快的，最后给你一条能直接填进客户端的订阅链接。
 
-把机场订阅聚合、解析，并按 mihomo / sing-box / shadowrocket 等格式在线生成客户端可用的配置。以 **Docker 容器**运行（NAS / VPS / 任意 x86_64 Linux），数据落本机 SQLite，不依赖任何第三方托管服务。
+一条链接管所有订阅：原订阅换了、加节点了，这边跟着更新，客户端刷新订阅即可。
 
-![Version](https://img.shields.io/badge/版本-2.35.0-blue)
-![Tests](https://img.shields.io/badge/测试-495%20passed-green)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
-## 工作流程（用户视角）
+## 它帮你做什么
 
-```
-添加订阅 URL
-  ↓
-每日自动抓取（默认北京 07:00，设置页可调）
-  ↓
-按 12 种协议解析节点  →  节点去重 + 自动命名 + 启用管理
-  ↓
-识别节点国家归属（GeoIP）→ 按国家/协议生成策略组
-  ↓
-输出 mihomo / sing-box / shadowrocket / v2ray 等配置
-  ↓
-/sub/:format/:token 供客户端直接订阅
-```
+- **一份链接顶所有**：几个机场、几份自建节点，都填进来，客户端只连这一条
+- **自动挑节点**：连不通的直接不要；延迟高过你设定的阈值也不要；剩下的按国家分组，每组都是自动测速选最快
+- **你说了算的锁**：某个节点你想留（延迟看着高但实际好用），锁上它就一定进配置
+- **分流规则自己挑**：国内直连、国外媒体、Google 服务、广告拦截……在面板里勾，生成的配置里就是现成的策略组，客户端点一下就能切
+- **自动更新**：订阅每隔几小时自动重抓一次，不用手动管
+- **数据在你自己机器上**：不经过任何第三方服务
 
-## 快速部署（Docker）
+---
 
-镜像由 GitHub Actions 构建，同时发布到 **GHCR** 和 **Docker Hub**（两份内容相同），**部署端不需要构建**，拉下来就能跑：
+## 动手前准备
+
+| 需要什么 | 说明 |
+|---|---|
+| 一台常年开机的机器 | NAS、小主机、VPS 都行，装了 Docker 就行 |
+| 一个空端口 | 默认用 **20130**，被占了就换一个 |
+| 一个密码 | 面板管理员密码，自己定 |
+
+---
+
+## 部署（三步）
+
+### 1. 建目录、放配置文件
 
 ```bash
-mkdir -p /vol1/1000/Docker/sub-aggregation && cd /vol1/1000/Docker/sub-aggregation
-# 1) 放好 docker-compose.yml（仓库根目录那份）
-#    并把 image 那行的 <你的DockerHub用户名>（或 GHCR 那行的 <你的GitHub用户名>）换成自己的
-# 2) 建 .env，至少填 ADMIN_PASSWORD（参考 .env.example）
+mkdir -p /vol1/1000/Docker/sub-aggregation
+cd /vol1/1000/Docker/sub-aggregation
+```
+
+在同目录建 `docker-compose.yml`，内容：
+
+```yaml
+services:
+  sub-aggregation:
+    image: docker.io/bobvane/sub-aggregation:latest
+    container_name: sub-aggregation
+    restart: unless-stopped
+    ports:
+      - "20130:20130"
+    volumes:
+      - ./data:/data
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,192.168.0.0/16,192.168.2.0/24,10.0.0.0/8,172.16.0.0/12,.local}
+```
+
+> 用的是 Docker Hub 上的现成镜像，不需要在这台机器上构建。
+> 如果你想用自己 fork 的版本，把 `image:` 换成你自己的镜像地址。
+
+### 2. 建 `.env`，填两个值
+
+```
+ADMIN_PASSWORD=你的管理员密码
+SESSION_SECRET=随便一串长随机字符
+```
+
+`SESSION_SECRET` 可以用这条命令生成：
+
+```bash
+openssl rand -hex 32
+```
+
+### 3. 启动
+
+```bash
 docker compose pull
 docker compose up -d
 ```
 
-> **选哪个 registry**：飞牛 fnOS 的「镜像可更新」提示只认 **Docker Hub**，想让它检测到升级就用 Docker Hub 那份。
-> Docker Hub 那份要 CI 推得上去，需先在仓库配 `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` 两个 secret；
-> 不配也能构建，只是不会有 Docker Hub 镜像，此时用 GHCR 那份（`ghcr.io/<你的GitHub用户名>/sub-aggregation`）。
+浏览器打开 `http://你的机器IP:20130/`，用 `admin` + 你刚设的密码登录。
 
-- 默认端口 **20130**，数据落在挂载目录（SQLite 单文件，**备份＝复制这个目录**）
-- 默认监听 `0.0.0.0`，走 http 即可；要外部访问可 `tailscale serve --http=80 http://127.0.0.1:20130`
-- 首次访问用 `admin` + `ADMIN_PASSWORD` 登录，登录后可在设置页改密码
-- 容器出网默认走旁路由代理（compose 里已配 `NODE_USE_ENV_PROXY=1`）。**这一项不要删**：Node 内置 fetch 不认 `HTTP_PROXY`，删了以后 server 字段填域名的节点解析不到 IP，会掉进「其他」组
+---
 
-完整部署说明见 [11 部署](./docs/11_DEPLOYMENT.md) 与 NAS 落地记录 `docs/16_NAS_DEPLOY.md`（后者仅本地）。
+## 第一次打开，按这个顺序点一遍
 
-## 功能特性
+**① 设置页 —— 先把密码改掉**
+改用户名、改密码都在这一页。顺手看一眼「订阅自动更新间隔」（默认 24 小时）和「慢节点抛弃阈值」（默认 2000 毫秒），不合适就改。
 
-- **多订阅聚合**：添加 / 删除 / 手动更新任意数量订阅，定时自动重抓
-- **节点解析**：内置 12 种协议解析器，自动识别 vmess / vless / trojan / ss / ssr / hysteria2 / tuic / wireguard / anytls，兼容 Clash YAML
-- **节点去重与命名**：按 `server:port:protocol` 去重；节点名按「旗帜 国家码 协议-序号」自动生成（如 `🇭🇰 HK VLESS-01`，延迟不写进名字，见列表「延迟」列）；节点启用管理
-- **分流规则引擎**：13 组固定策略组（全部原生 GEOSITE）+ 动态规则目录（MetaCubeX 分类）+ 自定义规则，Web 面板可切换
-- **IP 归属识别**：自动解析节点 IP → GeoIP → 国家归属；后台自动重试未识别 IP
-- **多格式输出**：mihomo / sing-box / shadowrocket / v2ray / v2rayN / nekoray，不支持的协议自动跳过
-- **DNS 防泄露**：生成配置内置「国内域名→国内 DoH / 国外域名→国外 DoH」分流 + fake-ip 全接管 + 严格路由；若经 OpenClash 导入，请在面板关闭「自定义上游 DNS 服务器」以免覆盖订阅 DNS 段
-- **内置管理后台**：仪表盘 / 订阅 / 节点 / 规则 / 输出 / 设置，自带鉴权
+**② 订阅管理 —— 把你手上的订阅都加进来**
+把一个订阅链接粘进去、点添加，重复到全部加完。然后点一次「立即更新」，等它抓完（第一次会久一点，几百个节点要逐个查国家和测延迟）。
 
-## 支持的协议
+**③ 节点列表 —— 看一眼抓到了什么**
+每一行是一个节点，右边有几列要认识一下：
 
-`vmess` · `vless`（含 Reality/XTLS）· `trojan` · `ss` · `ssr` · `hysteria2` · `tuic` · `wireguard` · `anytls`，以及 Clash YAML 订阅的整包解析。
+| 看到什么 | 意思 |
+|---|---|
+| 延迟数值 | 这个节点测出来的速度，数字越小越快 |
+| **已抛弃** | 连不通，或者慢过了你设的阈值 —— 默认不进配置 |
+| 🔒 锁 | 点一下上锁：**不管通不通、慢不慢，都进配置**；再点一下解锁 |
+| 测速按钮 | 手动重新测一遍全部节点 |
 
-## API
+锁定的节点会自动排到列表最前面，方便你确认留着谁。
 
-核心端点：
+**④ 分流规则 —— 挑你要的组**
+默认那几组（国内直连、国外媒体、Google 服务、广告拦截等）直接能用。想加别的分类，在规则目录里搜出来加进去就行。
 
-| 方法 | 路径 | 说明 | 鉴权 |
-|---|---|---|---|
-| GET | `/api/meta` | 项目信息 | ❌ |
-| POST | `/api/auth/login` | 登录 | ❌ |
-| GET | `/api/dashboard` | 仪表盘统计 | ✅ |
-| GET/POST/DELETE | `/api/subscriptions` | 订阅管理 | ✅ |
-| GET | `/api/nodes` | 节点列表 | ✅ |
-| GET | `/api/rules/*` | 分流规则 | ✅ |
-| GET | `/sub/:format/:token` | 客户端订阅链接 | Token* |
+**⑤ 输出配置 —— 拿订阅链接**
+选一个格式（客户端是 Mihomo/Clash 类就选 mihomo，sing-box 就选 singbox），复制它给出的订阅地址。
 
-\* `/sub` 使用长随机 token 鉴权，等价于密码，请勿泄露。
+**⑥ 客户端填链接，完事**
+把上一步复制的地址填进客户端，更新订阅。之后这边节点有变化，客户端重新拉一次订阅就是最新的。
 
-## 定时任务
+---
 
-进程内定时器（30 秒一跳，同一分钟去重），三个固定时刻：
+## 客户端里怎么用
 
-| 任务 | 触发 | 说明 |
-|---|---|---|
-| 订阅自动更新 | 每小时整点检查 | 距上次自动更新满「设定间隔（1-24 小时，0 = 不更新，默认 24）」才真正执行，抓取全部订阅并预填充 IP 地理缓存 |
-| 规则目录同步 | 每月 1 日 03:00 | 同步 MetaCubeX 最新分类清单 |
-| Geo 重试 | 每分钟 | 批量重查未识别 IP，10 次上限后停止 |
+生成的配置里已经排好了这些组，进来直接切：
 
-## 项目结构
+- **节点选择 / 手动切换**：所有节点放在一起，想指定哪个用哪个
+- **自动选择**：全部节点里自动测速选最快
+- **每个国家/地区一组**：🇭🇰 香港、🇺🇸 美国…… 全部是自动测速，不用你手选
+- **香港 / 美国 / 马来西亚 / 日本 / 新加坡 / 台湾 / 韩国** 这几个地区多一组「负载均衡」：把流量分摊到该地区多个节点上
+- **国外媒体 / Google 服务 / 国内直连 / 广告拦截**：按规则自动走
 
-```
-src/
-├── server/main.ts      # Node 入口（HTTP + 定时器）
-├── app.ts              # 共享应用层（装配 / 前端响应 / 定时任务）
-├── api/                # Hono 路由 / 中间件 / 限流
-├── services/           # 业务服务（auth/订阅/配置/IP地理/CF用量/规则目录）
-├── parser/             # 12 种协议解析 + 订阅格式检测
-├── generator/          # mihomo/singbox/shadowrocket/base64 + 序列化
-├── data/               # 策略组定义 / 国家码 / 格式映射
-├── storage/
-│   ├── kv.ts           # 存储契约 + 仓储层（统一键管理）
-│   └── sqlite.ts       # SQLite 适配器（node:sqlite 内置）
-├── models/             # 数据模型
-└── html.js             # 构建生成的前端内嵌（勿手改）
-public/index.html       # 前端单文件源码
-tests/                  # vitest 测试
-Dockerfile              # 多阶段构建（构建层跑测试，运行层只有单文件）
-docker-compose.yml      # 部署模板
-```
+订阅更新：客户端里点「更新订阅」，或等它自己按周期拉。
 
-## 开发与测试
+---
+
+## 日常维护
+
+**升级到新版本**
 
 ```bash
-npm install
-npm run typecheck   # tsc --noEmit
-npm run lint        # eslint
-npm test            # vitest run（487 项）
-npm run build:server  # 打单文件产物 dist/server.mjs
-npm run dev         # 打产物并本地启动（默认 :20130）
+cd /vol1/1000/Docker/sub-aggregation
+docker compose pull
+docker compose up -d
 ```
+
+**备份**
+把所有数据（订阅、节点、规则、账号密码）都放在 `data` 目录里，整个目录复制走就是完整备份，恢复时复制回来再启动即可。
+
+**忘记管理员密码**
+密码是第一次启动时写进数据库的，改 `.env` 不会生效。唯一的办法是删掉 `data` 目录重启，代价是订阅和配置要重新加一遍 —— 所以密码建议一开始就记好。
+
+---
+
+## 常见问题
+
+**面板打不开**
+先确认容器在跑（`docker compose ps`），再确认端口（默认 20130）没被别的服务占用，最后确认你访问的机器 IP 和防火墙。
+
+**很多节点掉进了「其他」组**
+这些节点的服务器地址填的是域名，容器查不出它们属于哪个国家。让容器能出网就行：在 `.env` 里配上你的代理（`HTTP_PROXY` / `HTTPS_PROXY`），`NODE_USE_ENV_PROXY=1` 那行不要删。
+
+**某个节点明明好用，却被标成「已抛弃」**
+手动测速有时会撞上网络抖动。点那个节点的锁，锁上它就一定进配置，之后也不会再被自动淘汰。
+
+**国家组怎么不能手选了？**
+故意的：每个国家组都是自动测速组，进去就是该地区最快的那个，不用你自己挑。
+
+---
+
+## 更新记录
+
+每个版本的改动见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## License
 
