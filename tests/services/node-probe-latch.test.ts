@@ -12,8 +12,18 @@
  *   ③ 两个并调在结果里都拿到数据（第二个拿到的是「第二轮」结果，非第一轮）。
  *
  * 使用不可达节点（127.0.0.1:1）做真实探测，保证每轮确实产生新历史条目。
+ *
+ * ⚠️ 时序稳定性（阶段 2 修复）：
+ *   历史键是 `health:hist:{fingerprint}:{timestamp}`，而 timestamp 由
+ *   `probeNode()` 内的 `Date.now()` 生成（node-probe.service.ts:188）。
+ *   真实探测耗时在快机器/CI 上可能不足 1ms，使两轮的 timestamp 相同 →
+ *   键退化为同一条 → 后写覆盖先写 → 历史条数少于预期。
+ *   实测冻结 Date.now() 后可稳定复现（3 条历史塌缩为 1 条）。
+ *   这与门闩逻辑无关（门闩确实按序执行了两轮），纯粹是时钟分辨率问题。
+ *   本文件改为注入**可控单调时钟**（每次 Date.now() 调用至少 +1ms），
+ *   使时间戳严格递增，断言不再依赖真实机器速度。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createConfigService } from '@/services/config.service';
 import { probeAllNodes, nodeFingerprint } from '@/services/node-probe.service';
@@ -31,6 +41,28 @@ const deadNode = (): Node =>
     tls: false,
     metadata: { source: 'test', originalName: 'DeadNode', tags: [] },
   });
+
+/**
+ * 可控单调时钟：冻结起点，并保证每次 Date.now() 调用至少 +1ms。
+ * 既保留真实时间量级（不影响 24h 窗口 / 30 天 TTL 判定），
+ * 又让同一轮次内的多次取时必然互不相同。
+ */
+let clockBase = 0;
+let clockNow = 0;
+
+beforeEach(() => {
+  clockBase = 1_700_000_000_000;
+  clockNow = clockBase;
+  vi.spyOn(Date, 'now').mockImplementation(() => {
+    const v = clockNow;
+    clockNow += 1; // 每次调用 +1ms → 时间戳严格递增
+    return v;
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('probeAllNodes 并发门闩（同周期不产生重复轮次）', () => {
   it('同一周期并发调用：第二轮在第一轮完成后才启动，历史恰好两轮（第二轮各 1 条）', async () => {
