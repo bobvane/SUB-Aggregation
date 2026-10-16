@@ -138,8 +138,10 @@ describe('P0 闭环：节点 A(disabled) / B(healthy) / C(UDP unknown) 进入 Mi
   });
 });
 
-describe('P1（阶段 1）：慢节点不再仅因延迟被剔除（延迟 ≠ 失效）', () => {
-  it('最新 normal（<=阈值）+ 历史中仅 1 条超阈值 → 保留（行为不变）', async () => {
+// v2.38.3：慢节点阈值（规则②）恢复 —— 依据**最新快照**延迟与阈值比较，
+// 历史条数不参与；健康状态机（规则①）完全独立，不被延迟改写。
+describe('慢节点阈值（规则②）与健康状态机（规则①）相互独立', () => {
+  it('最新 normal（<=阈值）→ 保留（历史里超阈值的旧样本不影响判定）', async () => {
     const { kv, repos, svc } = await makeSvcWithNodes();
     const S = createNode({ name: 'S', server: 's.example.com', port: 443, protocol: 'vless', uuid: 'us' });
     await repos.nodes.setBySubscription('sub1', [...(await repos.nodes.getAll()), S]);
@@ -155,18 +157,20 @@ describe('P1（阶段 1）：慢节点不再仅因延迟被剔除（延迟 ≠ �
     expect(nodes.map(n => n.name)).toContain('S'); // 保留
   });
 
-  it('P1 修复③：最新超阈值 + 历史 2/3 超阈值 → 不再仅因延迟被剔除（保留）', async () => {
+  it('最新超阈值（2500 > 默认 2000）→ 按慢节点规则剔除；健康状态仍为 alive', async () => {
     const { kv, repos, svc } = await makeSvcWithNodes();
     const S = createNode({ name: 'S', server: 's.example.com', port: 443, protocol: 'vless', uuid: 'us' });
     await repos.nodes.setBySubscription('sub1', [...(await repos.nodes.getAll()), S]);
     const f = fp(S);
-    // 阈值默认 2000：latest=2500（超），历史 3 条 2500/2500/2500（3 条超）
-    // P1 修复③ 后：TCP/TLS 握手延迟不再作为剔除依据 → 节点保留
     const ts = [Date.now() - 3600_000, Date.now() - 3_600_000, Date.now() - 7_200_000];
     for (const t of ts) await kv.put('health:hist:' + f + ':' + t, healthLatestJson(f, 'alive', 2500));
     await kv.put('health:latest:' + f, healthLatestJson(f, 'alive', 2500));
     let nodes = await svc.getNodes();
-    expect(nodes.map(n => n.name)).toContain('S'); // P1 修复③：延迟不再剔除 → 保留
+    expect(nodes.map(n => n.name)).not.toContain('S');   // 规则②：超阈值 → 不输出
+    expect(await svc.getDroppedNodes()).toContain(f);
+    // 规则② 不改健康：快照仍是 alive（未被伪造成连续失败）
+    const snap = JSON.parse((await kv.get('health:latest:' + f)) ?? '{}') as { status?: string };
+    expect(snap.status).toBe('alive');
 
     // 若状态机确认失效（statusMachine=disabled）→ 仍剔除（规则① 不变）
     await kv.put('health:latest:' + f, healthLatestJson(f, 'dead', null, 'disabled'));

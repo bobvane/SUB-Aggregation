@@ -514,7 +514,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <div class="form-group">
         <label>慢节点抛弃阈值（毫秒，100-2000；默认 2000）</label>
         <input id="settingNodeDropLatency" type="number" min="100" max="2000" placeholder="2000">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">TCP/TLS 握手延迟（连通性 RTT，非真实代理延迟）不再作为节点剔除依据：仅用于健康统计与排序展示。节点是否被「已抛弃」只取决于系统健康状态（连续失败被状态机判定失效）。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">延迟（连通性 RTT，TLS 优先，无 TLS 用 TCP）超过此阈值即视为慢节点，按「已抛弃」处理、不输出到配置（latency &gt; 阈值 才抛弃，等于阈值不抛弃）。该判定与健康状态机相互独立：不会把节点写成「连续失败」，节点仍继续测活；被健康状态机判定失效（连续失败）的节点也会被抛弃。</div>
       </div>
       <button class="btn btn-primary mt-12" onclick="saveSettings()">💾 保存</button>
     </div>

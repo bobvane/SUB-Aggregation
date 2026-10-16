@@ -66,17 +66,21 @@ describe('节点锁定（强制进配置）', () => {
     expect(nodes.map(n => n.name)).toContain('D');
   });
 
-  it('P1 修复③ + 锁定语义：未锁定时慢节点不再仅因延迟被剔除（延迟不参与剔除）；锁定后强制进 getNodes', async () => {
+  it('锁定语义：慢节点（超阈值）默认被抛弃；锁定后仍强制进 getNodes', async () => {
     const { kv, repos, svc, slow } = await makeSvc();
     await repos.settings.set('node_drop_latency_ms', '100');
-    // 最近 3 条历史全超阈值 + latest 2500 —— P1 修复③ 后不再触发剔除（延迟 ≠ 失效）
+    // latest 2500 > 阈值 100 → 规则②（慢节点阈值）抛弃；健康状态仍为 alive/active
     const ts = [1_700_000_000_000, 1_700_000_300_000, 1_700_000_600_000];
     for (let i = 0; i < 3; i++) {
       await kv.put('health:hist:' + fp(slow) + ':' + ts[i], healthLatest(fp(slow), 'alive', 2500));
     }
     await kv.put('health:latest:' + fp(slow), healthLatest(fp(slow), 'alive', 2500));
-    // P1 修复③：延迟不再剔除 → 未锁定也保留
-    expect((await svc.getNodes()).map(n => n.name)).toContain('S');
+    // 规则②：超阈值 → 未锁定不进配置
+    expect((await svc.getNodes()).map(n => n.name)).not.toContain('S');
+    expect(await svc.getDroppedNodes()).toContain(fp(slow));
+    // 健康状态未被慢节点规则改写
+    const snap = JSON.parse((await kv.get('health:latest:' + fp(slow))) ?? '{}') as { status?: string };
+    expect(snap.status).toBe('alive');
     // 锁定后：强制进配置（锁定语义不变，v2.36.9 既有）
     await svc.setLockedNodes([fp(slow)]);
     expect((await svc.getNodes()).map(n => n.name)).toContain('S');
