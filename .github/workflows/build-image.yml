@@ -144,12 +144,11 @@ jobs:
           DH_ENABLED: ${{ steps.dh.outputs.enabled }}
           VER: ${{ steps.version.outputs.version }}
         run: |
+          # v2.38.0 发布约定：只推**版本号标签**，不推 / 不覆盖 latest。
           {
             echo "tags<<EOF"
-            echo "${GHCR_IMAGE}:latest"
             echo "${GHCR_IMAGE}:${VER}"
             if [ "${DH_ENABLED}" = "true" ]; then
-              echo "${DH_USER}/sub-aggregation:latest"
               echo "${DH_USER}/sub-aggregation:${VER}"
             fi
             echo "EOF"

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      AUTO_RELEASE:
+        description: '手动触发时是否自动创建 Git 标签 + GitHub Release（默认 false）'
+        required: false
+        default: 'false'
+        type: string
 
 jobs:
   test:
@@ -32,9 +38,15 @@ jobs:
         run: npm test
 
   # 推送即自动打 tag + 发 Release（版本号未变化的推送会跳过）
+  #
+  # v2.38.0 发布约定：本次发布**不自动创建 Git 标签、不自动创建 GitHub Release**。
+  # 下方 release job 的定义完整保留（可随时恢复），仅通过 workflow_dispatch 输入
+  # AUTO_RELEASE 显式开启时才会运行；默认 'false' 即为不自动发布。
   release:
     name: Create GitHub Release
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && inputs.AUTO_RELEASE == 'true'
     needs: test
     runs-on: ubuntu-latest
     permissions:
