@@ -230,12 +230,15 @@ jobs:
           DH_ENABLED: ${{ steps.dh.outputs.enabled }}
           VER: ${{ steps.version.outputs.version }}
         run: |
-          # v2.38.0 发布约定：只推**版本号标签**，不推 / 不覆盖 latest。
+          # NAS 兼容发布约定：同时推送不可变版本标签与 latest。
+          # Docker Hub 的 latest 用于 fnOS 更新检测；GHCR 同步提供 latest。
           {
             echo "tags<<EOF"
             echo "${GHCR_IMAGE}:${VER}"
+            echo "${GHCR_IMAGE}:latest"
             if [ "${DH_ENABLED}" = "true" ]; then
               echo "${DH_USER}/sub-aggregation:${VER}"
+              echo "${DH_USER}/sub-aggregation:latest"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
