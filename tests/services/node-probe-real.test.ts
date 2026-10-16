@@ -121,37 +121,66 @@ describe('节点探测引擎（真实 TCP/TLS 握手）', () => {
     expect(latest.score).toBeGreaterThan(0);
   });
 
-  it('引擎版本变更 → 首轮探测清掉旧引擎的假历史（否则升级后评分/熔断被带偏）', async () => {
+  it('引擎 3→4 升级不再清理历史：窗口外但在 TTL 内的记录保留，不参与窗口内评分', async () => {
     const open = await listen();
     cleanups.push(open.close);
     const storage = memStorage();
     const node = makeNode('up', open.port);
     const fp = nodeFingerprint(node);
 
-    // 模拟 v2.35 假探测留下的数据：连续 dead + latest 已被判熔断
-    for (let i = 0; i < 5; i++) {
-      await storage.put(`health:hist:${fp}:${2000 + i}`, JSON.stringify({
-        fingerprint: fp, status: 'dead', tcpLatency: null, tlsLatency: null, timestamp: 2000 + i, score: 0,
+    // 模拟旧引擎留下的数据。两组时间戳，用途不同：
+    //  A 组（窗口外、TTL 内）：3 天前 —— 应被**保留**，但不参与 24h 窗口评分。
+    //     用来证明「引擎升级不会删历史」，且不会与「TTL 正常清理」混淆。
+    //  B 组（真正超 TTL）：40 天前 —— 应被 cleanupOldHistory **正常清理**。
+    //     用来证明 TTL 行为未被破坏（不是靠禁掉清理来让测试通过）。
+    const now0 = Date.now();
+    const DAY = 86_400_000;
+    const inTtlButOutOfWindow = [now0 - 3 * DAY, now0 - 2 * DAY, now0 - DAY];
+    for (const t of inTtlButOutOfWindow) {
+      await storage.put(`health:hist:${fp}:${t}`, JSON.stringify({
+        fingerprint: fp, status: 'dead', tcpLatency: null, tlsLatency: null, timestamp: t, score: 0,
+      }));
+    }
+    const beyondTtl = [now0 - 40 * DAY, now0 - 41 * DAY];
+    for (const t of beyondTtl) {
+      await storage.put(`health:hist:${fp}:${t}`, JSON.stringify({
+        fingerprint: fp, status: 'dead', tcpLatency: null, tlsLatency: null, timestamp: t, score: 0,
       }));
     }
     await storage.put(`health:latest:${fp}`, JSON.stringify({
-      fingerprint: fp, status: 'dead', statusMachine: 'disabled', score: 0, tcpLatency: null, tlsLatency: null, timestamp: 2003,
+      fingerprint: fp, status: 'dead', statusMachine: 'disabled', score: 0,
+      tcpLatency: null, tlsLatency: null, timestamp: now0 - DAY,
     }));
 
     const { results } = await probeAllNodes([node], storage);
 
     expect(results[0].status).toBe('alive');
-    // 假历史若未被清理，可用率≈0 会把评分拉到 50 以下
-    expect(results[0].score).toBeGreaterThanOrEqual(50);
-    expect(await storage.get(`health:hist:${fp}:2000`)).toBeNull();
-    expect(await storage.get('probe:engine_version')).toBe('2');
-    // latest 已被本轮结果覆盖：不再带着 disabled 把节点踢出配置
+    // 窗口外记录不参与评分：N=0 → 非 TLS 可用率/延迟/稳定性各 0.5 → 50
+    expect(results[0].score).toBe(50);
+
+    // 阶段 2 起**引擎升级不再删历史**：A 组（窗口外但 TTL 内）全部保留
+    for (const t of inTtlButOutOfWindow) {
+      expect(await storage.get(`health:hist:${fp}:${t}`)).not.toBeNull();
+    }
+    // B 组（真正超过 30 天 TTL）仍被正常清理 —— TTL 行为未被破坏
+    for (const t of beyondTtl) {
+      expect(await storage.get(`health:hist:${fp}:${t}`)).toBeNull();
+    }
+
+    expect(await storage.get('probe:engine_version')).toBe('4');
+    expect(await storage.get('probe:score_version')).toBe('4');
+    expect(await storage.get('probe:schema_version')).toBe('1');
+
+    // latest 被本轮结果覆盖：不再带着 disabled 把节点踢出配置
     const latest = JSON.parse((await storage.get(`health:latest:${fp}`))!) as { status: string; statusMachine: string };
     expect(latest.status).toBe('alive');
-    expect(latest.statusMachine).toBe('active');
+    // 状态机读取**全部保留历史**（evaluateStateMachine 不按时间窗口过滤）：
+    // 最新一轮 alive，其前一条为 dead → 连续失败 1 次 → suspect
+    // （既有状态机语义：「成功 2 次 → active」，本轮为首次成功）
+    expect(latest.statusMachine).toBe('suspect');
   });
 
-  it('同引擎版本重复探测不清理历史（清理只发生一次）', async () => {
+  it('版本键同步幂等：首次返回 true，重复调用返回 false', async () => {
     const storage = memStorage();
     expect(await resetProbeDataIfEngineChanged(storage)).toBe(true);
     expect(await resetProbeDataIfEngineChanged(storage)).toBe(false);

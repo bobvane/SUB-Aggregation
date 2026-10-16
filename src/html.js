@@ -357,7 +357,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <div class="card"><div class="card-title">🟢 存活</div><div class="card-value" id="statAlive" style="color:var(--success)">-</div></div>
       <div class="card"><div class="card-title">🔴 不通</div><div class="card-value" id="statDead" style="color:var(--danger)">-</div></div>
       <div class="card"><div class="card-title">🚫 已抛弃</div><div class="card-value" id="statDropped" style="color:var(--danger)">-</div></div>
-      <div class="card"><div class="card-title">🕒 上次测活</div><div class="card-value" style="font-size:14px" id="statLastProbe">未测活</div></div>
+      <div class="card"><div class="card-title">🕒 上次连通性探测</div><div class="card-value" style="font-size:14px" id="statLastProbe">未探测</div></div>
       <div class="card"><div class="card-title">协议分布</div><div class="card-value" style="font-size:14px" id="statProto">-</div></div>
       <div class="card"><div class="card-title">最近更新</div><div class="card-value" style="font-size:14px" id="statUpdate">-</div></div>
     </div>
@@ -390,11 +390,11 @@ tbody tr:hover { background: var(--accent-soft); }
       <h2>🔗 节点列表</h2>
       <div style="display:flex;gap:8px;align-items:center">
         <input style="width:auto;max-width:300px" placeholder="🔍 搜索节点名或地址..." id="nodeSearch" oninput="filterNodes()">
-        <button class="btn btn-sm btn-primary" onclick="probeAllNodes()" title="对所有节点执行 TCP/TLS/HTTP 测活">⚡ 立即测活</button>
+        <button class="btn btn-sm btn-primary" onclick="probeAllNodes()" title="对所有节点执行基础连通性探测（TCP/TLS 握手 RTT，非真实代理延迟）。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。真实代理端到端延迟由客户端 Mihomo 自动选择组负责。">⚡ 立即测活</button>
       </div>
     </div>
     <div class="card" style="padding:12px 16px;font-size:14px;color:var(--text2)">
-      💡 勾选 = 该节点会进入输出配置；取消勾选 = 从输出的订阅中排除。测速请在客户端（OpenClash/Mihomo 等）导入订阅后测试。
+      💡 勾选 = 该节点会进入输出配置；取消勾选 = 从输出的订阅中排除。连通性延迟（TCP/TLS 握手 RTT）仅供基础参考，真实代理端到端延迟由客户端 Mihomo 自动选择组负责。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。
     </div>
     <div class="card" id="nodeStats" style="margin:12px 0;padding:10px 16px;display:flex;gap:24px;font-size:14px;flex-wrap:wrap;align-items:center">
       <span>📥 总节点 <b id="statsOriginal">0</b></span>
@@ -404,7 +404,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <span>🟢 存活 <b id="statsAlive" style="color:var(--success)">0</b></span>
       <span>🔴 不通 <b id="statsDead" style="color:var(--danger)">0</b></span>
       <span>🚫 已抛弃 <b id="statsDropped" style="color:var(--danger)">0</b></span>
-      <span>🕒 上次测活 <b id="statsLastProbe">未测活</b></span>
+      <span>🕒 上次连通性探测 <b id="statsLastProbe">未探测</b></span>
       <span style="color:var(--text2)">（去重依据：IP + 端口 + 协议）</span>
       <span style="margin-left:auto">
         <button class="btn btn-sm" onclick="redetectGeo()">🔄 重新检测国家码</button>
@@ -416,7 +416,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <span style="color:var(--text2)">格式：旗帜 国家码 协议-序号（如 🇭🇰 HK VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
     </div>
     <table id="nodesTable">
-      <thead><tr><th style="width:40px" title="锁定后无视测活/延迟，强制进配置">锁定</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换延迟排序">延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th style="width:40px" title="锁定后无视连通性探测/延迟，强制进配置">锁定</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换连通性延迟排序（TCP/TLS 握手 RTT，非真实代理延迟）">连通性延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
       <tbody id="nodesTableBody"></tbody>
     </table>
     <p class="text-center" id="nodesEmpty" style="color:var(--text2);padding:24px">暂无节点数据</p>
@@ -514,7 +514,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <div class="form-group">
         <label>慢节点抛弃阈值（毫秒，100-2000；默认 2000）</label>
         <input id="settingNodeDropLatency" type="number" min="100" max="2000" placeholder="2000">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">测活延迟超过该值的节点视为「已抛弃」：不写入生成的配置，节点记录保留、延迟回落后自动恢复</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">TCP/TLS 握手延迟（连通性 RTT，非真实代理延迟）不再作为节点剔除依据：仅用于健康统计与排序展示。节点是否被「已抛弃」只取决于系统健康状态（连续失败被状态机判定失效）。</div>
       </div>
       <button class="btn btn-primary mt-12" onclick="saveSettings()">💾 保存</button>
     </div>
@@ -1425,7 +1425,7 @@ function nodeLatency(n) {
 function defaultNodeOrder(a, b) {
   // v2.37.1：锁定节点恒排最前（显性，直到解锁）
   if (!!a.locked !== !!b.locked) return a.locked ? -1 : 1;
-  // v2.36.6：已抛弃节点恒排末尾（通着但太慢/不通的沉底，便于扫视）
+  // v2.36.6：被系统剔除的节点恒排末尾（连续失败被状态机确认失效的沉底，便于扫视）
   if (!!a.dropped !== !!b.dropped) return a.dropped ? 1 : -1;
   const ca = a.country || 'ZZ';
   const cb = b.country || 'ZZ';
@@ -1446,7 +1446,7 @@ function renderNodes() {
   const tbody = document.getElementById('nodesTableBody');
   const empty = document.getElementById('nodesEmpty');
   const search = document.getElementById('nodeSearch').value.toLowerCase();
-  // v2.36：被熔断抛弃的节点也列出并标 🚫 —— 用户要能看到"哪些被抛弃了"（仅不输出到配置，记录保留、继续测活）
+  // v2.36：被系统剔除的节点也列出并标 🚫 —— 用户要能看到"哪些被剔除了"（仅不输出到配置，记录保留、继续测活）
   let filtered = state.nodes.slice();
   if (search) filtered = filtered.filter(n => (n.name + ' ' + n.server).toLowerCase().includes(search));
   if (state.nodeLatencySort) {
@@ -1480,39 +1480,44 @@ function renderNodes() {
     const h = state.nodeHealth[n.fingerprint];
     const latency = nodeLatency(n);
     const latencyStr = latency != null ? latency + 'ms' : '—';
-    const icon = !n.healthStatus ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[n.healthStatus] || '❓');
-    const scoreStr = n.score != null ? \` 得分 \${n.score}\` : '';
-    const tip = n.healthStatus ? \`得分 \${n.score}\${n.error ? ' · ' + n.error : ''} · 点击看趋势\` : '尚未测活 · 点击看趋势';
-    const dropped = n.dropped ? '<span title="测活不通或延迟超过阈值，已从生成的配置中抛弃（记录保留，恢复后自动回来）" style="color:var(--danger)">🚫 已抛弃</span>' : '';
+    // P0 v2.38：UDP 协议节点基础探测不适用，状态/得分/延迟显示「不适用」而非默认 ❓/—
+    const notApplicable = n.probeApplicable === false;
+    const icon = notApplicable ? '🚫' : (!n.healthStatus ? '—' : ({ alive: '✅', dead: '❌', timeout: '⏱️', error: '⚠️' }[n.healthStatus] || '❓'));
+    const scoreStr = notApplicable ? ' 不适用' : (n.score != null ? \` 得分 \${n.score}\` : '');
+    const tip = notApplicable
+      ? 'UDP 协议节点（hysteria2/tuic/wireguard），基础 TCP/TLS 连通性探测不适用 · 点击看趋势'
+      : (n.healthStatus ? \`得分 \${n.score}\${n.error ? ' · ' + n.error : ''} · 点击看趋势\` : '尚未探测 · 点击看趋势');
+    const dropped = n.dropped ? '<span title="系统健康状态判定失效（连续失败被状态机确认），已从生成的配置中剔除（记录保留，恢复后自动回来）。TCP/TLS 握手延迟不再作为剔除依据。" style="color:var(--danger)">🚫 已剔除</span>' : '';
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
     const rowStyle = (n.dropped && !n.locked) ? ' style="opacity:0.55"' : '';
     return \`<tr\${rowStyle}>
-      <td><button class="btn btn-sm node-lock-btn\${n.locked ? ' node-lock-on' : ''}" title="\${n.locked ? '已锁定：无视测活/延迟，强制进配置（点击解锁）' : '未锁定：跟随测活/延迟决定进出配置（点击锁定）'}" onclick="toggleNodeLock('\${escHtml(n.fingerprint)}', \${!n.locked})">\${n.locked ? '🔒' : '🔓'}</button></td>
+      <td><button class="btn btn-sm node-lock-btn\${n.locked ? ' node-lock-on' : ''}" title="\${n.locked ? '已锁定：无视健康状态，强制进配置（点击解锁）' : '未锁定：跟随系统健康状态判定进出配置（点击锁定）'}" onclick="toggleNodeLock('\${escHtml(n.fingerprint)}', \${!n.locked})">\${n.locked ? '🔒' : '🔓'}</button></td>
       <td>\${escHtml(n.name)}</td>
       <td><span class="tag \${tagClass}">\${displayProtocol(n)}</span></td>
       <td style="font-size:14px">\${escHtml(n.server)}</td>
       <td>\${n.port}</td>
       <td>\${n.tls ? '✅' : '❌'}</td>
-      <td style="font-size:14px;\${latency != null && latency > state.nodeDropLatency ? 'color:var(--red)' : ''}">\${latencyStr}</td>
+      <td style="font-size:14px;\${n.probeApplicable === false ? 'color:var(--text2)' : latency != null && latency > state.nodeDropLatency ? 'color:var(--red)' : ''}" title="\${n.probeApplicable === false ? 'UDP 协议，基础连通性探测不适用' : 'TCP/TLS 握手 RTT（非真实代理延迟）'}">\${n.probeApplicable === false ? '不适用' : latencyStr}</td>
       <td style="font-size:14px;cursor:pointer" title="\${escHtml(tip)}" onclick="showNodeHistory('\${escHtml(n.fingerprint)}')">\${suspect}\${icon}\${scoreStr} \${dropped}</td>
       <td><button class="btn btn-sm" onclick="copyNodeLink('\${escHtml(n.fingerprint)}')">📋 复制</button></td>
     </tr>\`;
   }).join('');
 }
 
-// ⚡ 立即测活：全量 TCP/TLS 探测（同步等待，走通用进度弹窗）
+// ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待，走通用进度弹窗）
 async function probeAllNodes() {
   try {
     const res = await runWithProgress({
-      title: '⚡ 正在测活所有节点…',
+      title: '⚡ 正在连通性探测所有节点…',
       capMs: 180000,
       fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
     });
     const s = res.stats || {};
     const parts = [\`共 \${s.total ?? res.nodeCount ?? 0}\`, \`存活 \${s.alive ?? 0}\`, \`不通 \${s.dead ?? 0}\`];
+    if (s.unknown) parts.push(\`不适用 \${s.unknown}\`);
     if (s.avgLatency != null) parts.push(\`平均 \${s.avgLatency}ms\`);
     if (s.disabled) parts.push(\`已抛弃 \${s.disabled}\`);
-    toast(\`测活完成 · \${parts.join(' · ')}\`);
+    toast(\`连通性探测完成 · \${parts.join(' · ')}\`);
     await loadNodes(true);
   } catch (e) { /* runWithProgress 已弹出失败提示 */ }
 }
@@ -1608,7 +1613,7 @@ async function toggleNodeLock(fp, locked) {
   refreshNodeCount();
   try {
     await api('/nodes/locked', { method: 'POST', body: JSON.stringify({ fingerprint: fp, locked }) });
-    toast(locked ? '🔒 已锁定：该节点将强制进配置' : '🔓 已解锁：跟随测活/延迟判定');
+    toast(locked ? '🔒 已锁定：该节点将强制进配置' : '🔓 已解锁：跟随连通性探测/延迟判定');
   } catch (e) {
     node.locked = !locked;
     renderNodes();

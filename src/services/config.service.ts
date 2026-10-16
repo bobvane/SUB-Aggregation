@@ -18,7 +18,7 @@ import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
-import { getAllNodeHealth, nodeLatencyMs, getNodeHealthHistory, NodeHealthLatest } from './node-probe.service';
+import { getAllNodeHealth, type NodeHealthLatest } from './node-probe.service';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -311,38 +311,33 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       const dropped = new Set(await this.getDroppedNodes());
       const locked = new Set(await this.getLockedNodes());
       return all.filter((n) => {
-        if (locked.has(nodeFingerprint(n))) return true;
-        if (disabled.has(nodeFingerprint(n))) return false;
-        if (dropped.has(nodeFingerprint(n))) return false;
-        if (n.status === 'disabled') return false;
+        const fp = nodeFingerprint(n);
+        if (locked.has(fp)) return true;
+        if (disabled.has(fp)) return false;
+        if (dropped.has(fp)) return false;
         if (n.removed_at) return false;
+        // v2.38 P1（阶段 1）：UDP 协议（hysteria2/tuic/wireguard）不再按
+        // “探测引擎不适用”从配置剔除。TCP/TLS 探测不适用 ≠ 节点不可用；
+        // 节点可用性由协议字段映射、客户端健康检查与用户锁定/禁用语义共同决定。
         return true;
       });
     },
 
     /**
-     * 熔断抛弃的节点。
-     * v2.36.2：最新一轮探测 dead 即从配置剔除（立即生效、可自愈）。
-     * v2.36.6：延迟超过用户设定阈值（设置页 node_drop_latency_ms，100-2000ms，默认 2000）
-     * 的节点同样抛弃——通着但太慢，进配置无意义。
+     * 系统剔除的节点（v2.38 / P1 阶段 1：只保留确认失效的系统剔除）。
+     * 规则：
+     * 1. statusMachine === 'disabled'（连续失败 ≥3 轮，由 evaluateStateMachine 确认）→ 剔除。
+     * 2. 用户主动禁用（getDisabledNodes）与锁定豁免语义不变。
+     * 已移除：基于 TCP/TLS 握手延迟阈值的慢节点硬剔除（node_drop_latency_ms 不再影响配置筛选，
+     *   握手延迟 ≠ 代理实际转发延迟，不应据此剔除节点）。
+     * 单轮 dead → suspect 保留在配置里；恢复 alive → active 自动回归（既有状态机语义不变）。
      */
     async getDroppedNodes(): Promise<string[]> {
-      let threshold = 2000;
-      try {
-        const raw = Number((await repos.settings.get('node_drop_latency_ms')) ?? '');
-        if (Number.isFinite(raw) && raw >= 100 && raw <= 2000) threshold = raw;
-      } catch { /* 读设置失败用默认值 */ }
       const health = await getAllNodeHealth(kv);
       const dropped: string[] = [];
       for (const h of health) {
-        if (h.status === 'dead') { dropped.push(h.fingerprint); continue; }
-        const latency = nodeLatencyMs(h);
-        if (latency == null || latency <= threshold) continue;
-        // 超阈值：单次尖峰不算数（实测 VPS 单轮 1000ms、平时 150ms，单轮即抛会误杀）
-        // 最近 3 条记录里 ≥2 条超阈值才抛弃；历史不足 3 条时维持原行为（最新 1 次即抛）
-        const history = await getNodeHealthHistory(h.fingerprint, kv, 3);
-        const overCount = history.filter(x => (nodeLatencyMs(x) ?? 0) > threshold).length;
-        if (history.length < 3 || overCount >= 2) dropped.push(h.fingerprint);
+        // 确认失效：状态机连续失败 ≥3 轮（statusMachine === 'disabled'）才剔除
+        if (h.statusMachine === 'disabled') dropped.push(h.fingerprint);
       }
       return dropped;
     },

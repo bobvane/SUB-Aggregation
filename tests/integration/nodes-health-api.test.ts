@@ -141,19 +141,19 @@ describe('Nodes Health API', () => {
     expect(await config.getDroppedNodes()).toContain(fp);
   });
 
-  it('v2.36.2：最新一轮 dead 即抛弃（不必等状态机 3 次失败到 disabled）', async () => {
+  it('P0-2：单轮 dead（statusMachine=active/suspect）→ 不抛弃（复核中，需连续3轮）', async () => {
     await repos.nodes.setBySubscription('sub-1', [
       { name: 'dead-2', protocol: 'vless', server: 'dead2.example.com', port: 443, tls: true } as never,
     ]);
     const fp = nodeFingerprint({ server: 'dead2.example.com', port: 443, protocol: 'vless' } as never);
-    // 状态机才 active（仅一轮不通），但最新结果为 dead —— 应当立即从配置剔除
+    // 仅一轮不通（statusMachine 还是 active）→ 保留在配置，等待复核
     await kv.put(
       KV_KEYS.healthLatest(fp),
       JSON.stringify({ ...snapshot(fp, 1700000000000), status: 'dead', tcpLatency: null, tlsLatency: null, httpLatency: null, score: 0, statusMachine: 'active' })
     );
     const config = createConfigService(repos, kv);
-    expect((await config.getNodes()).some((n) => nodeFingerprint(n) === fp)).toBe(false);
-    expect(await config.getDroppedNodes()).toContain(fp);
+    expect((await config.getNodes()).some((n) => nodeFingerprint(n) === fp)).toBe(true);
+    expect(await config.getDroppedNodes()).not.toContain(fp);
   });
 
   it('GET /api/nodes/health 未登录返回 401', async () => {

@@ -18,7 +18,7 @@
 | TCP 连通性 | `node:net` 三次连接（`probeNode` :186） | 仅证明"NAS → 服务器:端口"路径通，**不能**证明代理协议层可用 |
 | TLS 握手 | `node:tls` 三次握手（同文件） | 仅证明 SNI/certificate 协商成功，**不能**证明 VLESS/VMess/Trojan/SS/SSR 等协议认证通过 |
 | 协议层认证 | — | **无法检测**。端口开着但 token/ID 失效的节点会被判 `alive` |
-| UDP 协议（hysteria2/tuic/wireguard） | `isProbeApplicable` 早退返回 `unknown` | 基础探测不适用，不写健康数据，不进自动配置（P0 闭环） |
+| UDP 协议（hysteria2/tuic/wireguard） | `isProbeApplicable` 早退返回 `unknown` | 基础探测不适用，不写健康数据；**P1 阶段 1 起不再从自动配置中剔除**（`getNodes()` 已移除该过滤） |
 | 吞吐量/带宽 | — | 未测 |
 | 地理位置偏差 | ip-geo 数据（非探测结果） | 非探测结果 |
 
@@ -42,7 +42,7 @@ Mihomo 实际代理路径：
 |------|------|---------|------|
 | **基础连通性成功** | TCP 连接或 TLS 握手成功（`alive`） | `probeNode` | 不等同于代理可用 |
 | **基础连通性失败** | TCP/TLS 探测未达成功条件（`dead`/`timeout`/`error`） | `probeNode` | 状态机累计，3 轮确认 disabled |
-| **不适用/未知** | 当前基础探测不适用的协议（UDP 类：hysteria2/tuic/wireguard） | `isProbeApplicable` 早退 | 标记 `unknown`，不累计失败，不进配置（未锁定时） |
+| **不适用/未知** | 当前基础探测不适用的协议（UDP 类：hysteria2/tuic/wireguard） | `isProbeApplicable` 早退 | 标记 `unknown`，不累计失败；**P1 阶段 1 起不计入剔除集，仍可进配置**（锁定与否均如此） |
 | **真实代理可用性** | 必须由真实代理请求结果支持 | 当前**项目未实施**此验证 | 未实施时明确标示"项目未验证"，不得填成功或失败 |
 
 **禁止行为**：
@@ -381,7 +381,7 @@ const nodes = await this.getNodes();  // ← 所有格式共用同一过滤结�
 ```
 
 - mihomo / singbox / v2ray / v2rayn / nekoray / shadowrocket **全部**调用 `generate()`
-- 过滤链：locked 豁免 → disabled → dropped → status==='disabled' → removed_at → UDP 过滤
+- 过滤链：locked 豁免 → disabled → dropped → removed_at（**UDP 过滤已于 P1 阶段 1 移除**）
 - 无第二条独立节点获取路径（代码检查确认，无旁路）
 - mihomo 有 snapshot 缓存（`config-cache.service.ts`），其他格式直接生成
 

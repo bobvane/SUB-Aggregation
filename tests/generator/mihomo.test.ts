@@ -441,7 +441,9 @@ describe('generateMihomoConfig', () => {
     expect(groups.find(g => g.name === '手动切换')?.timeout).toBeUndefined();
 
     // 2026-09-24 用户指令：凡候选列表里带地理组的组，同样加入负载均衡地理组
-    for (const name of ['节点选择', '自动选择', '国外媒体', 'Google服务', '漏网之鱼']) {
+    // v2.38（P0 选组优化）：「自动选择」组候选已改为扁平节点（顶层直接测节点），
+    // 不再包含地区组/负载均衡组；业务组（节点选择/国外媒体/Google服务/漏网之鱼）仍用 geoChoices。
+    for (const name of ['节点选择', '国外媒体', 'Google服务', '漏网之鱼']) {
       const g = groups.find(x => x.name === name);
       const list = g?.proxies as string[] | undefined;
       expect(list, name).toContain('🇺🇸 美国');
@@ -449,6 +451,12 @@ describe('generateMihomoConfig', () => {
       // 负载均衡组紧跟其地区组之后
       expect(list!.indexOf('🇺🇸 美国-负载均衡'), name).toBe(list!.indexOf('🇺🇸 美国') + 1);
     }
+    // 「自动选择」组：扁平节点候选（v2.38），不含地区组/负载均衡组
+    const auto = groups.find(x => x.name === '自动选择');
+    const autoList = auto?.proxies as string[] | undefined;
+    expect(autoList).toEqual(['US-01', 'US-02']);
+    expect(autoList).not.toContain('🇺🇸 美国');
+    expect(autoList).not.toContain('🇺🇸 美国-负载均衡');
   });
 
   it('地理组：v2.37.2 起全部 url-test（单节点也测速），负载均衡组仍限多节点地区', async () => {

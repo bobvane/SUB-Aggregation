@@ -348,6 +348,12 @@ export async function generateProxyGroups(
   const geoGroupNames = geoGroups.map(g => g.name);
   const allGeoNodes = geoGroups.flatMap(g => g.nodes);
 
+  // 顶层「自动选择」测速候选：扁平直接测速所有有效节点（v2.38 改）。
+  // 旧设计用地区组/LB 组做 url-test 候选：Mihomo 测试子组时实际测到的是「内层当前选中节点」，
+  // 嵌套后外层结果随内层抖动而漂移，且 LB 组(consistent-hashing)参与自动选层会引入额外测速与切换。
+  // 新设计：顶层直接测节点，内层地区组/LB 组保持现状（url-test/load-balance 参数不变），供手动与分流引用。
+  const autoSelectProxies = allGeoNodes.length > 0 ? [...allGeoNodes] : ['DIRECT'];
+
   // v2.37.2：所有国家地理组统一为 url-test 自动测速组，不再产出 select 手动选择组（用户指令）
   // 单节点也照做 url-test —— 手动选择组一律不产出。
   // 负载均衡组维持现状：仅下列 7 个地区额外生成，且节点数 > 1 时才有意义（用户 2026-09-29 拍板）。
@@ -358,6 +364,8 @@ export async function generateProxyGroups(
 
   // 候选列表用：引用地理组的组里，只有带负载均衡的地区组，才在其后紧跟同地区负载均衡组。
   // 注意 geoGroupNames 保持「纯地区组」——下面的下标查找依赖它与 geoGroups 一一对应。
+  // 业务组/手动组仍用 geoChoices（地区组+LB 组候选，保持分流与面板结构不变）；
+  // 顶层「自动选择」改用 autoSelectProxies（扁平节点），见第 4 组。
   const geoChoices = geoGroups.flatMap(g =>
     lbRegionNames.has(g.name) ? [g.name, `${g.name}-负载均衡`] : [g.name]
   );
@@ -383,20 +391,24 @@ export async function generateProxyGroups(
     proxies: allGeoNodes.length > 0 ? allGeoNodes : ['DIRECT'],
   });
 
-  // 4. 自动选择（url-test：按地理组测速，挑最优地区）——v2.19.4 改：proxies 从扁平节点名改为地理组名
+  // 4. 自动选择（url-test）——v2.38（P0 选组优化）：测速对象改回「具体节点」扁平列表，
+  // 不再以地区组/负载均衡组为候选。原因：嵌套 url-test 时外层测的是「内层当前选中节点」，
+  // 结果随内层切换漂移且 LB 组引入额外测速；直接测节点后顶层选择稳定可解释。
+  // 地区组/LB 组仍各自保留 url-test/load-balance 参数（第 11 组），供手动与业务组引用。
+  // 测速 URL 改 https（目标 Mihomo ≥v1.19.x 支持 https 测速）：generate_204 是 Google 官方 204 端点。
   groups.push({
     name: '自动选择',
     type: 'url-test',
     icon: 'https://raw.githubusercontent.com/Orz-3/mini/master/Color/Auto.png',
-    url: 'http://www.gstatic.com/generate_204',
+    url: 'https://www.gstatic.com/generate_204',
     interval: 300,
     timeout: 5000,
     tolerance: 50,
     // 2026-09-24（吸收 Perfect-Rules）：只认 generate_204 的 204 为存活；连续 3 次失败触发强制复检
     'expected-status': 204,
     'max-failed-times': 3,
-    // 测速对象从「具体节点」改为「地理组」——geoChoices = 各国地理组（测速地区附带其负载均衡组）
-    proxies: geoChoices.length > 0 ? geoChoices : ['DIRECT'],
+    // v2.38：proxies = 全部有效节点（扁平），非地区组/负载均衡组
+    proxies: autoSelectProxies,
   });
 
   // 5. 国外媒体（流媒体 PROXY，默认自动选择）——固化策略组
@@ -442,6 +454,11 @@ export async function generateProxyGroups(
   };
   // AI 平台默认「美国地理组」：取美国组的实际名字（AI 组排除港澳台，美国本身在组内，是合法默认成员）
   const US_GEO_NAME = geoGroupNames.find(n => n.includes('美国')) || '手动切换';
+  // 加密货币默认「台湾地区组」：派生自实际存在的地区组名（v2.38：原硬编码 '🇹🇼 台湾'，
+  // 无台湾节点时会指向不存在的组导致 default-selected 失效回落组内第一项）。
+  // 若台湾组存在用其真实组名；否则回退到「自动选择」（顶层扁平节点组，始终存在）。
+  const TW_GEO_NAME = geoGroupNames.find(n => n.includes('台湾'));
+  const CRYPTO_DEFAULT = TW_GEO_NAME ? TW_GEO_NAME : '自动选择';
   const groupDefaults: Record<string, { name: string; default: string }> = {
     'microsoft': { name: '微软服务', default: 'DIRECT' },
     'apple': { name: '苹果服务', default: 'DIRECT' },
@@ -450,7 +467,7 @@ export async function generateProxyGroups(
     'youtube': { name: 'YouTube', default: '自动选择' },
     'github': { name: 'GitHub', default: '自动选择' },
     'social': { name: '社交', default: '自动选择' },
-    'crypto': { name: '加密货币', default: '🇹🇼 台湾' },
+    'crypto': { name: '加密货币', default: CRYPTO_DEFAULT },
     'user': { name: '用户规则', default: '手动切换' },
   };
   const independentGroupKeys = Object.keys(groupDefaults);
@@ -516,7 +533,7 @@ export async function generateProxyGroups(
       type: 'url-test',
     };
     group.icon = geoIcon(geo.name);
-    group.url = 'http://www.gstatic.com/generate_204';
+    group.url = 'https://www.gstatic.com/generate_204';
     group.interval = 300;
     group.timeout = 5000;
     group.tolerance = 50;
@@ -535,7 +552,7 @@ export async function generateProxyGroups(
         type: 'load-balance',
         strategy: 'consistent-hashing',
         icon: geoIcon(geo.name),
-        url: 'http://www.gstatic.com/generate_204',
+        url: 'https://www.gstatic.com/generate_204',
         interval: 300,
         timeout: 5000,
         'expected-status': 204,

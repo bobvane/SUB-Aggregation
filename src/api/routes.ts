@@ -408,11 +408,13 @@ export function createApp(deps: AppDeps): Hono {
     const dropped = new Set(await config.getDroppedNodes());
     // v2.36.9：锁定节点（无视测活/延迟，强制进配置）
     const locked = new Set(await config.getLockedNodes());
-    const { getAllNodeHealth, nodeLatencyMs } = await import('@/services/node-probe.service');
+    const { getAllNodeHealth, nodeLatencyMs, isProbeApplicable } = await import('@/services/node-probe.service');
     const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
     const mapper = (n: import('@/models/node').Node) => {
       const fp = nodeFingerprint(n);
       const h = healthByFp.get(fp);
+      // P0-1：UDP 协议（Hysteria2/TUIC/WireGuard）不适用 TCP/TLS 基础探测 → 显式标记，不伪装为 alive/dead
+      const probeApplicable = isProbeApplicable(n.protocol);
       return {
         name: n.name,
         protocol: n.protocol,
@@ -425,11 +427,12 @@ export function createApp(deps: AppDeps): Hono {
         enabled: !disabled.has(fp),
         locked: locked.has(fp),
         dropped: dropped.has(fp),
-        healthStatus: h?.status ?? null,
-        statusMachine: h?.statusMachine ?? null,
-        score: h?.score ?? null,
-        latency: h ? nodeLatencyMs(h) : null,
-        error: h?.error ?? null,
+        probeApplicable,
+        healthStatus: probeApplicable ? (h?.status ?? null) : 'unknown',
+        statusMachine: probeApplicable ? (h?.statusMachine ?? null) : null,
+        score: probeApplicable ? (h?.score ?? null) : null,
+        latency: probeApplicable ? (h ? nodeLatencyMs(h) : null) : null,
+        error: probeApplicable ? (h?.error ?? null) : `${n.protocol} 基于 UDP，基础 TCP/TLS 探测不适用`,
       };
     };
     if (subscriptionId) {

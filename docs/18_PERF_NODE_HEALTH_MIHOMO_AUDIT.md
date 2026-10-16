@@ -18,7 +18,8 @@
 repos.nodes.getAll()            ← 全量原始节点（含停用订阅排除）
   ↓ deduplicateNodes()
   ↓ getNodes()（src/services/config.service.ts:305）
-     locked 豁免 → disabled → dropped → status==='disabled' → removed_at → 【v2.38 P0 闭环】UDP unknown 过滤
+     locked 豁免 → disabled（用户禁用）→ dropped（状态机 disabled）→ removed_at
+     （P1 阶段 1 起已移除 UDP 协议过滤与慢节点延迟规则）
   ↓
 generate()（:368）— 所有格式（mihomo/singbox/v2ray/v2rayn/nekoray/shadowrocket）
   共用同一 getNodes() 结果（:379）→ 无第二条未过滤数据源
@@ -44,10 +45,11 @@ generateMihomoConfig（src/generator/mihomo.ts:722）
 不得把 `tcpLatency`/`tlsLatency` 标注为「真实代理延迟」。真实代理端到端延迟由客户端 Mihomo url-test 负责。
 
 **Q3：哪些状态会进入 dropped？**
-- `statusMachine === 'disabled'`（连续 ≥3 轮失败确认）→ 规则① 剔除
-- 慢节点：`latest 延迟 > 阈值` 且 最近 3 条历史 ≥2 条 > 阈值 → 规则② 剔除
-- UDP unknown 节点：不写健康数据 → 两条规则均不触发 → **不进 dropped**
-  但经 `getNodes()` 的 P0 闭环过滤（`!isProbeApplicable` → `return false`）→ **不进自动配置**
+- `statusMachine === 'disabled'`（连续 ≥3 轮失败确认）→ 剔除（**当前唯一规则**）
+- ~~慢节点：`latest 延迟 > 阈值` 且最近 3 条历史 ≥2 条 > 阈值~~ → **规则已删除**
+  （P1 阶段 1：TCP/TLS 握手延迟 ≠ 代理实际转发延迟，不构成剔除依据）
+- UDP unknown 节点：不写健康数据 → 规则不触发 → **不进 dropped**；
+  且 `getNodes()` **不再**按协议剔除 → 非锁定 UDP 节点**会进自动配置**
 
 **Q4：哪些状态可以进入最终 Mihomo 配置？**
 | 状态 | 是否进配置 | 说明 |
@@ -55,8 +57,8 @@ generateMihomoConfig（src/generator/mihomo.ts:722）
 | `alive` + `active/suspect` | ✅ 进 | 正常节点 |
 | `dead` + `suspect`（<3 轮） | ✅ 进 | 复核中，保留 |
 | `dead` + `disabled`（≥3 轮） | ❌ 不进 | 规则① 剔除 |
-| 慢节点（规则②） | ❌ 不进 | 剔除 |
-| UDP `unknown`（未锁定） | ❌ 不进 | P0 闭环：基础探测无法证明其可用 |
+| 慢节点（原规则②） | ✅ 进 | 规则已删除：握手延迟不构成剔除依据 |
+| UDP `unknown`（未锁定） | ✅ 进 | P1 阶段 1：基础探测不适用 ≠ 节点不可用 |
 | UDP `unknown`（锁定） | ✅ 进 | v2.36.9 锁定语义优先 |
 | 用户主动禁用（`status='disabled'`） | ❌ 不进 | 用户意图 |
 | 锁定节点 | ✅ 进 | 豁免一切过滤 |
@@ -67,9 +69,10 @@ generateMihomoConfig（src/generator/mihomo.ts:722）
 
 **Q6：unknown 节点最终如何处理？**
 UDP 协议（hysteria2/tuic/wireguard）`probeNode` 早退返回 `unknown`，不写 `health:latest`/`health:hist`/状态机。
-`getDroppedNodes` 两条规则均不触发（无健康数据可读）。
-**v2.38 P0 闭环**：`getNodes()` 新增 `!isProbeApplicable(n.protocol)` 过滤 → 非锁定 UDP 节点不进自动配置。
-锁定 UDP 节点（`locked.has(fp)`）在过滤链最前 `return true` → 强制进配置（v2.36.9 既有语义保留）。
+`getDroppedNodes` 规则不触发（无健康数据可读）。
+**P1 阶段 1**：`getNodes()` 已**移除** `!isProbeApplicable(n.protocol)` 过滤 → 非锁定 UDP 节点
+**正常进入自动配置**（基础探测不适用 ≠ 节点不可用）。锁定 UDP 节点（`locked.has(fp)`）在过滤链最前
+`return true` → 强制进配置（v2.36.9 既有语义保留）。
 
 **Q7：locked 节点有什么特殊语义？**
 锁定节点豁免一切过滤：即使用户禁用、系统剔除（dropped）、状态机 disabled、UDP unknown、removed，
@@ -82,8 +85,9 @@ UDP 协议（hysteria2/tuic/wireguard）`probeNode` 早退返回 `unknown`，不
 
 **Q9：本次是否真正解决了「项目判定不可用节点仍出现在 Mihomo 配置」的问题？**
 **配置过滤层面：是。** `getNodes()` 统一过滤 + `generateMihomoConfig` 单一数据源 → 被剔除节点
-（disabled/dropped/用户禁用/removed/非锁定 UDP）不会进入最终 YAML。集成测试
-`tests/integration/node-health-mihomo-closure.test.ts` 8 用例验证了完整闭环。
+（disabled/dropped/用户禁用/removed）不会进入最终 YAML。**非锁定 UDP 节点不再计入此列** ——
+P1 阶段 1 已移除 `!isProbeApplicable(n.protocol)` 过滤，UDP 节点会进入自动配置。
+集成测试 `tests/integration/node-health-mihomo-closure.test.ts` 8 用例验证了完整闭环。
 **但检测能力层面：否。** 当前 TCP/TLS 探测无法识别「端口开着但代理协议层异常」的节点。
 这类节点 TCP/TLS 可通 → 判 `alive` → 进配置 → 客户端实际不可用。
 **解决此类问题需要真实 Mihomo 代理探测（方案 B），属于后续独立任务，不在本轮范围。**
@@ -99,7 +103,7 @@ UDP 协议（hysteria2/tuic/wireguard）`probeNode` 早退返回 `unknown`，不
 
 | 文件 | 改动 |
 |---|---|
-| `src/services/config.service.ts` | `getNodes()` 新增 `if (!isProbeApplicable(n.protocol)) return false;` —— 非锁定 UDP 节点不进自动配置 |
+| `src/services/config.service.ts` | ~~`getNodes()` 新增 `if (!isProbeApplicable(n.protocol)) return false;`~~ —— **P1 阶段 1 已移除该行**；非锁定 UDP 节点现会进入自动配置 |
 
 这是**最小修改**，不复制过滤逻辑，统一在 `getNodes()` 一处过滤。
 
@@ -107,9 +111,9 @@ UDP 协议（hysteria2/tuic/wireguard）`probeNode` 早退返回 `unknown`，不
 
 | 测试文件 | 用例数 | 覆盖 |
 |---|---|---|
-| `tests/integration/node-health-mihomo-closure.test.ts` | 8 | A(disabled) 不进 proxies+groups；B(healthy) 进；C(UDP unknown) 不进；C+locked 进；完整闭环；慢节点 slow→normal→slow 3 用例 |
+| `tests/integration/node-health-mihomo-closure.test.ts` | 8 | A(disabled) 不进 proxies+groups；B(healthy) 进；**C(UDP unknown) 进配置**（P1 阶段 1：不再按协议剔除）；C+locked 进；完整闭环；慢节点 slow→normal→slow 3 用例 |
 | `tests/services/node-probe-latch.test.ts` | 2 | 并发门闩：同周期并发调用→第二轮在第一轮完成后才启动；in-flight 排队为下一轮 |
-| `tests/integration/engine-cold-start-closure.test.ts` | 2 | 引擎 2→3 reset→首轮 suspect 不剔除→配置保留→API 不 500 |
+| `tests/integration/engine-cold-start-closure.test.ts` | 2 | **阶段 2 更新**：engine 3→4 不清空历史 → 连续失败计数延续 → `disabled` → 进入 dropped（此前"2→3 reset 清空 → 首轮 suspect 不剔除"的语义已被阶段 2 取代） |
 
 ### 13.5 最终测试与验证结果
 
@@ -154,7 +158,8 @@ docker compose down && docker compose up -d
 ```
 
 > 注意：`git checkout -- src/services/config.service.ts` 回滚的是整个文件，
-> 该文件在 P0 闭环审计之前已有 P0-2/P0-3 改动（`getDroppedNodes` 双规则重写）。
-> 如果只想回滚 P0 闭环审计的 UDP 过滤行而不回滚 P0-2 双规则重写，
-> 需手动删除 `getNodes()` 中的 `if (!isProbeApplicable(n.protocol)) return false;` 一行，
-> 以及 `const { isProbeApplicable } = await import('./node-probe.service');` 一行。
+> 该文件在 P0 闭环审计之前已有 P0-2/P0-3 改动（`getDroppedNodes` 双规则重写），
+> 且 P1 阶段 1 又移除了 UDP 过滤与慢节点规则 —— 回滚会一并丢失这三批改动。
+> 历史提示：P0 闭环审计当时加入的 `getNodes()` 中
+> `if (!isProbeApplicable(n.protocol)) return false;` 一行，在 P1 阶段 1 已被移除，
+> 当前源码中**不再存在**该行，无需手动回滚。
