@@ -45,10 +45,12 @@ generateMihomoConfig（src/generator/mihomo.ts:722）
 不得把 `tcpLatency`/`tlsLatency` 标注为「真实代理延迟」。真实代理端到端延迟由客户端 Mihomo url-test 负责。
 
 **Q3：哪些状态会进入 dropped？**
-- `statusMachine === 'disabled'`（连续 ≥3 轮失败确认）→ 剔除（**当前唯一规则**）
-- ~~慢节点：`latest 延迟 > 阈值` 且最近 3 条历史 ≥2 条 > 阈值~~ → **规则已删除**
-  （P1 阶段 1：TCP/TLS 握手延迟 ≠ 代理实际转发延迟，不构成剔除依据）
-- UDP unknown 节点：不写健康数据 → 规则不触发 → **不进 dropped**；
+- `statusMachine === 'disabled'`（连续 ≥3 轮失败确认）→ 剔除（规则①）
+- 慢节点：`nodeLatencyMs(h) > node_drop_latency_ms`（TLS RTT 优先，无 TLS 用 TCP RTT；
+  阈值 100–2000，默认 2000）→ 剔除（规则②，**v2.38.3 恢复**；v2.36.6 引入、v2.38 P1 阶段 1 曾移除）
+  注：判据只看**最新快照**，「最近 3 条历史 ≥2 条超阈值」的旧表述与历任实现均不符，已订正。
+  规则② 只做筛选：不写 health 历史、不改 statusMachine、不影响 RTT 统计与排序。
+- UDP unknown 节点：不写健康数据 → 无延迟样本 → 两条规则均不触发 → **不进 dropped**；
   且 `getNodes()` **不再**按协议剔除 → 非锁定 UDP 节点**会进自动配置**
 
 **Q4：哪些状态可以进入最终 Mihomo 配置？**
@@ -57,7 +59,7 @@ generateMihomoConfig（src/generator/mihomo.ts:722）
 | `alive` + `active/suspect` | ✅ 进 | 正常节点 |
 | `dead` + `suspect`（<3 轮） | ✅ 进 | 复核中，保留 |
 | `dead` + `disabled`（≥3 轮） | ❌ 不进 | 规则① 剔除 |
-| 慢节点（原规则②） | ✅ 进 | 规则已删除：握手延迟不构成剔除依据 |
+| 慢节点（延迟 > 阈值，规则②） | ❌ 不进 | v2.38.3 恢复；仅筛选，不改健康状态（锁定节点仍豁免） |
 | UDP `unknown`（未锁定） | ✅ 进 | P1 阶段 1：基础探测不适用 ≠ 节点不可用 |
 | UDP `unknown`（锁定） | ✅ 进 | v2.36.9 锁定语义优先 |
 | 用户主动禁用（`status='disabled'`） | ❌ 不进 | 用户意图 |
