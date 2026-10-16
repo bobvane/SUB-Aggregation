@@ -6,7 +6,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    branches: [main]
+    # 注意：workflow_dispatch **不支持** branches 过滤（官方 schema 仅有 inputs）。
+    # 手动触发可指定任意 ref，分支限制一律由 job 内运行时 guard 强制。
     inputs:
       AUTO_RELEASE:
         description: '手动触发时是否自动创建 Git 标签 + GitHub Release（默认 false）'
@@ -134,26 +135,31 @@ jobs:
           # $1=registry 名, $2=repo, $3=auth header
           probe_revision() {
             REG_NAME="$1"; REPO="$2"; AUTH="$3"
-            # 1) 取该版本标签的 manifest digest
-            MANIFEST=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
-              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
-              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null | jq -r '.digest // .config.digest // empty' 2>/dev/null)
-            if [ -z "${MANIFEST}" ]; then
-              # 2) 单 manifest：直接从 config 读 OCI label
-              CFG=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
-                "https://${REG_NAME}/v2/${REPO}/blobs/${MANIFEST}" 2>/dev/null \
-                | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null)
-              echo "${CFG}"
+            ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+            MAN=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" -H "Accept: ${ACCEPT}" \
+              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null || true)
+            [ -z "${MAN}" ] && return
+
+            # 单平台 manifest：有 .config.digest 且无 .manifests[]
+            CFG_DIGEST=$(echo "${MAN}" | jq -r 'if (.manifests? | type) == "array"
+                          then empty else (.config.digest // empty) end' 2>/dev/null)
+            if [ -n "${CFG_DIGEST}" ]; then
+              curl -fsSL -H "Authorization: Bearer ${AUTH}" \
+                "https://${REG_NAME}/v2/${REPO}/blobs/${CFG_DIGEST}" 2>/dev/null \
+                | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null
               return
             fi
-            # 3) 多平台 index：取 amd64 子 manifest 的 config label
-            SUB=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
-              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
-              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null \
+
+            # 多平台 index：取 linux/amd64 子 manifest → 其 config digest → config blob
+            SUB=$(echo "${MAN}" \
               | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' 2>/dev/null | head -1)
             [ -z "${SUB}" ] && return
+            SUB_CFG=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" -H "Accept: ${ACCEPT}" \
+              "https://${REG_NAME}/v2/${REPO}/manifests/${SUB}" 2>/dev/null \
+              | jq -r '.config.digest // empty' 2>/dev/null)
+            [ -z "${SUB_CFG}" ] && return
             curl -fsSL -H "Authorization: Bearer ${AUTH}" \
-              "https://${REG_NAME}/v2/${REPO}/blobs/${SUB}" 2>/dev/null \
+              "https://${REG_NAME}/v2/${REPO}/blobs/${SUB_CFG}" 2>/dev/null \
               | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null
           }
 

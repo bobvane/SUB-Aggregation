@@ -22,8 +22,8 @@
 name: Image status (read-only)
 
 on:
+  # workflow_dispatch 不支持 branches 过滤；分支限制由 status job 内的运行时 guard 强制。
   workflow_dispatch:
-    branches: [main]
 
 permissions:
   contents: read   # 只读；无 packages:write → 本工作流在技术上无法推送镜像
