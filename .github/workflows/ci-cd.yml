@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    branches: [main]
     inputs:
       AUTO_RELEASE:
         description: '手动触发时是否自动创建 Git 标签 + GitHub Release（默认 false）'
@@ -64,11 +65,19 @@ jobs:
       - uses: actions/checkout@v4
 
       # 提交一致性自证：构建的必须是触发本次运行的那个 commit
-      - name: Assert checked out SHA matches workflow run
+      - name: Assert branch is main and checked out SHA matches workflow run
         env:
           EXPECTED_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
+          # 1) 只允许 main 推正式镜像（PR / fork / 其他分支一律拒绝）
+          if [ "${REF_NAME}" != "main" ]; then
+            echo "ERROR: 正式镜像只允许从 main 构建（当前 ref：${REF_NAME}）" >&2
+            exit 1
+          fi
+          # 2) 构建的必须是触发本次运行的那个 commit
           ACTUAL_SHA=$(git rev-parse HEAD)
+          echo "ref        : ${REF_NAME}"
           echo "run sha    : ${EXPECTED_SHA}"
           echo "checked-out: ${ACTUAL_SHA}"
           if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
@@ -117,34 +126,72 @@ jobs:
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           MISSING=""
+          # 期望：已存在的同版本镜像，其 OCI revision 标签等于当前 commit。
+          # 只认「revision 匹配」才算已发布；查不到 / 读不出 / 对不上 → 视为需重建（fail-safe）。
+          WANT_SHA="$(git rev-parse HEAD)"
 
+          # ---- 单个 registry 的 revision 探测 ----
+          # $1=registry 名, $2=repo, $3=auth header
+          probe_revision() {
+            REG_NAME="$1"; REPO="$2"; AUTH="$3"
+            # 1) 取该版本标签的 manifest digest
+            MANIFEST=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json' \
+              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null | jq -r '.digest // .config.digest // empty' 2>/dev/null)
+            if [ -z "${MANIFEST}" ]; then
+              # 2) 单 manifest：直接从 config 读 OCI label
+              CFG=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
+                "https://${REG_NAME}/v2/${REPO}/blobs/${MANIFEST}" 2>/dev/null \
+                | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null)
+              echo "${CFG}"
+              return
+            fi
+            # 3) 多平台 index：取 amd64 子 manifest 的 config label
+            SUB=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null \
+              | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' 2>/dev/null | head -1)
+            [ -z "${SUB}" ] && return
+            curl -fsSL -H "Authorization: Bearer ${AUTH}" \
+              "https://${REG_NAME}/v2/${REPO}/blobs/${SUB}" 2>/dev/null \
+              | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null
+          }
+
+          # ---- GHCR ----
           REPO_PATH="${IMAGE#ghcr.io/}"
           ANON=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO_PATH}:pull" | jq -r .token || true)
-          EXISTING=$(curl -fsSL -H "Authorization: Bearer ${ANON}" \
-                       "https://ghcr.io/v2/${REPO_PATH}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
-          if [ -z "${EXISTING}" ]; then
-            EXISTING=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                         "https://ghcr.io/v2/${REPO_PATH}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
+          GHCR_TOKEN="${ANON}"
+          [ -z "${GHCR_TOKEN}" ] && GHCR_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          GHCR_REV=$(probe_revision "ghcr.io" "${REPO_PATH}" "${GHCR_TOKEN}" || true)
+          if [ "${GHCR_REV}" = "${WANT_SHA}" ]; then
+            echo "GHCR ${NEW_VER} revision=${GHCR_REV} 匹配，跳过"
+          else
+            echo "GHCR ${NEW_VER} revision=${GHCR_REV:-<不可读>} 期望=${WANT_SHA} → 需重建"
+            MISSING="ghcr"
           fi
-          echo "GHCR 现有 tags: ${EXISTING:-（无）}"
-          echo "${EXISTING}" | grep -qx "${NEW_VER}" || MISSING="ghcr"
 
+          # ---- Docker Hub ----
           if [ -n "${DH_USER}" ] && [ -n "${DH_TOKEN}" ]; then
             DH_REPO="${DH_USER}/sub-aggregation"
             DH_T=$(curl -fsSL -u "${DH_USER}:${DH_TOKEN}" \
                      "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${DH_REPO}:pull" \
                      | jq -r .token || true)
-            DH_TAGS=$(curl -fsSL -H "Authorization: Bearer ${DH_T}" \
-                        "https://registry-1.docker.io/v2/${DH_REPO}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
-            echo "Docker Hub 现有 tags: ${DH_TAGS:-（无）}"
-            echo "${DH_TAGS}" | grep -qx "${NEW_VER}" || MISSING="${MISSING:+${MISSING},}dockerhub"
+            DH_REV=$(probe_revision "registry-1.docker.io" "${DH_REPO}" "${DH_T}" || true)
+            if [ "${DH_REV}" = "${WANT_SHA}" ]; then
+              echo "Docker Hub ${NEW_VER} revision=${DH_REV} 匹配，跳过"
+            else
+              echo "Docker Hub ${NEW_VER} revision=${DH_REV:-<不可读>} 期望=${WANT_SHA} → 需重建"
+              MISSING="${MISSING:+${MISSING},}dockerhub"
+            fi
+          else
+            echo "Docker Hub 未配置凭据 → 本次只保证 GHCR"
           fi
 
           if [ -z "${MISSING}" ]; then
-            echo "版本 ${NEW_VER} 两个 registry 都已有，无需构建"
+            echo "两个 registry 的 ${NEW_VER} revision 均等于当前 commit，无需构建"
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "版本 ${NEW_VER} 在 ${MISSING} 缺失，开始构建"
+            echo "版本 ${NEW_VER} 在 ${MISSING} 需重建（revision 不匹配/不可读/缺失）"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -199,6 +246,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.tags.outputs.tags }}
+          # 记录源码 revision，供下次判重比对（org.opencontainers.image.revision）
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
   # 推送即自动打 tag + 发 Release（版本号未变化的推送会跳过）
   #
   # v2.38.0 发布约定：本次发布**不自动创建 Git 标签、不自动创建 GitHub Release**。
@@ -221,7 +273,13 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
+          # 安全：Tag/Release 只允许在 main 上创建
+          if [ "${REF_NAME}" != "main" ]; then
+            echo "ERROR: Tag/Release 只允许在 main 创建（当前 ref：${REF_NAME}）" >&2
+            exit 1
+          fi
           VERSION="v$(grep '"version"' package.json | cut -d'"' -f4)"
           echo "检测到版本: ${VERSION}"
           if git ls-remote --tags origin "refs/tags/${VERSION}" | grep -q "${VERSION}"; then
