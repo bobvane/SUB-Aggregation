@@ -250,7 +250,7 @@ describe('P0-2 状态机确认（三轮独立失败 / 成功重置 / 持久化�
       }),
     );
 
-    // P1 修复③：alive 但持续慢（latest 2500>2000，历史 3 条 2 条超 2000）→ 不再剔除（延迟 ≠ 失效）
+    // v2.38.3：alive 但慢（latest 2500 > 默认阈值 2000）→ 规则②（慢节点阈值）抛弃；健康状态不变
     const slowFp = '10.0.0.2:443:vmess';
     await kv.put(
       `health:latest:${slowFp}`,
@@ -285,7 +285,7 @@ describe('P0-2 状态机确认（三轮独立失败 / 成功重置 / 持久化�
 
     const dropped = await svc.getDroppedNodes();
     expect(dropped).toContain(deadDisabled);   // 规则① 状态机确认失效 → 剔除
-    expect(dropped).not.toContain(slowFp);      // P1 修复③：慢节点不再仅因延迟剔除
+    expect(dropped).toContain(slowFp);          // 规则②：2500 > 默认阈值 2000 → 抛弃
     expect(dropped).not.toContain(suspectDead); // 未确认失效 → 保留
   });
 

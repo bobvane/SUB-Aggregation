@@ -18,7 +18,7 @@ import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
-import { getAllNodeHealth, type NodeHealthLatest } from './node-probe.service';
+import { getAllNodeHealth, nodeLatencyMs, type NodeHealthLatest } from './node-probe.service';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -95,7 +95,12 @@ export interface ConfigService {
   autoNamed(nodes: Node[]): Promise<Node[]>;
   /** 获取禁用的节点指纹列表 */
   getDisabledNodes(): Promise<string[]>;
-  /** 熔断抛弃的节点指纹（连续失败 3 次），不输出到配置但保留记录继续测活 */
+  /**
+   * 系统抛弃的节点指纹，不输出到配置但保留记录继续测活。两条独立规则：
+   * ① 健康状态机确认失效（连续失败 ≥3 轮 → statusMachine='disabled'）；
+   * ② 慢节点阈值（延迟 > node_drop_latency_ms，100–2000，默认 2000）。
+   * 规则②只做筛选，不改健康状态、不写历史（详见实现处注释）。
+   */
   getDroppedNodes(): Promise<string[]>;
   /**
    * 清理「已退出有效节点池」节点的最新健康快照（health:latest:{fp}）。
@@ -163,6 +168,23 @@ const FORMAT_META: Record<OutputFormat, { contentType: string; filename: string 
 
 const DISABLED_NODES_KEY = 'disabled_nodes';
 const LOCKED_NODES_KEY = 'locked_nodes';
+/** 慢节点抛弃阈值：KV 键名（与 /api/settings 同一键） */
+const NODE_DROP_LATENCY_KEY = 'node_drop_latency_ms';
+/** 慢节点抛弃阈值兜底值（毫秒）。缺省/非法/越界一律回退到这里，与 /api/settings 口径一致 */
+export const DEFAULT_NODE_DROP_LATENCY_MS = 2000;
+
+/**
+ * 读取慢节点抛弃阈值（毫秒）。
+ * 与 /api/settings PUT 的校验口径（100–2000 整数）保持一致：
+ * 缺失 / 非数字 / 越界 → 回退默认 2000，**不静默返回 0**（否则会把全部节点判为慢节点）。
+ */
+async function readDropLatencyMs(repos: Repositories): Promise<number> {
+  const raw = await repos.settings.get(NODE_DROP_LATENCY_KEY);
+  if (raw === null || raw === undefined) return DEFAULT_NODE_DROP_LATENCY_MS;
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 100 || v > 2000) return DEFAULT_NODE_DROP_LATENCY_MS;
+  return v;
+}
 const SELECTED_RULES_KEY = 'selected_rules';
 const CUSTOM_RULES_KEY = 'custom_rules';
 const DISABLED_GROUPS_KEY = 'disabled_groups';
@@ -343,20 +365,44 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
     },
 
     /**
-     * 系统剔除的节点（v2.38 / P1 阶段 1：只保留确认失效的系统剔除）。
-     * 规则：
-     * 1. statusMachine === 'disabled'（连续失败 ≥3 轮，由 evaluateStateMachine 确认）→ 剔除。
-     * 2. 用户主动禁用（getDisabledNodes）与锁定豁免语义不变。
-     * 已移除：基于 TCP/TLS 握手延迟阈值的慢节点硬剔除（node_drop_latency_ms 不再影响配置筛选，
-     *   握手延迟 ≠ 代理实际转发延迟，不应据此剔除节点）。
-     * 单轮 dead → suspect 保留在配置里；恢复 alive → active 自动回归（既有状态机语义不变）。
+     * 系统抛弃的节点。
+     *
+     * 两条**相互独立**的规则（任一命中即抛弃，但两者互不修改对方的判定状态）：
+     *
+     * 规则①「健康状态机确认失效」：`statusMachine === 'disabled'`（连续失败 ≥3 轮，
+     *   由 evaluateStateMachine 判定）。单轮 dead 只是 suspect，保留在配置里观察；
+     *   恢复连续 alive → active 自动回归。
+     *
+     * 规则②「慢节点阈值」（v2.38.3 恢复）：节点延迟（TLS RTT 优先，无则 TCP RTT，
+     *   与列表页展示/红字高亮同一口径 `nodeLatencyMs`）**严格大于**用户配置的
+     *   `node_drop_latency_ms`（100–2000，默认 2000）→ 归入「已抛弃」，不输出到配置。
+     *
+     * **规则② 是筛选依据，不是健康判定**：不把节点写成 dead、不写 health 历史、
+     *   不改 statusMachine、不影响 RTT 统计与排序；节点继续正常测活，
+     *   用户把阈值调高后下一轮判定立刻回归。因此两条规则可共存而不互相矛盾。
+     *
+     * 规则② 的生效前提：仅有可用延迟样本时判定（null / 非有限值不判定）。
+     *   UDP 协议（hysteria2/tuic/wireguard）不适用基础探测，`doProbeAllNodes` 对
+     *   `status === 'unknown'` 直接 continue，不写 health 快照 → 天然无延迟样本 → 不被本规则抛弃。
+     *
+     * 边界约定：`latency > threshold` 才抛弃，`latency === threshold` **不**抛弃
+     *   （与列表页红字高亮 `latency > state.nodeDropLatency` 完全一致）。
+     *
+     * 用户主动禁用（getDisabledNodes）与锁定豁免（getNodes 中 locked 优先）语义不变。
      */
     async getDroppedNodes(): Promise<string[]> {
       const health = await getAllNodeHealth(kv);
+      const threshold = await readDropLatencyMs(repos);
       const dropped: string[] = [];
       for (const h of health) {
-        // 确认失效：状态机连续失败 ≥3 轮（statusMachine === 'disabled'）才剔除
-        if (h.statusMachine === 'disabled') dropped.push(h.fingerprint);
+        // 规则①：状态机确认失效（连续失败 ≥3 轮）
+        if (h.statusMachine === 'disabled') {
+          dropped.push(h.fingerprint);
+          continue;
+        }
+        // 规则②：慢节点阈值（独立筛选，不触碰健康状态）
+        const latency = nodeLatencyMs(h);
+        if (latency !== null && latency > threshold) dropped.push(h.fingerprint);
       }
       return dropped;
     },

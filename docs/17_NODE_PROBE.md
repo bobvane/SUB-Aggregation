@@ -150,24 +150,29 @@ Score = Math.max(0, Math.min(100, Math.round(
 **并发门闩（v2.38）**：`probeAllNodes` 加 `probeAllNodesInflight` 单飞，重复调用排队等当前轮完成后
 作为独立新一轮，避免并发重复写历史导致状态机误计数。
 
-## 5. 抛弃判定（getDroppedNodes，P1 阶段 1 起仅「状态机确认失效」）
+## 5. 抛弃判定（getDroppedNodes）
 
-**P1 阶段 1 起：只保留「状态机确认失效」一条剔除规则。**
+**两条相互独立的规则，任一命中即抛弃（v2.38.3 起恢复规则②）。**
 
-- **规则①：状态机确认失效（`statusMachine === 'disabled'`）** → 剔除。
-  单轮 dead（suspect）**不剔除**；需连续 3 轮独立失败确认后才剔除。
-  原 v2.36「最新一轮 dead 即剔除」已废弃（单轮抖动会误杀）。
-- **规则②（已删除）**：原「慢节点」硬剔除（`node_drop_latency_ms` 阈值 + 最近 3 条历史 ≥2 条超阈值）
-  已从 `getDroppedNodes()` 移除。理由：TCP/TLS 握手延迟 ≠ 代理实际转发延迟，不应据此剔除节点。
-  延迟数据仍用于健康统计与列表排序展示。
+- **规则①：状态机确认失效（`statusMachine === 'disabled'`）** → 抛弃。
+  单轮 dead（suspect）**不抛弃**；需连续 3 轮独立失败确认后才抛弃。
+  原 v2.36「最新一轮 dead 即抛弃」已废弃（单轮抖动会误杀）。
+- **规则②：慢节点阈值（`node_drop_latency_ms`，100–2000ms，默认 2000）** → 抛弃。
+  判据：节点延迟（`nodeLatencyMs`：**TLS RTT 优先，无 TLS 用 TCP RTT**）**严格大于**阈值。
+  边界：`latency > 阈值` 才抛弃，`等于阈值` 不抛弃（与列表页红字高亮同口径）。
+  阈值缺失 / 非数字 / 越界 → 回退默认 2000。
+  历史沿革：v2.36.6 引入，v2.38 P1 阶段 1 曾移除，**v2.38.3 恢复**。
+  早先文档写的「最近 3 条历史 ≥2 条超阈值」与实现不符（历任实现都只看最新快照），已按实现订正。
+  **规则② 是筛选依据，不是健康判定**：不写 `health:hist`、不改 `statusMachine`、
+  不把节点写成 dead；延迟仍用于健康统计与列表排序，节点继续正常测活。
 - **UDP 协议不再从配置剔除**：`getNodes()` 已移除 `!isProbeApplicable(protocol)` 过滤。
   基础探测不适用 ≠ 节点不可用。
 - **锁定节点（locked）全部豁免**：无视测活/禁用判定与 `removed_at`，强制进配置（v2.36.9）。
-- **UDP 节点**：`status='unknown'` 不写健康数据 → 规则①不触发 → 保留。
+- **UDP 节点**：`status='unknown'` 不写健康数据 → 无延迟样本 → 规则①、规则②均不触发 → 保留。
 - **suspect 死节点**（连续 1-2 轮 dead，未确认）：规则①不触发 → 保留（观察中）。
 
 过滤链（`src/services/config.service.ts` `getNodes()`）：
-`locked 豁免 → disabled（用户禁用）→ dropped（状态机 disabled）→ removed_at`。
+`locked 豁免 → disabled（用户禁用）→ dropped（状态机 disabled 或超阈值）→ removed_at`。
 不存在「状态机已确认失效却被另一规则放行」的矛盾。
 
 ## 6. 自动命名（smartRename，替代旧清洗）
