@@ -269,21 +269,46 @@ export async function runScheduled(
     kv
   );
   const results: string[] = [];
+  let updateAttempts = 0;
+  let updateFailures = 0;
   for (const s of await subs.list()) {
     // 停用的订阅不参与自动更新（用户 2026-09-24）
     if (!s.enabled) {
       results.push(`${s.name}:已停用`);
       continue;
     }
+    updateAttempts++;
     try {
       const { nodeCount } = await subs.update(s.id, fetchSubscription);
       results.push(`${s.name}:${nodeCount}节点`);
     } catch (e) {
+      updateFailures++;
       results.push(`${s.name}:失败(${(e as Error).message})`);
     }
   }
   // 记下本次自动更新的时刻（无论个别订阅成败），下一次间隔从这个点开始算
   await repos.settings.set('sub_update_last_at', String(now));
+
+  // 孤儿健康快照清理（health:latest:{fp} 无 TTL，节点退出有效节点池后旧快照永久残留）。
+  // 保守门槛：
+  //   · 只在「至少发起过一次订阅更新」且「全部更新成功」时执行——
+  //     任一订阅失败或本轮无更新动作，节点池都不能视为完整一致，跳过清理（宁可不清，不可误删）；
+  //   · 停用的订阅不算失败：其节点仍在 getAll(true) 的有效池内，快照必须保留；
+  //   · 清理内部另有节点池读取异常的整体兜底（skipped）。
+  // 清理异常绝不使本轮更新失败：与测活/预填充同样的「后台尽力而为 + 不阻塞」策略。
+  if (updateAttempts > 0 && updateFailures === 0) {
+    try {
+      const config = createConfigService(repos, kv);
+      const r = await config.cleanupOrphanedHealthSnapshots();
+      if (r.removed > 0 || r.skipped) {
+        console.warn(`[SubAutoUpdate] 健康快照清理: 扫描 ${r.scanned} 清理 ${r.removed}${r.skipped ? '（节点池不可确认，本轮跳过）' : ''}`);
+      }
+    } catch (e) {
+      console.warn(`[SubAutoUpdate] 健康快照清理失败(不阻塞): ${(e as Error).message}`);
+    }
+  } else if (updateFailures > 0) {
+    console.warn(`[SubAutoUpdate] 有 ${updateFailures} 个订阅更新失败，跳过健康快照清理`);
+  }
 
   // v2.32: 订阅更新完成后，触发节点测活引擎（全量扫描）
   // 异步执行，不阻塞订阅更新流程

@@ -97,6 +97,25 @@ export interface ConfigService {
   getDisabledNodes(): Promise<string[]>;
   /** 熔断抛弃的节点指纹（连续失败 3 次），不输出到配置但保留记录继续测活 */
   getDroppedNodes(): Promise<string[]>;
+  /**
+   * 清理「已退出有效节点池」节点的最新健康快照（health:latest:{fp}）。
+   *
+   * 背景：health:hist 有 30 天 TTL，但 health:latest 从无清理机制。
+   * 节点被订阅移除或标记 removed_at 墓碑后，其 latest 快照会永久残留，导致：
+   *  ① getDroppedNodes() 返回无对应节点的幽灵指纹；
+   *  ② 同一指纹重新加入时，沿用旧 statusMachine/score 直至首轮探测覆盖。
+   *
+   * 有效节点池口径（**与 getNodes() 的配置输出口径不同，此处按数据生命周期判定**）：
+   *  · 用 getAll(true) 取得**含停用订阅**的全部节点 —— 订阅仅是停用而非删除，
+   *    其节点数据仍在库中，重启/重新启用后立刻可用，因此**不得**清理其快照；
+   *  · 排除 removed_at 墓碑节点 —— 它们已不参与任何配置输出，属可清理对象。
+   *
+   * 安全机制：
+   *  · 节点池读取失败 / 解析异常 → 直接跳过本轮，**不删除任何快照**（宁可不清理，不可误删）；
+   *  · 幂等：重复执行结果一致；
+   *  · 只删 latest，**不触碰 health:hist**（历史继续遵守既有 30 天 TTL）。
+   */
+  cleanupOrphanedHealthSnapshots(): Promise<{ scanned: number; removed: number; skipped: boolean }>;
   /** 设置禁用的节点指纹列表 */
   setDisabledNodes(fingerprints: string[]): Promise<void>;
   /** 获取锁定的节点指纹列表（v2.36.9：锁定节点无视测活/延迟/禁用，强制进配置） */
@@ -340,6 +359,56 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
         if (h.statusMachine === 'disabled') dropped.push(h.fingerprint);
       }
       return dropped;
+    },
+
+    /**
+     * 清理已退出有效节点池的 health:latest:{fp} 快照（详见接口注释）。
+     *
+     * 保守策略：任何异常都视为「无法确认有效节点集合」→ 跳过本轮，不删任何键。
+     */
+    async cleanupOrphanedHealthSnapshots() {
+      // ---- 1. 构造有效节点指纹集合（失败即放弃，不猜） ----
+      let validFps: Set<string>;
+      try {
+        // getAll(true)：含停用订阅。停用 ≠ 删除，节点数据仍在库中，随时可能重新启用，
+        // 清理其快照会导致重新启用后丢失历史健康信息 —— 因此必须保留。
+        const allNodes = await repos.nodes.getAll(true);
+        if (!Array.isArray(allNodes)) return { scanned: 0, removed: 0, skipped: true };
+        validFps = new Set<string>();
+        for (const n of allNodes) {
+          // removed_at 墓碑：数据仍在库但已不参与任何配置输出 → 可清理
+          if (n.removed_at) continue;
+          validFps.add(nodeFingerprint(n));
+        }
+      } catch {
+        // 节点池不可读：宁可不清理，也不能用不完整集合误删有效快照
+        return { scanned: 0, removed: 0, skipped: true };
+      }
+
+      // ---- 2. 枚举全部 latest 快照 ----
+      let keys: Array<{ key: string }>;
+      try {
+        keys = await kv.list('health:latest:');
+      } catch {
+        return { scanned: 0, removed: 0, skipped: true };
+      }
+      if (!Array.isArray(keys)) return { scanned: 0, removed: 0, skipped: true };
+
+      // ---- 3. 逐个比对并删除孤儿快照（只删 latest，不动 health:hist） ----
+      let removed = 0;
+      for (const { key } of keys) {
+        const fp = key.slice('health:latest:'.length);
+        if (!fp) continue;            // 畸形键，保持原样不做判断
+        if (validFps.has(fp)) continue; // 有效节点：保留
+        try {
+          await kv.delete(key);
+          removed++;
+        } catch {
+          // 单个键删除失败不中断整轮，剩余的继续尝试
+        }
+      }
+
+      return { scanned: keys.length, removed, skipped: false };
     },
 
     /**
