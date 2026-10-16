@@ -129,13 +129,18 @@ describe('节点探测引擎（真实 TCP/TLS 握手）', () => {
     const fp = nodeFingerprint(node);
 
     // 模拟旧引擎留下的数据。两组时间戳，用途不同：
-    //  A 组（窗口外、TTL 内）：3 天前 —— 应被**保留**，但不参与 24h 窗口评分。
+    //  A 组（窗口外、TTL 内）：**2.5 / 3 / 3.5 天前** —— 应被**保留**，但不参与 24h 窗口评分。
     //     用来证明「引擎升级不会删历史」，且不会与「TTL 正常清理」混淆。
+    //     ⚠️ 时间余量说明：原实现用 `now0 - 1 * DAY`，恰好等于 24h 窗口长度
+    //     （calculateScore 的窗口判定是 `now - ts <= windowMs`）。当评分时刻的
+    //     `Date.now()` 与此处 `now0` 落在同一毫秒时，该记录会**落入窗口**使 N=1，
+    //     评分从 50 变为 27（本用例在 Linux CI 上实际失败过一次）。
+    //     现取最小 2.5 天（余量 12 小时，远大于毫秒级执行时差），既稳定超窗又稳在 TTL 内。
     //  B 组（真正超 TTL）：40 天前 —— 应被 cleanupOldHistory **正常清理**。
     //     用来证明 TTL 行为未被破坏（不是靠禁掉清理来让测试通过）。
     const now0 = Date.now();
     const DAY = 86_400_000;
-    const inTtlButOutOfWindow = [now0 - 3 * DAY, now0 - 2 * DAY, now0 - DAY];
+    const inTtlButOutOfWindow = [now0 - 3.5 * DAY, now0 - 3 * DAY, now0 - 2.5 * DAY];
     for (const t of inTtlButOutOfWindow) {
       await storage.put(`health:hist:${fp}:${t}`, JSON.stringify({
         fingerprint: fp, status: 'dead', tcpLatency: null, tlsLatency: null, timestamp: t, score: 0,
