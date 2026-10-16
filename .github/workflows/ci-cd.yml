@@ -37,6 +37,168 @@ jobs:
       - name: Run tests
         run: npm test
 
+  # ================================================================
+  # 镜像构建（阶段 1 / P1 修复）
+  #
+  # 门禁：`needs: test` + 显式结论校验 —— 镜像只在**同一 commit 的 CI
+  # 全部通过**后才构建推送。CI 失败 / 取消 / 跳过时本 job 不执行，
+  # 不会推送任何镜像标签。
+  #
+  # 为何不用 workflow_run 串联：workflow_run 需在 job 内用 GitHub API
+  # 反查源 run 的 sha 与结论，存在「查到别次运行」「事件重放/并发时序」
+  # 等审计困难；needs 是调度器保证的硬依赖，commit SHA 天然一致。
+  #
+  # 判重逻辑（两 registry 都已有该版本 tag 才跳过）从 build-image.yml 原样迁入。
+  # ================================================================
+  image:
+    name: Build & push image
+    needs: test
+    if: needs.test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_BASE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 提交一致性自证：构建的必须是触发本次运行的那个 commit
+      - name: Assert checked out SHA matches workflow run
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          echo "run sha    : ${EXPECTED_SHA}"
+          echo "checked-out: ${ACTUAL_SHA}"
+          if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "ERROR: checkout 的 commit 与本次运行的 commit 不一致，拒绝构建" >&2
+            exit 1
+          fi
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "image=$(echo "${IMAGE_BASE}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Read version from package.json
+        id: version
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if ! echo "${V}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: package.json version 非法: ${V}" >&2
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "本次版本: ${V}"
+
+      # ---------- Docker Hub 凭据（没配就跳过推送） ----------
+      - name: Check Docker Hub credentials
+        id: dh
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "${DH_USER}" ] && [ -n "${DH_TOKEN}" ]; then
+            echo "user=$(echo "${DH_USER}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub 推送: 已启用"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub 推送: 未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，跳过"
+          fi
+
+      # ---------- 判断是否需要构建 ----------
+      - name: Check if build needed
+        id: check
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          NEW_VER: ${{ steps.version.outputs.version }}
+          DH_USER: ${{ steps.dh.outputs.user }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          MISSING=""
+
+          REPO_PATH="${IMAGE#ghcr.io/}"
+          ANON=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO_PATH}:pull" | jq -r .token || true)
+          EXISTING=$(curl -fsSL -H "Authorization: Bearer ${ANON}" \
+                       "https://ghcr.io/v2/${REPO_PATH}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
+          if [ -z "${EXISTING}" ]; then
+            EXISTING=$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         "https://ghcr.io/v2/${REPO_PATH}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
+          fi
+          echo "GHCR 现有 tags: ${EXISTING:-（无）}"
+          echo "${EXISTING}" | grep -qx "${NEW_VER}" || MISSING="ghcr"
+
+          if [ -n "${DH_USER}" ] && [ -n "${DH_TOKEN}" ]; then
+            DH_REPO="${DH_USER}/sub-aggregation"
+            DH_T=$(curl -fsSL -u "${DH_USER}:${DH_TOKEN}" \
+                     "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${DH_REPO}:pull" \
+                     | jq -r .token || true)
+            DH_TAGS=$(curl -fsSL -H "Authorization: Bearer ${DH_T}" \
+                        "https://registry-1.docker.io/v2/${DH_REPO}/tags/list" | jq -r '.tags[]?' 2>/dev/null || true)
+            echo "Docker Hub 现有 tags: ${DH_TAGS:-（无）}"
+            echo "${DH_TAGS}" | grep -qx "${NEW_VER}" || MISSING="${MISSING:+${MISSING},}dockerhub"
+          fi
+
+          if [ -z "${MISSING}" ]; then
+            echo "版本 ${NEW_VER} 两个 registry 都已有，无需构建"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "版本 ${NEW_VER} 在 ${MISSING} 缺失，开始构建"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: steps.check.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: steps.check.outputs.should_build == 'true' && steps.dh.outputs.enabled == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        if: steps.check.outputs.should_build == 'true'
+        env:
+          GHCR_IMAGE: ${{ steps.image.outputs.image }}
+          DH_USER: ${{ steps.dh.outputs.user }}
+          DH_ENABLED: ${{ steps.dh.outputs.enabled }}
+          VER: ${{ steps.version.outputs.version }}
+        run: |
+          # v2.38.0 发布约定：只推**版本号标签**，不推 / 不覆盖 latest。
+          {
+            echo "tags<<EOF"
+            echo "${GHCR_IMAGE}:${VER}"
+            if [ "${DH_ENABLED}" = "true" ]; then
+              echo "${DH_USER}/sub-aggregation:${VER}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        if: steps.check.outputs.should_build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
   # 推送即自动打 tag + 发 Release（版本号未变化的推送会跳过）
   #
   # v2.38.0 发布约定：本次发布**不自动创建 Git 标签、不自动创建 GitHub Release**。

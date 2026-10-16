@@ -1,27 +1,29 @@
 # ============================================================
-# 构建 & 推送 NAS 版镜像
+# 手动镜像构建入口（重试 / 补推）
 #
-# 触发:
-#   1. push 到 main：版本号（package.json）未变化时自动跳过，不白打镜像
-#   2. 手动: Actions 页面 workflow_dispatch
+# 阶段 1 / P1 修复：**push 自动触发已移除**。
+#    镜像构建已迁入 ci-cd.yml 的 `image` job（needs: test），
+#    只有对应 commit 的 CI 全部通过后才会构建推送，
+#    从根本上杜绝「CI 红灯但镜像已发布」。
+#    本文件保留为**纯手动**入口，用于：
+#      · CI 已通过但推送阶段失败，需要重试；
+#      · 某个 registry 缺标签，需要补推（判重逻辑会自动处理）。
 #
 # 推到两个 registry:
-#   - GHCR（主）: ghcr.io/<repo>:latest / :<version>
+#   - GHCR（主）: ghcr.io/<repo>:<version>
 #   - Docker Hub（可选，配了 DOCKERHUB_USERNAME + DOCKERHUB_TOKEN 才推）:
-#     <user>/sub-aggregation:latest / :<version>
-#   推 Docker Hub 是为了 NAS：飞牛 fnOS 的「镜像可更新」检测只认 Docker Hub，
-#   GHCR 这类第三方仓库不检测。没配 secret 时自动跳过，不影响构建。
+#     <user>/sub-aggregation:<version>
+#   推 Docker Hub 是为了 NAS：飞牛 fnOS 的「镜像可更新」检测只认 Docker Hub。
 #
 # 说明:
-#   - 镜像版本号跟随 package.json 的 version，与 CF 版共用同一个版本号
-#   - 只出 linux/amd64（NAS 是 x86_64），不折腾多架构
-#   - Dockerfile 内部会跑 npm test，测试不通过就不出包
+#   - 镜像版本号跟随 package.json 的 version
+#   - 只出 linux/amd64（NAS 是 x86_64）
+#   - 只推版本号标签，不推 / 不覆盖 latest
 # ============================================================
-name: Build NAS image
+name: Build NAS image (manual)
 
 on:
-  push:
-    branches: [main]
+  # 仅保留手动触发；push 触发见 ci-cd.yml 的 image job（needs: test）
   workflow_dispatch:
 
 env:
