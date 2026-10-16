@@ -55,7 +55,7 @@ jobs:
   image:
     name: Build & push image
     needs: test
-    if: needs.test.result == 'success'
+    if: github.event_name != 'pull_request' && needs.test.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
