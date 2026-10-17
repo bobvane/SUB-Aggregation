@@ -86,6 +86,9 @@ describe('prewarmIpGeo：无法解析的服务器必须计入 unresolved（不�
   it('空输入不产生任何伪统计', async () => {
     const { cache } = makeCache();
     const res = await prewarmIpGeo([], cache, makeFetch({}));
-    expect(res).toEqual({ total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0 });
+    expect(res).toEqual({
+      total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0,
+      requests: { dnsCached: 0, dnsQueried: 0, dohFallback: 0, ipApiRequests: 0, rateLimited: 0 },
+    });
   });
 });

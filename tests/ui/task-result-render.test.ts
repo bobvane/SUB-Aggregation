@@ -103,7 +103,7 @@ describe('国家码检测结果渲染（真实业务数据）', () => {
       success: true,
       data: { serverTotal: 12, targets: 0, total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0, unlocatedBefore: 0, unlocatedAfter: 0, unlocatedServers: [] },
     });
-    expect(out).toContain('本次没有需要检测的服务器');
+    expect(out).toContain('本次无需检测，没有发起外部查询');
     expect(cellOf(out, '服务器总数')).toBe('12'); // 服务器总数仍然是真实值
   });
 
@@ -171,5 +171,67 @@ describe('任务窗口按任务类型选择渲染器（防止再次串用模板�
     expect(geoFn).not.toContain('renderSuccess: renderProbeResult');
     expect(probeFn).toContain('renderSuccess: renderProbeResult');
     expect(probeFn).not.toContain('renderSuccess: renderGeoResult');
+  });
+});
+
+describe('国家码两种操作（v2.38.6）', () => {
+  const base = {
+    serverTotal: 12, targets: 0, total: 0, cached: 0, queried: 0,
+    resolved: 0, failed: 0, unresolved: 0, unlocatedBefore: 0, unlocatedAfter: 0, unlocatedServers: [],
+  };
+
+  it('补全模式 + 全部已识别：明确说明无需检测且未发起外部查询', () => {
+    const out = renderGeoResult({ success: true, data: { ...base, scope: 'unlocated' } });
+    expect(out).toContain('全部服务器已有有效国家码，本次无需检测，没有发起外部查询');
+    expect(cellOf(out, '服务器总数')).toBe('12');
+    expect(cellOf(out, '本次待检测')).toBe('0');
+  });
+
+  it('全量模式有明确的标题与缓存说明', () => {
+    const out = renderGeoResult({
+      success: true,
+      data: { ...base, scope: 'all', targets: 12, total: 12, cached: 5, queried: 7, resolved: 6, failed: 1, unlocatedBefore: 12, unlocatedAfter: 6 },
+    });
+    expect(out).toContain('国家码全量重检结果');
+    expect(out).toContain('全量重检仍会优先命中已有缓存');
+  });
+
+  it('展示真实外部请求计数', () => {
+    const out = renderGeoResult({
+      success: true,
+      data: {
+        ...base, scope: 'unlocated', targets: 3, total: 3, cached: 1, queried: 2, resolved: 2, failed: 1, unlocatedBefore: 3, unlocatedAfter: 1,
+        requests: { dnsCached: 4, dnsQueried: 2, dohFallback: 1, ipApiRequests: 1, rateLimited: 0 },
+      },
+    });
+    expect(cellOf(out, '域名解析命中缓存')).toBe('4');
+    expect(cellOf(out, '发出 DNS 请求')).toBe('2');
+    expect(cellOf(out, '其中回退 Cloudflare')).toBe('1');
+    expect(cellOf(out, '归属地请求（ip-api）')).toBe('1');
+    expect(cellOf(out, '限流未处理（待重试）')).toBe('0');
+  });
+
+  it('限流未处理时给出说明', () => {
+    const out = renderGeoResult({
+      success: true,
+      data: { ...base, scope: 'all', targets: 2, total: 2, unlocatedBefore: 2, unlocatedAfter: 2, requests: { dnsCached: 0, dnsQueried: 2, dohFallback: 0, ipApiRequests: 1, rateLimited: 5 } },
+    });
+    expect(out).toContain('因 15 次/分钟限流本次未查询');
+  });
+
+  it('旧服务端没有 requests 字段时不渲染该区块也不崩溃', () => {
+    const out = renderGeoResult({ success: true, data: { ...base, scope: 'unlocated', targets: 1, total: 1, unlocatedBefore: 1, unlocatedAfter: 0, resolved: 1 } });
+    expect(out).not.toContain('外部请求（真实计数）');
+    expect(out).toContain('国家码补全结果');
+  });
+
+  it('页面提供两个明确入口，且全量需要二次确认、按 scope 传参', () => {
+    expect(source).toContain(`redetectGeo('unlocated')`);
+    expect(source).toContain(`redetectGeo('all')`);
+    const i = source.indexOf('async function redetectGeo');
+    const fn = source.slice(i, i + 1600);
+    expect(fn).toContain('window.confirm');
+    expect(fn).toContain('if (!ok) return');
+    expect(fn).toContain('JSON.stringify({ scope: mode })');
   });
 });

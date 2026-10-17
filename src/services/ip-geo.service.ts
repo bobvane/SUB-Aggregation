@@ -25,6 +25,10 @@ const MAX_BATCHES = 5; // 单次触发最多 5 批（500 个 IP）
 const RATE_LIMIT_REQUESTS = 15;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 分钟
 const IP_GEO_CACHE_MS = 30 * 24 * 60 * 60 * 1000; // 30 天缓存
+// v2.38.6：域名 → IP 解析结果缓存（6 小时）。此前每次预填充都对所有域名重新 DoH，
+// 订阅更新/手动重检/每分钟 cron 重试会重复消耗 Google/Cloudflare DoH 配额。
+const DNS_CACHE_KEY_PREFIX = 'dns_ip:';
+const DNS_CACHE_MS = 6 * 60 * 60 * 1000; // 6 小时
 
 // DoH 端点：Google + Cloudflare 双选，任一成功即可
 const DOH_ENDPOINTS = [
@@ -49,15 +53,43 @@ function isPureIP(server: string): boolean {
  */
 export async function resolveDomainToIP(
   server: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  opts?: { cache?: IpGeoCache; stats?: GeoRequestStats }
 ): Promise<string | null> {
   if (!server) return null;
   // 已经是纯 IP，无需 DNS
   if (isPureIP(server)) return server;
 
+  const cache = opts?.cache;
+  const stats = opts?.stats;
+  const cacheKey = DNS_CACHE_KEY_PREFIX + server;
+
+  // 0. DNS 缓存（v2.38.6）：6 小时内同一 server 不重复发 DoH
+  if (cache) {
+    try {
+      const raw = await cache.get(cacheKey);
+      if (raw) {
+        const [ts, ip] = raw.split('|');
+        if (ts && ip && Date.now() - Number(ts) < DNS_CACHE_MS && isPureIP(ip)) {
+          if (stats) stats.dnsCached++;
+          return ip;
+        }
+      }
+    } catch {
+      // 缓存不可用不阻塞解析
+    }
+  }
+
+  let attempt = 0;
   for (const ep of DOH_ENDPOINTS) {
+    const isFallback = attempt > 0;
+    attempt++;
     try {
       const url = `${ep.url}?type=A&${ep.param}=${encodeURIComponent(server)}`;
+      if (stats) {
+        stats.dnsQueried++;
+        if (isFallback) stats.dohFallback++;
+      }
       const res = await fetchFn(url, {
         signal: AbortSignal.timeout(5000),
         headers: { accept: 'application/dns-json' },
@@ -67,7 +99,16 @@ export async function resolveDomainToIP(
       if (data.Status === 0 && Array.isArray(data.Answer)) {
         for (const ans of data.Answer) {
           // type 1 = A record (IPv4)
-          if (ans.type === 1 && isPureIP(ans.data)) return ans.data;
+          if (ans.type === 1 && isPureIP(ans.data)) {
+            if (cache) {
+              try {
+                await cache.set(cacheKey, `${Date.now()}|${ans.data}`);
+              } catch {
+                // 写缓存失败不影响本次解析
+              }
+            }
+            return ans.data;
+          }
         }
       }
     } catch {
@@ -93,7 +134,8 @@ export interface IpGeoCache {
 export async function batchQuery(
   ips: string[],
   cache: IpGeoCache,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  stats?: GeoRequestStats
 ): Promise<Map<string, string | null>> {
   if (!ips.length) return new Map();
   // 1. 检查缓存（仅用于单个 IP）
@@ -146,7 +188,9 @@ export async function batchQuery(
     }
   } catch {}
 
-  for (let offset = 0; offset < uncached.length && offset < MAX_BATCHES * BATCH_LIMIT; offset += BATCH_LIMIT) {
+  const hardCap = MAX_BATCHES * BATCH_LIMIT;
+  let offset = 0;
+  for (; offset < uncached.length && offset < hardCap; offset += BATCH_LIMIT) {
     // 超限流：停止后续批次（剩余保持未识别，等下次触发重检）
     if (history.length >= RATE_LIMIT_REQUESTS) break;
 
@@ -156,6 +200,7 @@ export async function batchQuery(
 
     let responses: IpApiBatchResponse[];
     try {
+      if (stats) stats.ipApiRequests++;
       const res = await fetchFn(IP_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -194,6 +239,10 @@ export async function batchQuery(
       }
     }
   }
+  // v2.38.6：因限流 / 单次上限而没查到的 IP 必须可观测（不静默丢失）
+  if (stats && offset < uncached.length) {
+    stats.rateLimited += uncached.length - offset;
+  }
 
   return result;
 }
@@ -217,6 +266,24 @@ export async function singleQuery(
   }
 }
 
+/** v2.38.6：一次预填充的外部请求计数（用于可观测性与额度评估，全部为真实计数） */
+export interface GeoRequestStats {
+  /** 命中 DNS 缓存、未发 DoH 的 server 数 */
+  dnsCached: number;
+  /** 实际发出的 DoH 请求数（Google + Cloudflare 合计） */
+  dnsQueried: number;
+  /** 其中 Google DoH 失败后回退 Cloudflare 的次数 */
+  dohFallback: number;
+  /** 实际发出的 ip-api 批量请求数 */
+  ipApiRequests: number;
+  /** 因 15 次/分钟限流被跳过的待查 IP 数（会留到下次重试） */
+  rateLimited: number;
+}
+
+export function emptyGeoRequestStats(): GeoRequestStats {
+  return { dnsCached: 0, dnsQueried: 0, dohFallback: 0, ipApiRequests: 0, rateLimited: 0 };
+}
+
 export interface PrewarmResult {
   /** 本次待检测的 server 数（去重后） */
   total: number;
@@ -234,6 +301,8 @@ export interface PrewarmResult {
    * 导致前端把「没查到」显示成 0；必须显式统计，避免缺失数据伪装成真实的 0。
    */
   unresolved: number;
+  /** v2.38.6：外部请求计数明细（Google/Cloudflare DoH、ip-api、缓存命中、限流跳过） */
+  requests: GeoRequestStats;
 }
 
 /**
@@ -243,7 +312,8 @@ export interface PrewarmResult {
  * 不再触发任何 HTTP；真正的外网查询只在此处发生。
  *
  * 流程：
- *   1. 逐个 server 用 DoH 解析域名 → IP，记录 server→ip 映射
+ *   1. 逐个 server 解析域名 → IP：优先命中 DNS 缓存（6 小时 TTL，v2.38.6），
+ *      未命中才发 DoH（Google 优先，失败回退 Cloudflare）；纯 IP 直接短路
  *   2. 按 IP 去重，查 KV 缓存（30 天 TTL），命中且未过期则跳过
  *   3. 未命中项交给 batchQuery 合并成单次批量查询（≤100/IP/次自动分批 + 15 次/分钟限流）
  *   4. 结果同时写回两份缓存：ip_geo:{IP}（batchQuery 内部）和 ip_geo:{server}（统计口径）
@@ -263,6 +333,7 @@ export async function prewarmIpGeo(
     resolved: 0,
     failed: 0,
     unresolved: 0,
+    requests: emptyGeoRequestStats(),
   };
   if (unique.length === 0) return result;
 
@@ -270,7 +341,7 @@ export async function prewarmIpGeo(
   const serverToIp = new Map<string, string>();
   for (const server of unique) {
     try {
-      const ip = await resolveDomainToIP(server, fetchFn);
+      const ip = await resolveDomainToIP(server, fetchFn, { cache, stats: result.requests });
       if (ip) serverToIp.set(server, ip);
       // 解析失败：server 无法确定归属，跳过（不调用 batchQuery）
     } catch {
@@ -319,7 +390,7 @@ export async function prewarmIpGeo(
   // 2. 未命中项批量合并查询（batchQuery 内部写 ip_geo:{IP} 缓存）
   if (uncached.length > 0) {
     result.queried = uncached.length;
-    const map = await batchQuery(uncached, cache, fetchFn);
+    const map = await batchQuery(uncached, cache, fetchFn, result.requests);
     for (const [ip, country] of map) {
       if (country) ipToCountry.set(ip, country);
     }

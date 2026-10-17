@@ -16,6 +16,7 @@ import {
 } from '@/parser';
 import { nodeFingerprint } from '@/services/node-probe.service';
 import { createOperationLog } from '@/services/operation-log.service';
+import { createSnapshotCache } from '@/services/config-cache.service';
 
 const NODE_LINK_PREFIXES = ['vmess://', 'vless://', 'trojan://', 'ss://', 'ssr://', 'hysteria2://', 'tuic://'];
 
@@ -134,7 +135,9 @@ export function createSubscriptionService(
   kv: KVStorage
 ): SubscriptionService {
   const opLog = createOperationLog(kv);
-  
+  // v2.38.6：订阅数据变化必须让 mihomo 快照失效（手动/自动更新共用本服务，避免漏掉自动路径）
+  const snapshotCache = createSnapshotCache(kv);
+
   return {
     async list() {
       return repos.subscriptions.list();
@@ -155,7 +158,10 @@ export function createSubscriptionService(
     async setEnabled(id: string, enabled: boolean) {
       const existing = await repos.subscriptions.getById(id);
       if (!existing) return null;
-      return repos.subscriptions.update(id, { enabled });
+      const updated = await repos.subscriptions.update(id, { enabled });
+      // v2.38.6：启用/停用会改变进配置的节点集合 → 快照失效
+      await snapshotCache.invalidateAll();
+      return updated;
     },
 
     async update(id: string, fetcher: (url: string) => Promise<string>) {
@@ -199,7 +205,15 @@ export function createSubscriptionService(
           errorMessage: undefined,
         });
 
-        // 10. 记录操作日志
+        // 10. v2.38.6：节点数据已落库 → 配置快照失效（不重拉订阅、不测速、不查国家码）
+        //     失败只告警不回滚：数据已写入，下一次显式动作仍可修正快照。
+        try {
+          await snapshotCache.invalidateAll();
+        } catch (e) {
+          console.warn('[SubscriptionUpdate] 配置快照失效失败(不影响本次更新):', (e as Error).message);
+        }
+
+        // 11. 记录操作日志
         await opLog.logSubscriptionUpdate(existing.name, diff.added, diff.removed, diff.unchanged, diff.changed);
 
         return {

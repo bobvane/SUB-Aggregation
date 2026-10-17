@@ -5,11 +5,12 @@
  * version 来自 setting:config_version
  * 
  * 失效点（写后即增 version）：
- * - 订阅更新（节点变化）
- * - 规则保存
- * - 分组保存
- * - 禁用节点变更
- * - 清洗规则应用
+ * - **订阅更新成功落库后**（subscription.service.update）—— v2.38.6 补齐；
+ *   此前只有手动动作会失效，导致订阅新增节点后 mihomo 快照长期是旧的
+ * - 订阅启用/停用（subscription.service.setEnabled）
+ * - 规则选择 / 整组开关 / 自定义规则
+ * - 禁用节点 / 锁定节点
+ * - 手动「刷新输出配置」（POST /api/output/refresh）
  */
 
 import { KVStorage } from '@/storage/kv';
@@ -19,6 +20,8 @@ import { APP_META } from '@/meta';
 export interface SnapshotCache {
   getCachedConfig(format: string): Promise<{ content: string; etag: string; version: number } | null>;
   setCachedConfig(format: string, content: string, version: number): Promise<void>;
+  /** 只读查看「当前版本」下是否已有该格式快照，不触发生成 */
+  peek(format: string): Promise<{ version: number; generatedAt: number } | null>;
   invalidateAll(): Promise<void>;
   getVersion(): Promise<number>;
   incrementVersion(): Promise<number>;
@@ -63,6 +66,20 @@ export function createSnapshotCache(kv: KVStorage, appVersion: string = APP_META
       const etag = await generateETag(content);
       const key = KV_KEYS.configSnapshot(format, snapVersion(version));
       await kv.put(key, JSON.stringify({ content, etag, version, timestamp: Date.now() }));
+    },
+
+    async peek(format: string) {
+      const version = await this.getVersion();
+      const key = KV_KEYS.configSnapshot(format, snapVersion(version));
+      const raw = await kv.get(key);
+      if (!raw) return null;
+      try {
+        const cached = JSON.parse(raw) as { version: number; timestamp?: number };
+        if (cached.version !== version) return null;
+        return { version: cached.version, generatedAt: cached.timestamp ?? 0 };
+      } catch {
+        return null;
+      }
     },
 
     async invalidateAll() {

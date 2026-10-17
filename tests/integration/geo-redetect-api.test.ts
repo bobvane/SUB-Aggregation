@@ -140,7 +140,7 @@ describe('geo-redetect API 数据契约', () => {
     vi.stubGlobal('fetch', makeFetch({ 'hk.example.com': '1.2.3.4' }, 'HK'));
     const d = await call();
     expect(Object.keys(d).sort()).toEqual(
-      ['cached', 'failed', 'queried', 'resolved', 'serverTotal', 'targets', 'total', 'unlocatedAfter', 'unlocatedBefore', 'unlocatedServers', 'unresolved'].sort(),
+      ['cached', 'failed', 'queried', 'requests', 'resolved', 'scope', 'serverTotal', 'targets', 'total', 'unlocatedAfter', 'unlocatedBefore', 'unlocatedServers', 'unresolved'].sort(),
     );
   });
 
