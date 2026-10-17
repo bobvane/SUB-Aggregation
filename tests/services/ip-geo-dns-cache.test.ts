@@ -27,7 +27,7 @@ function makeFetch(opts: { google?: 'ok' | 'fail'; cloudflare?: 'ok' | 'fail'; i
       return { ok: true, json: async () => payload.map(() => ({ status: 'success', countryCode: opts.ip === null ? undefined : 'JP' })) };
     }
     const host = new URL(url).host;
-    if (host.includes('dns.google')) {
+    if (host === 'dns.google') {
       if (opts.google === 'fail') return { ok: false, json: async () => ({}) };
       return { ok: true, json: async () => ({ Status: 0, Answer: [{ type: 1, data: '1.2.3.4' }] }) };
     }
@@ -67,7 +67,7 @@ describe('resolveDomainToIP：DNS 缓存（v2.38.6）', () => {
     const ip = await resolveDomainToIP('a.example.com', fetchFn, { cache, stats });
     expect(ip).toBe('1.2.3.4');
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain('dns.google');
+    expect(new URL(calls[0]).host).toBe('dns.google');
     expect(stats.dohFallback).toBe(0);
   });
 
@@ -79,7 +79,7 @@ describe('resolveDomainToIP：DNS 缓存（v2.38.6）', () => {
     expect(ip).toBe('5.6.7.8');
     expect(stats.dnsQueried).toBe(2);
     expect(stats.dohFallback).toBe(1);
-    expect(calls.some((u) => u.includes('cloudflare-dns.com'))).toBe(true);
+    expect(calls.map((u) => new URL(u).host)).toContain('cloudflare-dns.com');
   });
 
   it('纯 IP 不发 DNS 请求', async () => {
@@ -101,7 +101,7 @@ describe('prewarmIpGeo：复用 DNS 缓存，避免重复 DoH', () => {
 
     const f2 = makeFetch({ google: 'ok' });
     const r2 = await prewarmIpGeo(['a.example.com', 'b.example.com'], cache, f2.fetchFn);
-    expect(f2.calls.filter((u) => u.includes('dns.google'))).toHaveLength(0);
+    expect(f2.calls.map((u) => new URL(u).host).filter((h) => h === 'dns.google')).toHaveLength(0);
     expect(r2.requests.dnsCached).toBe(2);
     expect(r2.requests.dnsQueried).toBe(0);
   });
