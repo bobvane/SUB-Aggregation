@@ -55,8 +55,11 @@ describe('前端 HTML 缓存', () => {
       new Blob([gzBytes]).stream().pipeThrough(new DecompressionStream('gzip'))
     ).text();
     expect(raw).toBe(plainText);
-    // 确实变小了（107KB → 20KB 量级）
-    expect(gzBytes.byteLength).toBeLessThan(plainText.length / 3);
+    // 确实变小了：按 **UTF-8 字节** 比较才是正确基准（plainText.length 是 JS 字符数，
+    // 中文占 3 字节，用它当分母会随文案增长而失真）。v2.38.6 改为字节比例。
+    const plainBytes = new TextEncoder().encode(plainText).byteLength;
+    expect(gzBytes.byteLength).toBeLessThan(plainBytes);
+    expect(gzBytes.byteLength).toBeLessThan(plainBytes * 0.5);
   });
 
   it('gzip 客户端带对应 ETag 复访应命中 304', async () => {

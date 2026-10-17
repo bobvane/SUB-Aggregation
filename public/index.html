@@ -427,7 +427,8 @@ tbody tr:hover { background: var(--accent-soft); }
       <span>🕒 上次连通性探测 <b id="statsLastProbe">未探测</b></span>
       <span style="color:var(--text2)">（去重依据：IP + 端口 + 协议）</span>
       <span style="margin-left:auto">
-        <button class="btn btn-sm" id="btnGeoRedetect" onclick="redetectGeo()">🔄 重新检测国家码</button>
+        <button class="btn btn-sm" id="btnGeoRedetect" onclick="redetectGeo('unlocated')" title="只为还没有国家码的服务器补全，已有的不重复查询">🔄 补全未识别国家码</button>
+        <button class="btn btn-sm" id="btnGeoRedetectAll" onclick="redetectGeo('all')" title="对全部服务器重新解析并按需查询归属地，可能产生额外 DNS / 外部请求">♻️ 全量重检</button>
       </span>
     </div>
     <div id="geoPendingBanner" class="card" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px;border-left:4px solid var(--danger);box-shadow:var(--shadow-sm)"></div>
@@ -514,7 +515,16 @@ tbody tr:hover { background: var(--accent-soft); }
         <button class="btn" onclick="previewOutputFormat()">👁️ 预览配置</button>
       </div>
     </div>
-    <div id="outputNodeCount" style="font-size:14px;color:var(--text2);margin-bottom:16px">0 个节点</div>
+    <div class="card" style="margin-bottom:16px;padding:12px 16px">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px">
+        <b style="font-size:14px">📊 同步状态</b>
+        <span id="outputNodeCount" style="font-size:14px;color:var(--text2)">加载中…</span>
+        <span style="margin-left:auto"></span>
+        <button class="btn btn-sm" id="btnOutputRefresh" onclick="refreshOutputConfig()">🔄 使用最新节点刷新输出配置</button>
+      </div>
+      <div id="outputSyncDetail" style="font-size:13px;color:var(--text2);margin-top:8px;line-height:1.75"></div>
+      <div style="font-size:12px;color:var(--text2);margin-top:6px;opacity:.85">该操作只重新生成输出配置：不重新拉取订阅、不重新测速、也不强制重新检测国家码。</div>
+    </div>
     <div id="outputLinks"></div>
   </div>
 
@@ -941,12 +951,15 @@ function renderProbeResult(res) {
 }
 
 /**
- * 国家码结果：POST /api/nodes/geo-redetect
- * → { data:{ serverTotal, targets, cached, queried, resolved, failed, unresolved,
- *            unlocatedBefore, unlocatedAfter, unlocatedServers } }
+ * 国家码结果（v2.38.6）
+ * POST /api/nodes/geo-redetect →
+ * { data:{ scope, serverTotal, targets, cached, queried, resolved, failed, unresolved,
+ *          unlocatedBefore, unlocatedAfter, unlocatedServers,
+ *          requests:{ dnsCached, dnsQueried, dohFallback, ipApiRequests, rateLimited } } }
  *
- * 口径（v2.38.5）：serverTotal/检测前后未识别/待检测/新识别/仍无法识别/无法解析 为服务器级；
- * cached/queried 为 IP 级。缺失字段显示「暂无数据」，不伪装成 0；响应结构异常时明确报错。
+ * 口径：serverTotal / targets / 检测前后未识别 / 新识别 / 仍无法识别 / 无法解析 为**服务器级**；
+ * cached / queried 与 requests 中的 DNS、ip-api 计数为**请求级**，两类不可相加。
+ * 缺失字段显示「暂无数据」，不伪装成 0；响应结构异常时明确报错。
  */
 function renderGeoResult(res) {
   const d = (res && res.data) || null;
@@ -954,6 +967,7 @@ function renderGeoResult(res) {
     return '<div class="task-result-title err">❌ 结果数据缺失</div>'
       + '<div class="task-result-note">服务端未返回国家码检测结果（响应结构异常）。请关闭窗口后重试；若持续出现，请确认服务端与前端版本一致。</div>';
   }
+  const isAll = d.scope === 'all';
   const targets = (d.targets !== undefined) ? d.targets : d.total;
   const serverRows = [
     taskRow('服务器总数', taskNum(d.serverTotal)),
@@ -968,20 +982,42 @@ function renderGeoResult(res) {
     taskRow('缓存命中（IP）', taskNum(d.cached)),
     taskRow('本次查询（IP）', taskNum(d.queried)),
   ];
-  let html = '<div class="task-result-title ok">📊 国家码检测结果</div>'
-    + '<div class="task-result-sub">服务器</div>'
+  let html = '<div class="task-result-title ok">' + (isAll ? '📊 国家码全量重检结果' : '📊 国家码补全结果') + '</div>'
+    + '<div class="task-result-sub">服务器（按地址去重）</div>'
     + '<div class="task-result-grid">' + serverRows.join('') + '</div>'
     + '<div class="task-result-sub">本次检测</div>'
     + '<div class="task-result-grid">' + detectRows.join('') + '</div>';
 
   if (targets === 0) {
-    html += '<div class="task-result-note">本次没有需要检测的服务器（全部已识别国家码），未发起外部查询。</div>';
+    html += '<div class="task-result-note">'
+      + (isAll
+        ? '当前没有可检测的服务器。'
+        : '全部服务器已有有效国家码，本次无需检测，没有发起外部查询。')
+      + '</div>';
+  } else if (isAll) {
+    html += '<div class="task-result-note">全量重检仍会优先命中已有缓存（域名解析 6 小时 / 归属地 30 天），只有未命中的部分才会产生外部请求；实际请求数见下方「外部请求」。</div>';
   }
   if (typeof d.unresolved === 'number' && d.unresolved > 0) {
     html += '<div class="task-result-note">其中 ' + d.unresolved + ' 台服务器的地址无法解析为 IP（域名解析失败或为保留地址），未进入归属地查询。</div>';
   }
   if (typeof d.failed === 'number' && d.failed > 0) {
     html += '<div class="task-result-note">其中 ' + d.failed + ' 台服务器已查询但仍无国家码（归属地库无记录），会由后台重试继续兜底。</div>';
+  }
+  // 外部请求真实计数（v2.38.6）：只展示服务端确实上报的字段
+  const rq = d.requests;
+  if (rq && typeof rq === 'object') {
+    const reqRows = [
+      taskRow('域名解析命中缓存', taskNum(rq.dnsCached)),
+      taskRow('发出 DNS 请求', taskNum(rq.dnsQueried)),
+      taskRow('其中回退 Cloudflare', taskNum(rq.dohFallback)),
+      taskRow('归属地请求（ip-api）', taskNum(rq.ipApiRequests)),
+      taskRow('限流未处理（待重试）', taskNum(rq.rateLimited)),
+    ];
+    html += '<div class="task-result-sub">外部请求（真实计数）</div>'
+      + '<div class="task-result-grid">' + reqRows.join('') + '</div>';
+    if (typeof rq.rateLimited === 'number' && rq.rateLimited > 0) {
+      html += '<div class="task-result-note">有 ' + rq.rateLimited + ' 个地址因 15 次/分钟限流本次未查询，会留到下次补全或后台重试，不会丢失。</div>';
+    }
   }
   const list = Array.isArray(d.unlocatedServers) ? d.unlocatedServers.filter(Boolean) : [];
   if (list.length) {
@@ -1593,14 +1629,31 @@ async function loadGeoPending() {
 
 // 手动触发重新检测未识别国家码（POST /api/nodes/geo-redetect，复用后端批次+限流管线）
 // 任务窗口：running → success/failed，结果保留在窗口内，仅右上角 X 关闭
-async function redetectGeo() {
+/**
+ * 国家码检测（v2.38.6 区分为两种操作）
+ * - 'unlocated'：只补全没有有效国家码的服务器（默认，不发多余外部请求）
+ * - 'all'     ：全量重检（用户二次确认后才发请求；可能产生额外 DNS / 归属地查询）
+ */
+async function redetectGeo(scope) {
+  const mode = scope === 'all' ? 'all' : 'unlocated';
+  if (mode === 'all') {
+    const ok = window.confirm(
+      '全量重新检测国家码\n\n' +
+      '将对全部服务器重新解析域名并按需查询归属地。\n' +
+      '• 已命中缓存（域名 6 小时 / 归属地 30 天）的不会重复外发请求\n' +
+      '• 未命中缓存的部分会产生额外的 DNS 与外部查询，可能较慢\n' +
+      '• 不会重新拉取订阅，也不会重新测速\n\n' +
+      '确定继续？'
+    );
+    if (!ok) return; // 取消：不产生任何请求
+  }
+  const capMs = mode === 'all' ? 180000 : 120000;
   const outcome = await runNodeTask({
-    title: '🔍 正在重新检测国家码…',
-    successTitle: '🔍 国家码检测完成',
-    failedTitle: '🔍 国家码检测未完成',
-    capMs: 120000,
-    // 接口与参数保持原样
-    fn: () => api('/nodes/geo-redetect', { method: 'POST', body: JSON.stringify({ scope: 'unlocated' }), timeout: 120000 }),
+    title: mode === 'all' ? '🔍 正在全量重检国家码…' : '🔍 正在补全未识别国家码…',
+    successTitle: mode === 'all' ? '🔍 国家码全量重检完成' : '🔍 国家码补全完成',
+    failedTitle: mode === 'all' ? '🔍 国家码全量重检未完成' : '🔍 国家码补全未完成',
+    capMs,
+    fn: () => api('/nodes/geo-redetect', { method: 'POST', body: JSON.stringify({ scope: mode }), timeout: capMs }),
     renderSuccess: renderGeoResult,
   });
   if (!outcome.ok) return; // 结果（或失败原因）已保留在窗口内
@@ -1872,21 +1925,78 @@ async function toggleNodeLock(fp, locked) {
 
 // ============ Output ============
 function loadOutput() {
-  refreshNodeCount();
+  loadOutputStatus();
   renderOutputUrls();
 }
 
-async function refreshNodeCount() {
+/**
+ * 输出配置同步状态（v2.38.6）
+ * 全部数字来自 /api/output/status：与 getNodes() 同口径，不用节点列表总数冒充。
+ */
+async function loadOutputStatus() {
+  const summary = document.getElementById('outputNodeCount');
+  const detail = document.getElementById('outputSyncDetail');
   try {
-    const data = await api('/nodes');
-    state.nodes = data.data || [];
-    const total = state.nodes.length;
-    // 进配置 = 未被抛弃（锁定节点即使被抛弃也进配置），与 getNodes 同口径
-    const inConfig = state.nodes.filter(n => !(n.dropped && !n.locked)).length;
-    document.getElementById('outputNodeCount').textContent = `${inConfig} 个节点进配置（共 ${total}）`;
-    // 同步节点页锁定状态（如果已加载）
-    if (state.currentPage === 'nodes') renderNodes();
-  } catch { toast('刷新节点数失败', 'error'); }
+    const r = await api('/output/status');
+    const d = (r && r.data) || {};
+    const n = d.nodes || {};
+    const ex = n.excluded || {};
+    const inOut = Number(n.inOutput) || 0;
+    const ingested = Number(n.ingested) || 0;
+    summary.textContent = `${inOut} 个节点进配置（已入库 ${ingested}）`;
+
+    const lines = [];
+    if (typeof d.dataVersion === 'number') {
+      const snap = (d.formats && d.formats.mihomo) || {};
+      if (snap.state === 'generated' && !d.stale) {
+        lines.push(`配置已是最新（数据版本 v${d.dataVersion}）`);
+      } else {
+        lines.push(`配置待重新生成（数据版本 v${d.dataVersion}，快照未生成或已过期）`);
+      }
+    } else {
+      lines.push('配置版本状态未记录');
+    }
+    if (d.lastGeneratedAt) lines.push('最近生成：' + new Date(d.lastGeneratedAt).toLocaleString());
+
+    const reasons = [];
+    if (ex.subscriptionDisabled) reasons.push('停用订阅 ' + ex.subscriptionDisabled);
+    if (ex.disabled) reasons.push('手动禁用 ' + ex.disabled);
+    if (ex.dropped) reasons.push('已抛弃 ' + ex.dropped);
+    if (ex.removed) reasons.push('已删除 ' + ex.removed);
+    lines.push('未进配置：' + (reasons.length ? reasons.join(' / ') : '无'));
+
+    if (d.formats && d.formats.others && d.formats.others.mode === 'live') {
+      lines.push('其他格式（Sing-box / V2ray 等）为实时生成，不依赖快照');
+    }
+    if (d.background && d.background.geoRetryActive) {
+      lines.push('⚠️ 国家码补全仍在后台重试中');
+    }
+    detail.innerHTML = lines.map((x) => escHtml(x)).join('<br>');
+  } catch (e) {
+    if (summary) summary.textContent = '状态加载失败';
+    if (detail) detail.textContent = (e && e.message) || '未知错误';
+  }
+}
+
+/** 手动刷新输出配置：只失效 + 重新生成 mihomo，不重拉订阅/不测速/不查国家码 */
+async function refreshOutputConfig() {
+  const btn = document.getElementById('btnOutputRefresh');
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = '⏳ 刷新中…'; }
+  try {
+    const r = await api('/output/refresh', { method: 'POST', timeout: 60000 });
+    const d = (r && r.data) || {};
+    if (d.generated) {
+      const cnt = (d.nodes && d.nodes.inOutput) || 0;
+      toast(`输出配置已重新生成：${cnt} 个节点（${d.tookMs} ms）`);
+    } else {
+      toast('配置生成结果为空，请检查节点与规则', 'error');
+    }
+    await loadOutputStatus();
+  } catch (e) {
+    toast('刷新失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 使用最新节点刷新输出配置'; }
+  }
 }
 
 function renderOutputUrls() {

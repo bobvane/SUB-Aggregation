@@ -20,6 +20,31 @@ describe('配置快照缓存 × App 版本', () => {
     expect(await fresh.getCachedConfig('mihomo')).toBeNull();
   });
 
+  it('v2.38.6：用旧版本写回不会污染新版本（避免旧内容盖上新版本）', async () => {
+    const kv = new MemoryKvAdapter();
+    const cache = createSnapshotCache(kv, '2.38.6');
+
+    const captured = await cache.getVersion(); // 生成开始时的版本
+    await cache.incrementVersion();            // 生成期间有更新推进了版本
+
+    await cache.setCachedConfig('mihomo', 'proxies: []  # 基于旧数据生成', captured);
+    // 当前版本键仍是空的 → 下一次请求必须重新生成
+    expect(await cache.getCachedConfig('mihomo')).toBeNull();
+    expect(await cache.peek('mihomo')).toBeNull();
+  });
+
+  it('peek 只读当前版本快照，不生成、不改变版本', async () => {
+    const kv = new MemoryKvAdapter();
+    const cache = createSnapshotCache(kv, '2.38.6');
+    expect(await cache.peek('mihomo')).toBeNull();
+    const v = await cache.getVersion();
+    await cache.setCachedConfig('mihomo', 'x', v);
+    const snap = await cache.peek('mihomo');
+    expect(snap?.version).toBe(v);
+    expect(snap?.generatedAt).toBeGreaterThan(0);
+    expect(await cache.getVersion()).toBe(v);
+  });
+
   it('同版本内数据变更（config_version 自增）依旧失效', async () => {
     const kv = new MemoryKvAdapter();
     const cache = createSnapshotCache(kv, '2.35.0');

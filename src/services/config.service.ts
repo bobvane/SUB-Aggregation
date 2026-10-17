@@ -155,6 +155,36 @@ export interface ConfigService {
   countUnlocatedGeo(servers: string[]): Promise<number>;
   /** v2.32: 主动清除配置快照缓存(测试/订阅状态变更时调用) */
   resetCache(): Promise<void>;
+  /**
+   * v2.38.6：输出配置状态（全部来自真实数据，不做推算）。
+   * - dataVersion：当前 config_version（数据版本）
+   * - snapshot：mihomo 当前版本快照；null = 尚未生成或已失效
+   * - stale：快照缺失或版本落后 → 下次请求会重新生成
+   * - nodes.inOutput：与 getNodes() 完全同口径的“真正进配置”节点数
+   * - nodes.excluded：按**互斥**原因分类（同一节点只计一次，顺序：停用订阅 → 锁定豁免 → removed → 禁用 → 抛弃）
+   */
+  outputStatus(): Promise<OutputStatus>;
+}
+
+/** 输出配置状态（v2.38.6） */
+export interface OutputStatus {
+  dataVersion: number;
+  snapshot: { version: number; generatedAt: number } | null;
+  stale: boolean;
+  lastGeneratedAt: number | null;
+  nodes: {
+    /** 去重后的全部节点数（含停用订阅） */
+    ingested: number;
+    /** 真正进入输出配置的节点数 */
+    inOutput: number;
+    /** 被排除的节点数，按互斥原因分类 */
+    excluded: {
+      subscriptionDisabled: number;
+      removed: number;
+      disabled: number;
+      dropped: number;
+    };
+  };
 }
 
 const FORMAT_META: Record<OutputFormat, { contentType: string; filename: string }> = {
@@ -474,9 +504,12 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
     },
 
     async generate(format: OutputFormat): Promise<string> {
+      // v2.38.6：版本号在**读缓存之前**捕获，生成结束后写回沿用同一个版本。
+      // 若生成期间有订阅更新把 config_version 自增，这份内容只会写到旧版本键上
+      // （无人读取）→ 下一次请求必然 miss 并重新生成，避免“旧内容盖上新版本”。
+      const version = await snapshotCache.getVersion();
       // 只缓存 mihomo（90% 拉取量），singbox/v2ray 直接生成
       if (format === 'mihomo') {
-        const version = await snapshotCache.getVersion();
         const cached = await snapshotCache.getCachedConfig(format);
         if (cached && cached.version === version) {
           return cached.content;
@@ -506,9 +539,9 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
             new Set(await this.getDisabledGroupKeys()),
             buildScoreOf(nodes, healthByFp)
           );
-          // 写缓存
-          const newVersion = await snapshotCache.getVersion();
-          await snapshotCache.setCachedConfig(format, content, newVersion);
+          // 写缓存（沿用生成开始时的版本）
+          await snapshotCache.setCachedConfig(format, content, version);
+          await repos.settings.set('config_last_generated_at', String(Date.now()));
           break;
         case 'singbox':
           content = generateSingboxConfig(nodes);
@@ -536,6 +569,47 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
 
     async resetCache(): Promise<void> {
       await snapshotCache.invalidateAll();
+    },
+
+    async outputStatus(): Promise<OutputStatus> {
+      const dataVersion = await snapshotCache.getVersion();
+      const snapshot = await snapshotCache.peek('mihomo');
+      const lastRaw = await repos.settings.get('config_last_generated_at');
+      const lastNum = lastRaw ? Number(lastRaw) : NaN;
+      const lastGeneratedAt = Number.isFinite(lastNum) && lastNum > 0 ? lastNum : null;
+
+      // 口径严格对齐 getAll(true)/getAll()/getNodes()，不重复计数
+      const dedupAll = deduplicateNodes(await repos.nodes.getAll(true));
+      const dedupEnabled = deduplicateNodes(await repos.nodes.getAll());
+      const disabled = new Set(await this.getDisabledNodes());
+      const dropped = new Set(await this.getDroppedNodes());
+      const locked = new Set(await this.getLockedNodes());
+
+      const excluded = {
+        // 停用订阅的节点：getAll() 已排除，差值即数量（去重口径与上面一致）
+        subscriptionDisabled: Math.max(0, dedupAll.length - dedupEnabled.length),
+        removed: 0,
+        disabled: 0,
+        dropped: 0,
+      };
+      let inOutput = 0;
+      for (const n of dedupEnabled) {
+        const fp = nodeFingerprint(n);
+        // 与 getNodes() 完全一致的优先级：锁定豁免 → removed → 禁用 → 抛弃
+        if (locked.has(fp)) { inOutput++; continue; }
+        if (n.removed_at) { excluded.removed++; continue; }
+        if (disabled.has(fp)) { excluded.disabled++; continue; }
+        if (dropped.has(fp)) { excluded.dropped++; continue; }
+        inOutput++;
+      }
+
+      return {
+        dataVersion,
+        snapshot,
+        stale: !snapshot || snapshot.version !== dataVersion,
+        lastGeneratedAt,
+        nodes: { ingested: dedupAll.length, inOutput, excluded },
+      };
     },
   };
 }

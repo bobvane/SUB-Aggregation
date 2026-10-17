@@ -19,11 +19,10 @@ import { rateLimit, createKvRateLimit } from './rate-limit';
 import { nodeToLink } from '@/services/config.service';
 import { nodeFingerprint } from '@/models/node';
 import { deduplicateNodes } from '@/parser';
-import { prewarmIpGeo, type PrewarmResult } from '@/services/ip-geo.service';
+import { prewarmIpGeo, emptyGeoRequestStats, type PrewarmResult } from '@/services/ip-geo.service';
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
 import { RuleCatalogMeta } from '@/models/rule-catalog';
-import { createSnapshotCache } from '@/services/config-cache.service';
 
 /**
  * 请求是否走 https。
@@ -75,7 +74,7 @@ export function createApp(deps: AppDeps): Hono {
   // 没有 list/put：导致 GET /api/nodes/health 抛 500，且探测引擎在订阅更新后静默失败（异常被 waitUntil 吞掉），一条健康数据都写不进去。
   const storage: KVStorage = deps.storage ?? repos.kv;
   // v2.32: 配置快照缓存(用于订阅生效)
-  const snapshotCache = createSnapshotCache(storage);
+  // 配置快照的失效已下沉到 subscription.service / config.service（v2.38.6），路由层不再直接持有缓存实例。
   // 规则目录同步服务：默认用全局 fetch 拉 GitHub；测试可注入 mock
   const catalogSync: CatalogSyncService =
     deps.catalogSync ??
@@ -344,8 +343,7 @@ export function createApp(deps: AppDeps): Hono {
     }
     const sub = await subscriptions.setEnabled(id, body.enabled);
     if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
-    // v2.32: 禁用/启用节点时失效缓存
-    await snapshotCache.invalidateAll();
+    // 缓存失效已下沉到 subscription.service.setEnabled（v2.38.6），避免双重 version++。
     return c.json({ success: true, data: { id: sub.id, enabled: sub.enabled } });
   });
 
@@ -485,7 +483,10 @@ export function createApp(deps: AppDeps): Hono {
     // 3. 仅重检未识别项（默认 scope='unlocated'），全量则为所有 server
     const targets = body.scope === 'all' ? servers : await config.getUnlocatedServers(servers);
     // 与 prewarmIpGeo 返回同构；没有待检测项时保持真实 0（不是占位数据）
-    let result: PrewarmResult = { total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0 };
+    let result: PrewarmResult = {
+      total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0,
+      requests: emptyGeoRequestStats(),
+    };
     try {
       if (targets.length > 0) {
         result = await prewarmIpGeo(targets, ipGeoCache);
@@ -512,6 +513,8 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({
       success: true,
       data: {
+        // v2.38.6：回显本次作用域，前端据此区分「补全未识别」与「全量重检」
+        scope: body.scope === 'all' ? 'all' : 'unlocated',
         serverTotal: servers.length,
         targets: targets.length,
         total: result.total,
@@ -523,6 +526,8 @@ export function createApp(deps: AppDeps): Hono {
         unlocatedBefore: unlocatedBefore,
         unlocatedAfter,
         unlocatedServers,
+        // v2.38.6：真实外部请求计数（Google/Cloudflare DoH、ip-api、缓存命中、限流跳过）
+        requests: result.requests,
       },
     });
   });
@@ -623,6 +628,66 @@ export function createApp(deps: AppDeps): Hono {
   });
 
   // ============ Output API ============
+
+  // v2.38.6：输出配置同步状态。
+  // 必须注册在 /api/output/:format 之前，否则会被当成 format="status"。
+  // 所有数字来自真实数据（getNodes 口径 + 快照版本），不推算、不伪造“进行中”。
+  app.get('/api/output/status', requireAuth(auth), async (c) => {
+    const status = await config.outputStatus();
+    const { getGeoRetryGate } = await import('@/services/ip-geo.service');
+    const gate = await getGeoRetryGate(repos.settings);
+    return c.json({
+      success: true,
+      data: {
+        ...status,
+        formats: {
+          // mihomo 走版本化快照；其余格式每次实时生成 —— 状态必须分开表达
+          mihomo: status.snapshot
+            ? { mode: 'snapshot', state: 'generated', version: status.snapshot.version, generatedAt: status.snapshot.generatedAt }
+            : { mode: 'snapshot', state: 'not-generated' },
+          others: { mode: 'live' },
+        },
+        background: {
+          geoRetryActive: gate.active,
+          // 只有 GeoRetry 门闩是真实持久化的任务状态；其余后台任务没有状态记录
+          note: gate.active
+            ? '国家码补全仍在后台重试'
+            : '后台任务状态未记录（无法确认是否有任务正在运行）',
+        },
+      },
+    });
+  });
+
+  // v2.38.6：手动刷新输出配置。
+  // 只做：失效快照 → 立即生成 mihomo → 回报真实结果。
+  // 不重拉订阅、不重新测速、不触发国家码全量检测（生成期只读已有缓存，缺缓存才按既有逻辑补查）。
+  let outputRefreshing = false;
+  app.post('/api/output/refresh', requireAuth(auth), async (c) => {
+    if (outputRefreshing) {
+      return c.json({ success: false, error: { code: 'REFRESH_IN_PROGRESS', message: '正在刷新输出配置，请稍候' } }, 409);
+    }
+    outputRefreshing = true;
+    const t0 = Date.now();
+    try {
+      await config.resetCache();
+      const content = await config.generate('mihomo');
+      const status = await config.outputStatus();
+      return c.json({
+        success: true,
+        data: {
+          generated: content.length > 0,
+          bytes: content.length,
+          tookMs: Date.now() - t0,
+          dataVersion: status.dataVersion,
+          stale: status.stale,
+          nodes: status.nodes,
+          generatedAt: status.lastGeneratedAt,
+        },
+      });
+    } finally {
+      outputRefreshing = false;
+    }
+  });
 
   // 通用配置输出：/api/output/{format}（需登录）
   // 支持: mihomo / singbox / v2ray / v2rayn / nekoray / shadowrocket
