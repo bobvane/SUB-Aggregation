@@ -218,11 +218,22 @@ export async function singleQuery(
 }
 
 export interface PrewarmResult {
+  /** 本次待检测的 server 数（去重后） */
   total: number;
+  /** 命中 IP 缓存的 IP 数 */
   cached: number;
+  /** 实际发起归属地查询的 IP 数 */
   queried: number;
+  /** 已识别并写回 server 缓存的 server 数 */
   resolved: number;
+  /** 查到 IP 但归属地库无明确国家的 server 数 */
   failed: number;
+  /**
+   * 无法解析出 IP、因而**未进入查询**的 server 数。
+   * v2.38.5：此前这类 server 被静默丢弃（既不计 queried 也不计 failed），
+   * 导致前端把「没查到」显示成 0；必须显式统计，避免缺失数据伪装成真实的 0。
+   */
+  unresolved: number;
 }
 
 /**
@@ -251,6 +262,7 @@ export async function prewarmIpGeo(
     queried: 0,
     resolved: 0,
     failed: 0,
+    unresolved: 0,
   };
   if (unique.length === 0) return result;
 
@@ -265,6 +277,8 @@ export async function prewarmIpGeo(
       // 单个解析失败不阻塞
     }
   }
+  // 解析不出 IP 的 server 既不会被查询、也不会出现在 resolved/failed 里 —— 单独计数
+  result.unresolved = unique.length - serverToIp.size;
   if (serverToIp.size === 0) return result;
 
   // 1. 查缓存，构建 ip→country 映射（含缓存命中项，确保 server key 兜底回写）
