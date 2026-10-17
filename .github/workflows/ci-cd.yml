@@ -137,12 +137,35 @@ jobs:
             if [ -z "$MAX_PREV" ] || ver_gt "$v" "$MAX_PREV"; then MAX_PREV="$v"; fi
           done < <(git tag -l 'v[0-9]*')
           if [ -n "$MAX_PREV" ] && ! ver_gt "$VER" "$MAX_PREV"; then
-            echo "ERROR: $VER 必须严格高于已发布版本 $MAX_PREV，禁止复用或回退版本号" >&2
+            echo "ERROR: $VER 必须严格高于其它 tag 中的最大版本 $MAX_PREV，禁止复用或回退版本号" >&2
             exit 1
           fi
 
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "版本校验通过：$VER（上一个已发布版本：${MAX_PREV:-无}）"
+
+          # v2.38.8（A1）：tag 与「正式发布」必须分开表述 ——
+          # MAX_PREV 只是「其它 tag 里的最大版本」，tag 存在 ≠ 已发布（可能无 Release / 无镜像）。
+          echo "本次发布版本: $VER"
+          echo "其它 tag 中的最大版本: ${MAX_PREV:-无}"
+          RELEASE_PROBE=$(node .github/scripts/release-audit.mjs --latest-release 2>/dev/null || echo "unknown:脚本执行失败")
+          case "$RELEASE_PROBE" in
+            ok:*)  echo "最近一个确认存在正式 Release 的版本: ${RELEASE_PROBE#ok:}" ;;
+            none)  echo "最近一个确认存在正式 Release 的版本: 无（仓库尚无正式 Release）" ;;
+            *)     echo "最近一个确认存在正式 Release 的版本: 无法确认（${RELEASE_PROBE#unknown:}）" ;;
+          esac
+          echo "版本校验通过: $VER"
+
+      # v2.38.8（A2）：历史发布完整性巡检 —— 只读、只告警，绝不阻断本次发布。
+      # 检查最近若干版本 tag 的「正式 Release / GHCR 镜像 / 镜像 revision」是否完整；
+      # 查询失败一律显示「未能核实」，不会当成「不存在」。
+      - name: Audit historical release completeness (warning only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          # 脚本自身总是 exit 0；这里再兜一层，确保巡检异常不影响发布
+          node .github/scripts/release-audit.mjs --audit --window 6 \
+            || echo "::warning::历史发布完整性巡检执行失败（已忽略，不影响本次发布）"
 
       - name: Compute lowercase image name
         id: image
