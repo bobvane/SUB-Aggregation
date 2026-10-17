@@ -17,7 +17,7 @@
  * 慢节点（alive 但握手延迟持续超阈值）不再仅因延迟被剔除 —— TCP/TLS 握手延迟
  * ≠ 代理实际转发延迟，健康统计与排序展示仍可使用延迟数据。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createConfigService } from '@/services/config.service';
 import { probeAllNodes, nodeFingerprint, evaluateStateMachine } from '@/services/node-probe.service';
@@ -379,5 +379,23 @@ describe('evaluateStateMachine 熔断口径（纯函数）', () => {
 
   it('timeout / error 与 dead 同等计入连续失败', () => {
     expect(SM([[3, 'timeout'], [2, 'error'], [1, 'dead']])).toBe('disabled');
+  });
+});
+
+describe('v2.38.7：同一毫秒内的连续探测不得互相覆盖历史', () => {
+  it('Date.now 恒定时，两轮探测仍写入 2 条独立历史', async () => {
+    const kv = new MemoryKvAdapter();
+    const node = deadNode();
+    const fp = nodeFingerprint(node);
+    const fixed = 1_800_000_000_000;
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(fixed);
+    try {
+      await probeAllNodes([node], kv, 24);
+      await probeAllNodes([node], kv, 24);
+    } finally {
+      spy.mockRestore();
+    }
+    const keys = await kv.list(`health:hist:${fp}:`);
+    expect(keys.length).toBe(2);
   });
 });

@@ -686,9 +686,17 @@ async function doProbeAllNodes(
     machineStatus.set(result.fingerprint, stateMachine.status);
     
     // 写历史（追加）—— 每轮写一条（timestamp = Date.now），即一次独立探测轮次
+    // v2.38.7：同一毫秒内的连续两轮会命中同一个 key 互相覆盖（快机器上可稳定复现，
+    // 表现为「重启后历史少一条 / 连续失败轮次被吞」）。冲突时顺延 1ms，保证每轮都留痕。
+    let historyTs = result.timestamp;
+    let historyKey = KV_KEYS.healthHistory(result.fingerprint, historyTs);
+    if (await storage.get(historyKey)) {
+      historyTs += 1;
+      historyKey = KV_KEYS.healthHistory(result.fingerprint, historyTs);
+    }
     await storage.put(
-      KV_KEYS.healthHistory(result.fingerprint, result.timestamp),
-      JSON.stringify({ ...result, statusMachine: stateMachine.status })
+      historyKey,
+      JSON.stringify({ ...result, timestamp: historyTs, statusMachine: stateMachine.status })
     );
     
     // 写最新快照（覆盖）
