@@ -1,19 +1,37 @@
 name: CI/CD
 
+# ============================================================
+# 发布约定（v2.38.4 起）
+#
+# 1) push 到 main / pull_request / 手动触发：**只做验证**
+#    （lint / 类型检查 / 测试 / 构建），不登录镜像仓库、不推送镜像、不创建 Release。
+# 2) 只有推送 **vX.Y.Z 形式的正式版本 tag** 才执行正式发布：
+#    构建并推送「版本号 + latest」镜像，并创建对应的 GitHub Release。
+#
+# 背景：此前 push → main 会自动重建并推送正式版本镜像，
+#   导致普通合并提交覆盖同版本号镜像（v2.38.3 被合并提交 2ca2867 覆盖，
+#   而 git tag v2.38.3 仍指向 5571fed6）。版本号必须代表内容，
+#   因此把「发布」收敛为唯一的 tag 触发路径。
+#
+# 正式发布流程：
+#   1. 改 package.json / package-lock.json 的版本号并合并到 main
+#   2. git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
+#   3. 本工作流校验通过后推送镜像 + 创建 Release
+# ============================================================
+
+# 默认最小权限：只读。需要写权限的 job 在自己的 job 内单独声明。
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
-    # 注意：workflow_dispatch **不支持** branches 过滤（官方 schema 仅有 inputs）。
-    # 手动触发可指定任意 ref，分支限制一律由 job 内运行时 guard 强制。
-    inputs:
-      AUTO_RELEASE:
-        description: '手动触发时是否自动创建 Git 标签 + GitHub Release（默认 false）'
-        required: false
-        default: 'false'
-        type: string
+    # 手动触发只做验证，不提供任何发布参数：
+    # 发布只认版本 tag，避免「点一下运行」就覆盖正式镜像。
 
 jobs:
   test:
@@ -40,23 +58,25 @@ jobs:
         run: npm test
 
   # ================================================================
-  # 镜像构建（阶段 1 / P1 修复）
+  # 正式镜像发布（仅版本 tag 触发）
   #
-  # 门禁：`needs: test` + 显式结论校验 —— 镜像只在**同一 commit 的 CI
-  # 全部通过**后才构建推送。CI 失败 / 取消 / 跳过时本 job 不执行，
-  # 不会推送任何镜像标签。
-  #
-  # 为何不用 workflow_run 串联：workflow_run 需在 job 内用 GitHub API
-  # 反查源 run 的 sha 与结论，存在「查到别次运行」「事件重放/并发时序」
-  # 等审计困难；needs 是调度器保证的硬依赖，commit SHA 天然一致。
-  #
-  # 判重逻辑（两 registry 都已有该版本 tag 才跳过）从 build-image.yml 原样迁入。
+  # 前置条件（全部不满足即拒绝，宁可不发也不覆盖）：
+  #   1. ref 是 tag 且形如 vX.Y.Z
+  #   2. tag 版本 == package.json version
+  #   3. tag 所在提交在 main 上
+  #   4. tag 版本严格高于所有已发布 tag
+  #   5. 同版本镜像若已存在，其 OCI revision 必须等于本次提交（否则拒绝覆盖）
   # ================================================================
   image:
-    name: Build & push image
+    name: Build & push image (version tag only)
     needs: test
-    if: github.event_name != 'pull_request' && needs.test.result == 'success'
+    if: startsWith(github.ref, 'refs/tags/v') && needs.test.result == 'success'
     runs-on: ubuntu-latest
+    # 串行化正式发布：多个版本 tag 同时推送时，不并行争抢 :latest 与版本标签。
+    # cancel-in-progress: false —— 已经开始的一次发布不会被取消，后来的运行排队等待。
+    concurrency:
+      group: publish-image
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -64,44 +84,71 @@ jobs:
       IMAGE_BASE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 需要完整 tag 历史做「严格递增」校验
+          fetch-depth: 0
 
-      # 提交一致性自证：构建的必须是触发本次运行的那个 commit
-      - name: Assert branch is main and checked out SHA matches workflow run
+      # 发布前置校验：tag 格式 / 版本一致 / 在 main 上 / 严格递增
+      - name: Validate release preconditions
+        id: validate
         env:
-          EXPECTED_SHA: ${{ github.sha }}
-          REF_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          # 1) 只允许 main 推正式镜像（PR / fork / 其他分支一律拒绝）
-          if [ "${REF_NAME}" != "main" ]; then
-            echo "ERROR: 正式镜像只允许从 main 构建（当前 ref：${REF_NAME}）" >&2
+          set -euo pipefail
+          echo "触发 tag: ${TAG_NAME}"
+
+          # 1) 只接受 vX.Y.Z 形式（防止分支名或临时 tag 触发发布）
+          if ! printf '%s' "${TAG_NAME}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: 发布 tag 必须是 vX.Y.Z 形式（当前：${TAG_NAME}）" >&2
             exit 1
           fi
-          # 2) 构建的必须是触发本次运行的那个 commit
-          ACTUAL_SHA=$(git rev-parse HEAD)
-          echo "ref        : ${REF_NAME}"
-          echo "run sha    : ${EXPECTED_SHA}"
-          echo "checked-out: ${ACTUAL_SHA}"
-          if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
-            echo "ERROR: checkout 的 commit 与本次运行的 commit 不一致，拒绝构建" >&2
+          VER="${TAG_NAME#v}"
+
+          # 2) tag 版本必须等于 package.json 版本（版本号单一来源）
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [ "${VER}" != "${PKG_VER}" ]; then
+            echo "ERROR: tag 版本 ${VER} 与 package.json ${PKG_VER} 不一致，拒绝发布" >&2
             exit 1
           fi
+
+          # 3) tag 所在提交必须已在 main 上
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "ERROR: tag 所在提交不在 main 上，拒绝发布" >&2
+            exit 1
+          fi
+
+          # 4) 版本必须严格高于所有已发布 tag（排除自身）
+          #    不依赖 sort -V（不同环境的 sort 支持不一致），用逐段整数比较
+          ver_gt() { # $1 > $2 时返回 0
+            local a1 a2 a3 b1 b2 b3
+            IFS=. read -r a1 a2 a3 <<< "$1"
+            IFS=. read -r b1 b2 b3 <<< "$2"
+            if [ "$a1" -ne "$b1" ]; then [ "$a1" -gt "$b1" ]; return $?; fi
+            if [ "$a2" -ne "$b2" ]; then [ "$a2" -gt "$b2" ]; return $?; fi
+            if [ "$a3" -ne "$b3" ]; then [ "$a3" -gt "$b3" ]; return $?; fi
+            return 1
+          }
+          MAX_PREV=""
+          while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            [ "$t" = "$TAG_NAME" ] && continue
+            v="${t#v}"
+            if [ -z "$MAX_PREV" ] || ver_gt "$v" "$MAX_PREV"; then MAX_PREV="$v"; fi
+          done < <(git tag -l 'v[0-9]*')
+          if [ -n "$MAX_PREV" ] && ! ver_gt "$VER" "$MAX_PREV"; then
+            echo "ERROR: $VER 必须严格高于已发布版本 $MAX_PREV，禁止复用或回退版本号" >&2
+            exit 1
+          fi
+
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "版本校验通过：$VER（上一个已发布版本：${MAX_PREV:-无}）"
 
       - name: Compute lowercase image name
         id: image
         run: echo "image=$(echo "${IMAGE_BASE}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - name: Read version from package.json
-        id: version
-        run: |
-          V=$(node -p "require('./package.json').version")
-          if ! echo "${V}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "ERROR: package.json version 非法: ${V}" >&2
-            exit 1
-          fi
-          echo "version=${V}" >> "$GITHUB_OUTPUT"
-          echo "本次版本: ${V}"
-
-      # ---------- Docker Hub 凭据（没配就跳过推送） ----------
+      # ---------- Docker Hub 凭据（没配就只发 GHCR） ----------
       - name: Check Docker Hub credentials
         id: dh
         env:
@@ -114,91 +161,120 @@ jobs:
             echo "Docker Hub 推送: 已启用"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Docker Hub 推送: 未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，跳过"
+            echo "Docker Hub 推送: 未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，仅发布 GHCR"
           fi
 
-      # ---------- 判断是否需要构建 ----------
-      - name: Check if build needed
+      # ---------- 拒绝覆盖已发布版本 ----------
+      - name: Check registry state (refuse to overwrite)
         id: check
         env:
           IMAGE: ${{ steps.image.outputs.image }}
-          NEW_VER: ${{ steps.version.outputs.version }}
+          NEW_VER: ${{ steps.validate.outputs.version }}
           DH_USER: ${{ steps.dh.outputs.user }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          GHCR_FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MISSING=""
-          # 期望：已存在的同版本镜像，其 OCI revision 标签等于当前 commit。
-          # 只认「revision 匹配」才算已发布；查不到 / 读不出 / 对不上 → 视为需重建（fail-safe）。
+          set -euo pipefail
           WANT_SHA="$(git rev-parse HEAD)"
+          ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
 
-          # ---- 单个 registry 的 revision 探测 ----
-          # $1=registry 名, $2=repo, $3=auth header
+          # 读取某 registry 上该版本镜像的 OCI revision 标签（读不到返回空）
           probe_revision() {
             REG_NAME="$1"; REPO="$2"; AUTH="$3"
-            ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
             MAN=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" -H "Accept: ${ACCEPT}" \
               "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null || true)
-            [ -z "${MAN}" ] && return
+            [ -z "${MAN}" ] && return 0
 
             # 单平台 manifest：有 .config.digest 且无 .manifests[]
-            CFG_DIGEST=$(echo "${MAN}" | jq -r 'if (.manifests? | type) == "array"
+            CFG_DIGEST=$(printf '%s' "${MAN}" | jq -r 'if (.manifests? | type) == "array"
                           then empty else (.config.digest // empty) end' 2>/dev/null)
             if [ -n "${CFG_DIGEST}" ]; then
               curl -fsSL -H "Authorization: Bearer ${AUTH}" \
                 "https://${REG_NAME}/v2/${REPO}/blobs/${CFG_DIGEST}" 2>/dev/null \
                 | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null
-              return
+              return 0
             fi
 
             # 多平台 index：取 linux/amd64 子 manifest → 其 config digest → config blob
-            SUB=$(echo "${MAN}" \
+            SUB=$(printf '%s' "${MAN}" \
               | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' 2>/dev/null | head -1)
-            [ -z "${SUB}" ] && return
+            [ -z "${SUB}" ] && return 0
             SUB_CFG=$(curl -fsSL -H "Authorization: Bearer ${AUTH}" -H "Accept: ${ACCEPT}" \
               "https://${REG_NAME}/v2/${REPO}/manifests/${SUB}" 2>/dev/null \
               | jq -r '.config.digest // empty' 2>/dev/null)
-            [ -z "${SUB_CFG}" ] && return
+            [ -z "${SUB_CFG}" ] && return 0
             curl -fsSL -H "Authorization: Bearer ${AUTH}" \
               "https://${REG_NAME}/v2/${REPO}/blobs/${SUB_CFG}" 2>/dev/null \
               | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null
           }
 
+          # 判定该版本在某 registry 的状态：absent / same / different(<rev>) / unknown(<原因>)
+          probe_state() {
+            REG_NAME="$1"; REPO="$2"; AUTH="$3"
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${AUTH}" -H "Accept: ${ACCEPT}" \
+              "https://${REG_NAME}/v2/${REPO}/manifests/${NEW_VER}" 2>/dev/null || true)
+            CODE="${CODE:-000}"
+            case "${CODE}" in
+              200) ;;
+              404) printf 'absent'; return 0 ;;
+              *)   printf 'unknown(http-%s)' "${CODE}"; return 0 ;;
+            esac
+            REV=$(probe_revision "${REG_NAME}" "${REPO}" "${AUTH}" || true)
+            if [ -z "${REV}" ]; then
+              printf 'unknown(no-revision)'; return 0
+            fi
+            if [ "${REV}" = "${WANT_SHA}" ]; then
+              printf 'same'
+            else
+              printf 'different(%s)' "${REV}"
+            fi
+          }
+
           # ---- GHCR ----
           REPO_PATH="${IMAGE#ghcr.io/}"
           ANON=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO_PATH}:pull" | jq -r .token || true)
-          GHCR_TOKEN="${ANON}"
-          [ -z "${GHCR_TOKEN}" ] && GHCR_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          GHCR_REV=$(probe_revision "ghcr.io" "${REPO_PATH}" "${GHCR_TOKEN}" || true)
-          if [ "${GHCR_REV}" = "${WANT_SHA}" ]; then
-            echo "GHCR ${NEW_VER} revision=${GHCR_REV} 匹配，跳过"
-          else
-            echo "GHCR ${NEW_VER} revision=${GHCR_REV:-<不可读>} 期望=${WANT_SHA} → 需重建"
-            MISSING="ghcr"
-          fi
+          GHCR_TOKEN="${ANON:-${GHCR_FALLBACK_TOKEN}}"
+          GHCR_STATE=$(probe_state "ghcr.io" "${REPO_PATH}" "${GHCR_TOKEN}" || echo unknown)
 
           # ---- Docker Hub ----
+          DH_STATE="skip"
           if [ -n "${DH_USER}" ] && [ -n "${DH_TOKEN}" ]; then
             DH_REPO="${DH_USER}/sub-aggregation"
             DH_T=$(curl -fsSL -u "${DH_USER}:${DH_TOKEN}" \
                      "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${DH_REPO}:pull" \
                      | jq -r .token || true)
-            DH_REV=$(probe_revision "registry-1.docker.io" "${DH_REPO}" "${DH_T}" || true)
-            if [ "${DH_REV}" = "${WANT_SHA}" ]; then
-              echo "Docker Hub ${NEW_VER} revision=${DH_REV} 匹配，跳过"
-            else
-              echo "Docker Hub ${NEW_VER} revision=${DH_REV:-<不可读>} 期望=${WANT_SHA} → 需重建"
-              MISSING="${MISSING:+${MISSING},}dockerhub"
-            fi
-          else
-            echo "Docker Hub 未配置凭据 → 本次只保证 GHCR"
+            DH_STATE=$(probe_state "registry-1.docker.io" "${DH_REPO}" "${DH_T}" || echo unknown)
           fi
 
-          if [ -z "${MISSING}" ]; then
-            echo "两个 registry 的 ${NEW_VER} revision 均等于当前 commit，无需构建"
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "版本 ${NEW_VER} 在 ${MISSING} 需重建（revision 不匹配/不可读/缺失）"
+          echo "GHCR ${NEW_VER} 状态: ${GHCR_STATE}"
+          echo "Docker Hub ${NEW_VER} 状态: ${DH_STATE}"
+
+          CONFLICT=0; UNKNOWN=0; MISSING=0
+          for S in "${GHCR_STATE}" "${DH_STATE}"; do
+            case "${S}" in
+              absent)          MISSING=1 ;;
+              same|skip)       : ;;
+              different*)      CONFLICT=1 ;;
+              *)               UNKNOWN=1 ;;
+            esac
+          done
+
+          if [ "${CONFLICT}" = "1" ]; then
+            echo "ERROR: 版本 ${NEW_VER} 已发布，且镜像内容与本次提交不同 —— 拒绝覆盖已发布版本。" >&2
+            echo "如需重新发布同一版本号，请先确认是否真的需要覆盖（本项目禁止）。" >&2
+            exit 1
+          fi
+          if [ "${UNKNOWN}" = "1" ]; then
+            echo "ERROR: 无法确定 ${NEW_VER} 在 registry 中的状态（不可达 / 凭据异常），为避免误覆盖，本次拒绝发布。" >&2
+            exit 1
+          fi
+          if [ "${MISSING}" = "1" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "需要构建发布：${NEW_VER}"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "版本 ${NEW_VER} 已由同一提交发布过，跳过重复构建"
           fi
 
       - name: Set up Docker Buildx
@@ -228,10 +304,9 @@ jobs:
           GHCR_IMAGE: ${{ steps.image.outputs.image }}
           DH_USER: ${{ steps.dh.outputs.user }}
           DH_ENABLED: ${{ steps.dh.outputs.enabled }}
-          VER: ${{ steps.version.outputs.version }}
+          VER: ${{ steps.validate.outputs.version }}
         run: |
-          # NAS 兼容发布约定：同时推送不可变版本标签与 latest。
-          # Docker Hub 的 latest 用于 fnOS 更新检测；GHCR 同步提供 latest。
+          # 只在正式版本发布时推送：版本号标签 + latest（latest 跟随最近一次正式发布）
           {
             echo "tags<<EOF"
             echo "${GHCR_IMAGE}:${VER}"
@@ -244,6 +319,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         if: steps.check.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
         with:
@@ -255,50 +331,60 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.tags.outputs.tags }}
-          # 记录源码 revision，供下次判重比对（org.opencontainers.image.revision）
+          # revision 用于「同版本禁止覆盖不同内容」的判定
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ steps.validate.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-  # 正式发布约定：main 上 CI 与镜像发布成功后，自动创建版本 Git Tag 和 GitHub Release。
-  # 同一版本的后续普通提交不会重复发布（对应 vX.Y.Z tag 已存在即跳过）。
-  # workflow_dispatch 仍保留 AUTO_RELEASE 手动开关；push 到 main 时自动发布。
+
+      - name: Verify published digest
+        if: steps.check.outputs.should_build == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VER: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST}" ]; then
+            echo "ERROR: 构建推送后未取得镜像 digest，发布结果未确认" >&2
+            exit 1
+          fi
+          echo "已推送 ${VER} / latest，digest=${DIGEST}"
+
+  # ================================================================
+  # GitHub Release（仅版本 tag，且镜像发布成功）
+  #
+  # 只创建已存在 tag 对应的 Release，**不创建、不移动任何 tag**。
+  # ================================================================
   release:
-    name: Create GitHub Release
-    if: >-
-      github.event_name == 'push'
-      || (github.event_name == 'workflow_dispatch' && inputs.AUTO_RELEASE == 'true')
+    name: Create GitHub Release (version tag only)
     needs: [test, image]
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      && needs.test.result == 'success'
+      && needs.image.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      # 自动发布 GitHub Release：读 package.json 版本号，打 tag + 创建 Release
-      # 版本号未变化的推送会跳过（tag 已存在）
-      - name: Create GitHub Release
+      - name: Create GitHub Release for the tag
         env:
           GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          # 安全：Tag/Release 只允许在 main 上创建
-          if [ "${REF_NAME}" != "main" ]; then
-            echo "ERROR: Tag/Release 只允许在 main 创建（当前 ref：${REF_NAME}）" >&2
+          set -euo pipefail
+          if ! printf '%s' "${TAG_NAME}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: 非法发布 tag：${TAG_NAME}" >&2
             exit 1
           fi
-          VERSION="v$(grep '"version"' package.json | cut -d'"' -f4)"
-          echo "检测到版本: ${VERSION}"
-          if git ls-remote --tags origin "refs/tags/${VERSION}" | grep -q "${VERSION}"; then
-            echo "标签 ${VERSION} 已存在，跳过 Release 发布"
+          # tag 由人工推送并已触发本流程，这里只做 Release，绝不创建/移动 tag
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} 已存在，跳过（不覆盖已有 Release）"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${VERSION}" -m "Release ${VERSION}"
-          git push origin "${VERSION}"
-          gh release create "${VERSION}" \
-            --title "${VERSION}" \
-            --notes "自动发布：${VERSION}。变更见 [提交历史](https://github.com/${{ github.repository }}/commits/main)。" \
-            --verify-tag
-          echo "✅ 已发布 Release ${VERSION}"
+          gh release create "${TAG_NAME}" \
+            --verify-tag \
+            --title "${TAG_NAME}" \
+            --notes "发布 ${TAG_NAME}。变更见 [提交历史](https://github.com/${{ github.repository }}/commits/main)。"
+          echo "✅ 已创建 Release ${TAG_NAME}"
