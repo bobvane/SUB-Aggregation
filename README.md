@@ -170,6 +170,8 @@ docker compose up -d
 
 每个版本的改动见 [CHANGELOG.md](./CHANGELOG.md)。
 
+版本号递增与正式发布规则见 [CONTRIBUTING.md 的「版本号与发布规则」](./CONTRIBUTING.md#版本号与发布规则)。
+
 ## License
 
 [MIT](./LICENSE) · 作者 [Bob Vane](https://github.com/bobvane)

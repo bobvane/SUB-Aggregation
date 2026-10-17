@@ -6,6 +6,7 @@
 
 - [开发流程](#-开发流程)
 - [Commit 规范](#-commit-规范)
+- [版本号与发布规则](#版本号与发布规则)
 - [测试要求](#-测试要求)
 - [代码规范](#-代码规范)
 - [架构分层](#-架构分层)
@@ -44,6 +45,57 @@ test(generator): add yaml validation
 docs: update deployment guide
 chore: root directory cleanup
 ```
+
+## 版本号与发布规则
+
+本项目使用语义化版本 `MAJOR.MINOR.PATCH`，**版本号必须代表实际内容**：同一个版本号不允许对应不同代码。
+
+### 递增规则
+
+- 普通 Bug 修复、常规小更新：**PATCH + 1**（`2.38.3` → `2.38.4` → `2.38.5`）。
+- 重大不兼容变更或成体系的功能升级：可递增 `MAJOR` 或 `MINOR`，但必须在 PR 或发布说明中写明理由。
+- 新版本必须**严格高于**所有已发布版本。
+- **禁止复用已发布版本号，禁止覆盖或移动已有 tag。**
+
+### 当前版本
+
+- 当前正式版本：`2.38.3`
+- 下一次正式发布：`2.38.4`
+
+### 发布前必须核对的所有版本承载位置
+
+| 位置 | 说明 |
+|---|---|
+| `package.json` 的 `version` | 应用版本的**单一来源** |
+| `package-lock.json` 的 `version` 与 `packages[""].version` | 只这两处需与 `package.json` 一致 |
+| 运行时 `APP_META.version` | 由 `package.json` 注入（`src/meta.ts`），页面左下角显示；发布后要实际打开页面确认 |
+| Docker 镜像标签 | `ghcr.io/<repo>:<version>`、`docker.io/<user>/sub-aggregation:<version>`，以及跟随最近一次正式发布的 `:latest` |
+| Git tag | `vX.Y.Z`，由人工在 `main` 上创建并推送，指向版本提交 |
+| GitHub Release | 标题与 tag 一致，由 tag 触发的工作流创建 |
+| 文档中的「当前正式版本」 | README / CONTRIBUTING 等文档里明确写出的当前版本 |
+
+**禁止机械递增**：依赖包版本（`dependencies`/`devDependencies`、`package-lock.json` 中的依赖条目）、API 版本、数据库迁移版本、协议版本、测试数据与示例里的数字，都**不是**应用发布版本，不得跟着 +1。
+
+### 合并与发布分离
+
+- 合并普通 PR 到 `main` **只跑验证**（lint / 类型检查 / 测试 / 构建），**不推送镜像、不创建 Release**。
+- 正式发布只由**推送版本 tag** 触发：
+
+  ```bash
+  git tag -a v2.38.4 -m "Release v2.38.4"
+  git push origin v2.38.4
+  ```
+
+- 工作流会逐项校验：tag 形如 `vX.Y.Z`、等于 `package.json` 版本、提交在 `main` 上、版本严格递增、同版本镜像若已存在则其 OCI revision 必须等于该提交。**任一不满足即拒绝发布**（宁可不发，也不覆盖已发布版本）。
+- `workflow_dispatch` 只做验证，不提供任何发布参数。
+
+### 发布前逐项核验（发布报告需列出）
+
+1. 目标版本严格高于所有已发布 tag；
+2. 上表所有版本字段已同步（修改前值 → 修改后值）；
+3. 实际访问页面确认左下角显示的版本；
+4. 镜像版本标签与 digest，且 `org.opencontainers.image.revision` 等于发布提交；
+5. Git tag 与 GitHub Release 使用同一版本号并指向同一提交。
 
 ## ✅ 测试要求
 
