@@ -11,7 +11,7 @@ export interface GitHubRelease {
 
 export type ReleaseState = 'official' | 'draft' | 'prerelease' | 'missing' | 'unknown';
 export type ImageState = 'present' | 'absent' | 'unknown' | 'revision-mismatch';
-export type Verdict = 'ok' | 'missing-release' | 'missing-image' | 'revision-mismatch' | 'unverified';
+export type Verdict = 'ok' | 'in-progress' | 'missing-release' | 'missing-image' | 'revision-mismatch' | 'unverified';
 
 export interface ImageProbe {
   state: 'present' | 'absent' | 'unknown';
@@ -29,6 +29,8 @@ export interface AuditEntry {
   image: ImageProbe & { state: ImageState };
   expectedSha: string | null;
   verdict: Verdict;
+  /** true = 本次正在发布的 tag（缺 Release/镜像属正常，不计入历史异常） */
+  inProgress?: boolean;
 }
 
 export interface AuditResult {
@@ -38,12 +40,13 @@ export interface AuditResult {
   oldestFetchedTag: string | null;
   entries: AuditEntry[];
   anomalies: AuditEntry[];
-  summary: { checked: number; ok: number; anomalies: number; unverified: number };
+  summary: { checked: number; ok: number; anomalies: number; unverified: number; inProgress?: number };
 }
 
 export function parseVersionTag(tag: string): { major: number; minor: number; patch: number } | null;
 export function compareVersionTags(a: string, b: string): number;
 export function sortTagsDesc(tags: string[]): string[];
+export function resolveCurrentTag(refName: string | null | undefined): string;
 export function isOfficialRelease(rel: GitHubRelease | null | undefined): boolean;
 export function pickLatestOfficialRelease(releases: GitHubRelease[]): string | null;
 export function classifyReleaseForTag(
@@ -63,6 +66,8 @@ export function auditTags(input: {
   tagCommitOf?: (tag: string) => string | null;
   probeImage?: (version: string) => Promise<ImageProbe>;
   windowSize?: number;
+  /** 本次正在发布的 tag（vX.Y.Z）；缺 Release/镜像不计入历史异常 */
+  currentTag?: string;
 }): Promise<AuditResult>;
 export function formatAuditReport(result: AuditResult): string;
 export function probeGhcrImage(

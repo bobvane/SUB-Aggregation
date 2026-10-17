@@ -16,6 +16,7 @@ import {
   classifyImageProbe,
   auditTags,
   formatAuditReport,
+  resolveCurrentTag,
 } from '../../.github/scripts/release-audit.mjs';
 
 describe('版本解析与排序', () => {
@@ -174,5 +175,107 @@ describe('报告文案（A1/A2 语义）', () => {
     const text = formatAuditReport(result);
     expect(text).toContain('窗口内历史版本产物完整');
     expect(text).not.toContain('上一个已发布版本');
+  });
+});
+
+describe('本次正在发布的 tag 不计入历史异常（v2.38.8）', () => {
+  const official = (tag: string) => ({ tag_name: tag, draft: false, prerelease: false, html_url: 'https://x/' + tag });
+  const tags = ['v2.38.5', 'v2.38.6', 'v2.38.7', 'v2.38.8'];
+  const releaseByTag = new Map([
+    ['v2.38.5', official('v2.38.5')],
+    ['v2.38.7', official('v2.38.7')],
+  ]);
+  const sha = (tag: string) => 'sha-' + tag;
+  // 当前版本 2.38.8 尚未构建镜像；2.38.6 连镜像也没有（历史真实缺失）
+  const probeRunning = async (v: string) =>
+    (v === '2.38.8' || v === '2.38.6'
+      ? { state: 'absent' as const, reason: 'manifest-404' }
+      : { state: 'present' as const, revision: 'sha-v' + v });
+
+  it('当前 tag 缺 Release/镜像 → 标记进行中，不产生这两类告警，也不计入历史异常', async () => {
+    const result = await auditTags({ tags, releaseByTag, windowSize: 6, tagCommitOf: sha, probeImage: probeRunning, currentTag: 'v2.38.8' });
+    const cur = result.entries.find((e) => e.tag === 'v2.38.8')!;
+    expect(cur.verdict).toBe('in-progress');
+    expect(cur.inProgress).toBe(true);
+    expect(result.anomalies.map((e) => e.tag)).not.toContain('v2.38.8');
+    expect(result.summary.anomalies).toBe(1);   // 只剩 v2.38.6
+    expect(result.summary.inProgress).toBe(1);
+
+    const text = formatAuditReport(result);
+    expect(text).toContain('本次发布（进行中，不计入异常）');
+    expect(text).not.toContain('::warning::v2.38.8');
+    expect(text).toMatch(/本次发布进行中 1/);
+  });
+
+  it('同一轮里其他历史版本的真实缺失仍然被发现', async () => {
+    const result = await auditTags({ tags, releaseByTag, windowSize: 6, tagCommitOf: sha, probeImage: probeRunning, currentTag: 'v2.38.8' });
+    const v6 = result.entries.find((e) => e.tag === 'v2.38.6')!;
+    expect(v6.releaseState).toBe('missing');
+    expect(v6.verdict).toBe('missing-release');
+    expect(v6.image.state).toBe('absent');
+    const text = formatAuditReport(result);
+    expect(text).toContain('v2.38.6 有 tag 但没有正式 GitHub Release');
+    expect(text).toContain('v2.38.6 缺少 GHCR 镜像 2.38.6');
+  });
+
+  it('当前 tag 已有镜像但 revision 不匹配 → 仍然告警', async () => {
+    const probeMismatch = async (v: string) =>
+      (v === '2.38.8' ? { state: 'present' as const, revision: 'someone-else' } : { state: 'present' as const, revision: 'sha-v' + v });
+    const result = await auditTags({
+      tags: ['v2.38.7', 'v2.38.8'],
+      releaseByTag: new Map([['v2.38.7', official('v2.38.7')], ['v2.38.8', official('v2.38.8')]]),
+      windowSize: 2, tagCommitOf: sha, probeImage: probeMismatch, currentTag: 'v2.38.8',
+    });
+    const cur = result.entries.find((e) => e.tag === 'v2.38.8')!;
+    expect(cur.verdict).toBe('revision-mismatch');
+    expect(result.summary.anomalies).toBe(1);
+    expect(formatAuditReport(result)).toContain('v2.38.8 镜像 revision 与 tag 提交不一致');
+  });
+
+  it('未提供 currentTag（本地/手动运行）→ 行为与原来一致，当前版本仍按历史判定', async () => {
+    const result = await auditTags({ tags, releaseByTag, windowSize: 6, tagCommitOf: sha, probeImage: probeRunning });
+    const cur = result.entries.find((e) => e.tag === 'v2.38.8')!;
+    expect(cur.verdict).toBe('missing-release');
+    expect(cur.inProgress).toBe(false);
+    expect(result.summary.inProgress).toBe(0);
+    expect(formatAuditReport(result)).toContain('::warning::v2.38.8 有 tag 但没有正式 GitHub Release');
+  });
+
+  it('查询失败仍是「未能核实」，不会被误报为「确认缺失」', async () => {
+    // ① Release 数据未覆盖（分页截断）：缺失不能判为「确认缺失」
+    const truncatedRes = await auditTags({
+      tags, releaseByTag: new Map(), truncated: true, oldestFetchedTag: 'v2.38.9',
+      windowSize: 6, tagCommitOf: sha,
+      probeImage: async () => ({ state: 'unknown' as const, reason: 'manifest HTTP 503' }),
+      currentTag: 'v2.38.8',
+    });
+    expect(truncatedRes.entries.every((e) => e.verdict === 'unverified' || e.verdict === 'in-progress')).toBe(true);
+    const t1 = formatAuditReport(truncatedRes);
+    expect(t1).toContain('未能核实');
+    expect(t1).not.toContain('缺少 GHCR 镜像');
+    expect(t1).not.toContain('没有正式 GitHub Release');
+    expect(t1).toContain('不阻断');
+
+    // ② Release 正常、但镜像查询失败：同样是「未核实」，不是「缺镜像」
+    const imageFail = await auditTags({
+      tags: ['v2.38.7'], releaseByTag: new Map([['v2.38.7', official('v2.38.7')]]),
+      windowSize: 1, tagCommitOf: sha,
+      probeImage: async () => ({ state: 'unknown' as const, reason: 'manifest HTTP 503' }),
+    });
+    expect(imageFail.entries[0].verdict).toBe('unverified');
+    expect(formatAuditReport(imageFail)).toContain('镜像状态未能核实');
+    expect(formatAuditReport(imageFail)).not.toContain('缺少 GHCR 镜像');
+  });
+});
+
+describe('resolveCurrentTag：只接受版本 tag，不误判分支名', () => {
+  it('vX.Y.Z 原样返回，其它一律为空', () => {
+    expect(resolveCurrentTag('v2.38.8')).toBe('v2.38.8');
+    expect(resolveCurrentTag('  v2.38.8  ')).toBe('v2.38.8');
+    expect(resolveCurrentTag('chore/release-gate-audit')).toBe('');
+    expect(resolveCurrentTag('main')).toBe('');
+    expect(resolveCurrentTag('v2.38')).toBe('');
+    expect(resolveCurrentTag('')).toBe('');
+    expect(resolveCurrentTag(undefined)).toBe('');
   });
 });

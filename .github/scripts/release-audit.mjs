@@ -44,6 +44,15 @@ export function sortTagsDesc(tags) {
   return [...new Set(valid)].sort((a, b) => compareVersionTags(b, a));
 }
 
+/**
+ * 解析「本次正在发布的 tag」：只接受 vX.Y.Z。
+ * 分支名（如 chore/xxx）、普通字符串、空值一律返回 ''，避免误判。
+ */
+export function resolveCurrentTag(refName) {
+  const v = String(refName || '').trim();
+  return VERSION_RE.test(v) ? v : '';
+}
+
 /** 正式 Release：非草稿、非预发布、tag 形如 vX.Y.Z */
 export function isOfficialRelease(rel) {
   return !!rel && rel.draft === false && rel.prerelease === false && VERSION_RE.test(String(rel.tag_name || '').trim());
@@ -91,7 +100,11 @@ export function classifyImageProbe(probe, expectedSha) {
 
 /**
  * 巡检一组 tag（默认只看最近 windowSize 个）。
- * 结论取值：ok | missing-release | missing-image | revision-mismatch | unverified
+ * 结论取值：ok | in-progress | missing-release | missing-image | revision-mismatch | unverified
+ *
+ * currentTag（可选）：本次正在发布的 tag。它此刻**按设计**还没有 Release/镜像，
+ * 因此不计入历史缺失异常（verdict = 'in-progress'），但仍保留 revision 比对 ——
+ * 若镜像已存在且 revision 与 tag 提交不符，照样告警。
  */
 export async function auditTags(input) {
   const tags = input.tags || [];
@@ -101,6 +114,7 @@ export async function auditTags(input) {
   const tagCommitOf = input.tagCommitOf || (() => null);
   const probeImage = input.probeImage || (async () => ({ state: 'unknown', reason: 'not-probed' }));
   const windowSize = Number(input.windowSize) > 0 ? Math.floor(Number(input.windowSize)) : DEFAULT_WINDOW;
+  const currentTag = typeof input.currentTag === 'string' && VERSION_RE.test(input.currentTag.trim()) ? input.currentTag.trim() : '';
 
   const sorted = sortTagsDesc(tags);
   const window = sorted.slice(0, Math.max(1, windowSize));
@@ -122,10 +136,16 @@ export async function auditTags(input) {
     else if (image.state === 'revision-mismatch') verdict = 'revision-mismatch';
     else if (image.state === 'unknown') verdict = 'unverified';
 
-    entries.push({ tag: tag, version: version, releaseState: releaseState, releaseUrl: release ? release.html_url : null, image: image, expectedSha: expectedSha, verdict: verdict });
+    // 本次正在发布的 tag：缺 Release / 缺镜像都是「还没轮到」，不是历史异常。
+    // 唯一例外：镜像已经存在但 revision 不符 —— 那是真实问题，必须告警。
+    const isCurrent = currentTag !== '' && tag === currentTag;
+    if (isCurrent && verdict !== 'revision-mismatch') verdict = 'in-progress';
+
+    entries.push({ tag: tag, version: version, releaseState: releaseState, releaseUrl: release ? release.html_url : null, image: image, expectedSha: expectedSha, verdict: verdict, inProgress: isCurrent });
   }
 
-  const anomalies = entries.filter((e) => e.verdict !== 'ok');
+  // 进行中的版本不是历史异常，单独统计，不计入 anomalies
+  const anomalies = entries.filter((e) => e.verdict !== 'ok' && e.verdict !== 'in-progress');
   return {
     window: window,
     totalTags: sorted.length,
@@ -138,11 +158,13 @@ export async function auditTags(input) {
       ok: entries.filter((e) => e.verdict === 'ok').length,
       anomalies: anomalies.length,
       unverified: entries.filter((e) => e.verdict === 'unverified').length,
+      inProgress: entries.filter((e) => e.verdict === 'in-progress').length,
     },
   };
 }
 
 const VERDICT_TEXT = {
+  'in-progress': '本次发布（进行中，不计入异常）',
   'missing-release': '缺少正式 GitHub Release',
   'missing-image': '缺少 GHCR 镜像',
   'revision-mismatch': '镜像 revision 与 tag 提交不一致',
@@ -173,6 +195,8 @@ export function formatAuditReport(result) {
   }
   lines.push('');
   for (const e of result.entries) {
+    // 本次正在发布的版本：缺 Release / 缺镜像属于「还没轮到」，不是历史异常，不告警
+    if (e.verdict === 'in-progress') continue;
     if (e.releaseState === 'missing') {
       lines.push('::warning::' + e.tag + ' 有 tag 但没有正式 GitHub Release（tag 存在不代表已发布）');
     } else if (e.releaseState === 'draft') {
@@ -191,10 +215,11 @@ export function formatAuditReport(result) {
     }
   }
   lines.push('');
-  lines.push('汇总: 检查 ' + result.summary.checked + ' / 完整 ' + result.summary.ok + ' / 异常 ' + result.summary.anomalies + '（其中未核实 ' + result.summary.unverified + '）');
+  const inProgress = result.summary.inProgress || 0;
+  lines.push('汇总: 检查 ' + result.summary.checked + ' / 完整 ' + result.summary.ok + ' / 异常 ' + result.summary.anomalies + '（其中未核实 ' + result.summary.unverified + '）' + (inProgress > 0 ? ' / 本次发布进行中 ' + inProgress : ''));
   lines.push(result.summary.anomalies > 0
     ? '结论: 存在历史不完整版本（见上），按策略仅告警、不阻断本次发布。'
-    : '结论: 窗口内历史版本产物完整。');
+    : (inProgress > 0 ? '结论: 窗口内历史版本产物完整（本次发布版本不计入历史异常）。' : '结论: 窗口内历史版本产物完整。'));
   return lines.join('\n');
 }
 
@@ -316,19 +341,26 @@ async function auditCli(windowSize) {
     if (!oldestFetchedTag || compareVersionTags(t, oldestFetchedTag) < 0) oldestFetchedTag = t;
   }
   const repoPath = repo.toLowerCase();
+  // 本次正在发布的 tag（GitHub Actions 内置变量）；本地/手动运行没有它 → 保持原行为。
+  // 只接受 vX.Y.Z 形式，避免把分支名等普通字符串误当成发布 tag。
+  const currentTag = resolveCurrentTag(process.env.GITHUB_REF_NAME || '');
+  if (currentTag) {
+    console.log('本次发布 tag: ' + currentTag + '（该版本的缺失产物不计入历史异常）');
+  }
   const result = await auditTags({
     tags: tags,
     releaseByTag: releaseByTag,
     truncated: truncated && !releaseError,
     oldestFetchedTag: oldestFetchedTag,
     windowSize: windowSize,
+    currentTag: currentTag,
     tagCommitOf: (tag) => {
       try { return execFileSync('git', ['rev-list', '-n', '1', tag], { encoding: 'utf8' }).trim(); } catch { return null; }
     },
     probeImage: (version) => probeGhcrImage(repoPath, version),
   });
   if (releaseError) {
-    // Release 数据不可用时，不能把「查不到」当成「没有」
+    // Release 数据不可用时，不能把「查不到」当成「没有」（进行中的版本保持 in-progress）
     for (const e of result.entries) {
       if (e.verdict === 'missing-release') {
         e.verdict = 'unverified';
@@ -336,7 +368,7 @@ async function auditCli(windowSize) {
         e.image = { state: 'unknown', reason: 'Release 数据不可用' };
       }
     }
-    result.anomalies = result.entries.filter((e) => e.verdict !== 'ok');
+    result.anomalies = result.entries.filter((e) => e.verdict !== 'ok' && e.verdict !== 'in-progress');
     result.summary.anomalies = result.anomalies.length;
     result.summary.unverified = result.entries.filter((e) => e.verdict === 'unverified').length;
     result.summary.ok = result.entries.filter((e) => e.verdict === 'ok').length;
