@@ -178,6 +178,29 @@ tbody tr:hover { background: var(--accent-soft); }
   transition: all .2s;
 }
 .modal-close:hover { color: var(--text); background: var(--bg3); }
+/* ===== Task Window（节点页「立即测活 / 重新检测国家码」）===== */
+@keyframes taskBarFlow { 0% { transform: translateX(-100%); } 100% { transform: translateX(330%); } }
+/* 运行中：不确定进度（流动条），不显示任何百分比 */
+#progressBar.task-indeterminate { width: 30%; transition: none; animation: taskBarFlow 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  #progressBar.task-indeterminate { animation: none; width: 100%; opacity: .55; }
+}
+/* 进度轨底色放在 CSS（不能留在内联 style，否则会盖住下面的失败斜纹） */
+#progressTrack { background: rgba(0, 0, 0, 0.08); }
+/* 失败态：不显示"已填充百分比"，改用红色斜纹警示带（表达已中止 / 未完成） */
+#progressBar.task-failed { display: none; }
+#progressTrack.task-failed { background: repeating-linear-gradient(45deg, var(--red) 0 6px, rgba(0, 0, 0, 0.38) 6px 12px); }
+.task-result { margin-top: 16px; text-align: left; }
+.task-result-title { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+.task-result-title.ok { color: var(--green); }
+.task-result-title.err { color: var(--red); }
+.task-result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
+.task-result-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 10px; background: var(--bg); border-radius: 8px; font-size: 14px; }
+.task-result-row > span:first-child { color: var(--text2); }
+.task-result-row > span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
+.task-null { color: var(--text2); font-weight: 400; }
+.task-result-note { margin-top: 10px; font-size: 13px; line-height: 1.65; color: var(--text2); }
+.task-result-list { margin-top: 6px; max-height: 120px; overflow: auto; font-size: 13px; line-height: 1.7; color: var(--text2); word-break: break-all; }
 /* ===== Sub Items ===== */
 .sub-item {
   display: flex; align-items: center; gap: 12px;
@@ -386,7 +409,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <h2>🔗 节点列表</h2>
       <div style="display:flex;gap:8px;align-items:center">
         <input style="width:auto;max-width:300px" placeholder="🔍 搜索节点名或地址..." id="nodeSearch" oninput="filterNodes()">
-        <button class="btn btn-sm btn-primary" onclick="probeAllNodes()" title="对所有节点执行基础连通性探测（TCP/TLS 握手 RTT，非真实代理延迟）。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。真实代理端到端延迟由客户端 Mihomo 自动选择组负责。">⚡ 立即测活</button>
+        <button class="btn btn-sm btn-primary" id="btnProbe" onclick="probeAllNodes()" title="对所有节点执行基础连通性探测（TCP/TLS 握手 RTT，非真实代理延迟）。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。真实代理端到端延迟由客户端 Mihomo 自动选择组负责。">⚡ 立即测活</button>
       </div>
     </div>
     <div class="card" style="padding:12px 16px;font-size:14px;color:var(--text2)">
@@ -403,7 +426,7 @@ tbody tr:hover { background: var(--accent-soft); }
       <span>🕒 上次连通性探测 <b id="statsLastProbe">未探测</b></span>
       <span style="color:var(--text2)">（去重依据：IP + 端口 + 协议）</span>
       <span style="margin-left:auto">
-        <button class="btn btn-sm" onclick="redetectGeo()">🔄 重新检测国家码</button>
+        <button class="btn btn-sm" id="btnGeoRedetect" onclick="redetectGeo()">🔄 重新检测国家码</button>
       </span>
     </div>
     <div id="geoPendingBanner" class="card" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px;border-left:4px solid var(--danger);box-shadow:var(--shadow-sm)"></div>
@@ -605,18 +628,23 @@ tbody tr:hover { background: var(--accent-soft); }
   </div>
 </div>
 
-<!-- Progress Modal (v2.17: 大刷新/拉取操作居中进度条，长时限 + 超时报错) -->
+<!-- Progress / Task Modal：running 不可关闭；success/failed 保留结果，仅右上角 X 关闭 -->
 <div class="modal-overlay" id="progressModal">
   <div class="modal-content" style="max-width:480px;text-align:center">
-    <div class="modal-header" style="justify-content:center"><h3 id="progressTitle">⏳ 处理中</h3></div>
+    <div class="modal-header" style="justify-content:center;position:relative">
+      <h3 id="progressTitle">⏳ 处理中</h3>
+      <button class="modal-close" id="progressClose" onclick="closeTaskWindow()" title="关闭" aria-label="关闭"
+              style="display:none;position:absolute;right:14px;top:50%;transform:translateY(-50%)">✕</button>
+    </div>
     <div class="modal-body">
       <div style="margin:4px 0 16px;font-size:14px;color:var(--text2);min-height:20px" id="progressStatus">请稍候…</div>
-      <div style="height:8px;background:rgba(0,0,0,0.08);border-radius:999px;overflow:hidden">
+      <div id="progressTrack" style="height:8px;border-radius:999px;overflow:hidden">
         <div id="progressBar" style="height:100%;width:0%;background:var(--accent);border-radius:999px;transition:width .3s ease"></div>
       </div>
-      <div style="margin-top:12px;font-size:13px;color:var(--text2)">
+      <div id="progressMeta" style="margin-top:12px;font-size:13px;color:var(--text2)">
         <span id="progressTimer">00:00</span> / <span id="progressCap">02:00</span>
       </div>
+      <div id="progressResult" class="task-result" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -693,13 +721,22 @@ function toast(msg, type = 'success') {
 function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 document.addEventListener('click', function(e) {
-  if (e.target.classList.contains('modal-overlay')) e.target.classList.remove('show');
+  if (!e.target.classList.contains('modal-overlay')) return;
+  // 任务窗口（running / success / failed）只允许由右上角 X 关闭，点遮罩无效
+  if (e.target.id === 'progressModal') return;
+  e.target.classList.remove('show');
 });
 
-// ============ Progress Modal (v2.17) ============
-// 大刷新/拉取操作（订阅更新/重新检测国家码）居中弹进度条：显示进度 + 计时 + 硬性上限，超时报错。
-let _progressTimer = null;
+// ============ Progress / Task Modal ============
+// 同一个 #progressModal 支持两种用法：
+//  1) 旧的长操作封装 runWithProgress（订阅更新等）：完成/失败后自动关闭 —— 行为保持不变；
+//  2) 节点页任务窗口 runNodeTask（立即测活 / 重新检测国家码）：
+//     running → success / failed，结果保留在窗口内，只由右上角 X 关闭。
+// 运行中一律使用「不确定进度」（流动条），不按耗时伪造百分比。
+let _progressTimer = null;      // 已用时间计时器
+let _progressHideTimer = null;  // 自动关闭延时（必须可取消，否则会关掉下一轮刚打开的窗口）
 let _progressElapsed = 0;
+let _taskBusy = false;          // 前端任务并发守卫（不依赖按钮禁用）
 
 function fmtClock(sec) {
   const m = String(Math.floor(sec / 60)).padStart(2, '0');
@@ -707,24 +744,63 @@ function fmtClock(sec) {
   return `${m}:${s}`;
 }
 
-// 打开进度弹窗。capMs = 硬性上限（超时自动报错），非确定进度从 10% 起步向 95% 慢速爬升示意“仍在跑”
-function showProgress(title, capMs = 120000) {
-  closeProgress();
-  document.getElementById('progressTitle').textContent = title;
-  document.getElementById('progressStatus').textContent = '请稍候…';
+function _cancelProgressTimers() {
+  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+  if (_progressHideTimer) { clearTimeout(_progressHideTimer); _progressHideTimer = null; }
+}
+
+function _hideProgressModalSoon(ms) {
+  const modal = document.getElementById('progressModal');
+  if (!modal) return;
+  if (_progressHideTimer) clearTimeout(_progressHideTimer);
+  _progressHideTimer = setTimeout(() => {
+    _progressHideTimer = null;
+    modal.classList.remove('show');
+  }, ms);
+}
+
+// 隐藏「终态才出现」的界面元素（右上角 X、结果区）
+function hideTaskChrome() {
+  const res = document.getElementById('progressResult');
+  if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+  const x = document.getElementById('progressClose');
+  if (x) x.style.display = 'none';
+}
+
+/**
+ * 打开进度/任务窗口。
+ * opts.indeterminate === true → 流动条（不显示任何百分比，任务窗口用这个）
+ * 省略 → 保持旧观感（订阅更新等既有调用方不受影响）
+ */
+function showProgress(title, capMs = 120000, opts = {}) {
+  const indeterminate = !!opts.indeterminate;
+  // 关键：先取消上一轮可能残留的自动关闭定时器，
+  // 否则新窗口会在约 0.4s 后被上一轮的 hide 定时器关掉（既有缺陷）
+  _cancelProgressTimers();
+  hideTaskChrome();
   const bar = document.getElementById('progressBar');
-  bar.style.width = '10%';
+  const track = document.getElementById('progressTrack');
+  if (track) track.classList.remove('task-failed');
+  bar.style.display = '';
+  bar.classList.remove('task-failed');
+  bar.classList.toggle('task-indeterminate', indeterminate);
+  bar.style.background = 'var(--accent)';
+  bar.style.width = indeterminate ? '' : '10%';
+  document.getElementById('progressTitle').textContent = title;
+  document.getElementById('progressStatus').textContent = opts.status || '请稍候…';
   document.getElementById('progressCap').textContent = fmtClock(capMs / 1000);
   document.getElementById('progressTimer').textContent = '00:00';
   document.getElementById('progressModal').classList.add('show');
   _progressElapsed = 0;
-  // 伪进度：前 90% 缓慢爬升（真实成功时 closeProgress 跳到 100%），剩余 10% 留给超时兜底
   _progressTimer = setInterval(() => {
     _progressElapsed += 200;
     const el = document.getElementById('progressTimer');
     if (el) el.textContent = fmtClock(_progressElapsed / 1000);
-    const ratio = Math.min(_progressElapsed / capMs, 0.95);
-    bar.style.width = `${10 + ratio * 85}%`;
+    // 仅旧模式保留历史“爬升”观感；任务窗口（indeterminate）不写任何百分比
+    if (!indeterminate) {
+      const ratio = Math.min(_progressElapsed / capMs, 0.95);
+      bar.style.width = `${10 + ratio * 85}%`;
+    }
   }, 200);
 }
 
@@ -733,20 +809,22 @@ function updateProgress(text) {
   if (el && text) el.textContent = text;
 }
 
+// 旧版：结束并自动关闭（订阅更新等既有流程保持原样）
 function closeProgress(errMsg) {
-  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+  _cancelProgressTimers();
   const modal = document.getElementById('progressModal');
   if (!modal) return;
   const bar = document.getElementById('progressBar');
   const st = document.getElementById('progressStatus');
+  bar.classList.remove('task-indeterminate');
   if (errMsg) {
     bar.style.width = '100%';
     bar.style.background = 'var(--red)';
     if (st) st.textContent = '❌ ' + errMsg;
-    setTimeout(() => modal.classList.remove('show'), 1600);
+    _hideProgressModalSoon(1600);
   } else {
     bar.style.width = '100%';
-    setTimeout(() => modal.classList.remove('show'), 400);
+    _hideProgressModalSoon(400);
   }
 }
 
@@ -767,6 +845,166 @@ async function runWithProgress({ title, capMs = 120000, fn }) {
     clearTimeout(hardTimer); done = true;
     closeProgress((e && e.name === 'AbortError') ? '请求超时，请重试' : ((e && e.message) || '操作失败'));
     throw e;
+  }
+}
+
+/**
+ * 任务进入终态：停止计时/动画、保留结果、显示 X —— 不自动关闭。
+ * 终态视觉：成功 = 绿色满格（确实完成）；失败 = 隐藏填充、进度轨改为红色斜纹警示带，
+ *           不把条填到 100%，避免被读成"已全部处理完毕"。
+ * title（可选）：终态窗口标题；省略时保持运行态标题（兼容未传标题的调用）。
+ */
+function finishTaskWindow(state, html, statusText, title) {
+  _cancelProgressTimers();
+  const ok = state === 'success';
+  const bar = document.getElementById('progressBar');
+  const track = document.getElementById('progressTrack');
+  bar.classList.remove('task-indeterminate');
+  bar.classList.toggle('task-failed', !ok);
+  if (track) track.classList.toggle('task-failed', !ok);
+  bar.style.width = ok ? '100%' : '';
+  bar.style.background = ok ? 'var(--green)' : 'var(--accent)';
+  const st = document.getElementById('progressStatus');
+  if (st) st.textContent = statusText || (state === 'success' ? '✅ 已完成' : '❌ 未完成');
+  if (title) {
+    const t = document.getElementById('progressTitle');
+    if (t) t.textContent = title;
+  }
+  const res = document.getElementById('progressResult');
+  if (res) {
+    if (html) { res.innerHTML = html; res.style.display = ''; }
+    else { res.style.display = 'none'; }
+  }
+  const x = document.getElementById('progressClose');
+  if (x) x.style.display = ''; // 回落到 .modal-close 的 flex
+}
+
+/** 用户点右上角 X：关闭任务窗口并清理计时器 / 动画类 */
+function closeTaskWindow() {
+  _cancelProgressTimers();
+  hideTaskChrome();
+  const bar = document.getElementById('progressBar');
+  const track = document.getElementById('progressTrack');
+  if (bar) {
+    bar.classList.remove('task-indeterminate', 'task-failed');
+    bar.style.display = '';
+  }
+  if (track) track.classList.remove('task-failed');
+  const modal = document.getElementById('progressModal');
+  if (modal) modal.classList.remove('show');
+}
+
+/** 任务进行中禁用两个节点操作按钮（并发守卫在 runNodeTask 里，这里只是可视反馈） */
+function setNodeTaskButtonsDisabled(disabled) {
+  ['btnProbe', 'btnGeoRedetect'].forEach((id) => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = disabled;
+  });
+}
+
+// ---- 结果渲染：字段严格对应后端实际返回；缺失显示“暂无数据”，不伪造 ----
+function taskNum(v) {
+  if (v === null || v === undefined) return '<span class="task-null">暂无数据</span>';
+  if (typeof v === 'number' && !Number.isFinite(v)) return '<span class="task-null">暂无数据</span>';
+  return escHtml(String(v));
+}
+
+function taskLatency(v) {
+  if (v === null || v === undefined || (typeof v === 'number' && !Number.isFinite(v))) {
+    return '<span class="task-null">暂无有效样本</span>';
+  }
+  return escHtml(String(v)) + ' ms';
+}
+
+function taskRow(label, valueHtml) {
+  return '<div class="task-result-row"><span>' + escHtml(label) + '</span><span>' + valueHtml + '</span></div>';
+}
+
+/** 测活结果：POST /api/nodes/probe → { nodeCount, stats:{ total, alive, dead, unknown, suspect, disabled, avgLatency, minLatency } } */
+function renderProbeResult(res) {
+  const s = (res && res.stats) || {};
+  const total = (s.total !== undefined && s.total !== null) ? s.total : (res ? res.nodeCount : null);
+  const rows = [
+    taskRow('总节点', taskNum(total)),
+    taskRow('存活', taskNum(s.alive)),
+    taskRow('不通', taskNum(s.dead)),
+    taskRow('不适用（UDP 等）', taskNum(s.unknown)),
+    taskRow('疑似（待复核）', taskNum(s.suspect)),
+    taskRow('已抛弃', taskNum(s.disabled)),
+    taskRow('平均延迟', taskLatency(s.avgLatency)),
+    taskRow('最小延迟', taskLatency(s.minLatency)),
+  ];
+  return '<div class="task-result-title ok">✅ 连通性探测完成</div>'
+    + '<div class="task-result-grid">' + rows.join('') + '</div>'
+    + '<div class="task-result-note">延迟为 TCP/TLS 握手 RTT（非真实代理延迟）；UDP 协议节点基础探测不适用。</div>';
+}
+
+/** 国家码结果：POST /api/nodes/geo-redetect → { data:{ total, cached, queried, resolved, failed, unlocatedBefore, unlocatedAfter, unlocatedServers } } */
+function renderGeoResult(res) {
+  const d = (res && res.data) || {};
+  const rows = [
+    taskRow('目标服务器总数', taskNum(d.total)),
+    taskRow('缓存命中（IP）', taskNum(d.cached)),
+    taskRow('本次查询（IP）', taskNum(d.queried)),
+    taskRow('新识别成功（服务器）', taskNum(d.resolved)),
+    taskRow('失败（服务器）', taskNum(d.failed)),
+    taskRow('重检前未识别', taskNum(d.unlocatedBefore)),
+    taskRow('重检后未识别', taskNum(d.unlocatedAfter)),
+  ];
+  let html = '<div class="task-result-title ok">✅ 重新检测完成</div>'
+    + '<div class="task-result-grid">' + rows.join('') + '</div>';
+  const list = Array.isArray(d.unlocatedServers) ? d.unlocatedServers.filter(Boolean) : [];
+  if (list.length) {
+    html += '<div class="task-result-note">仍未识别国家码（后端最多返回 50 个，本次 ' + list.length + ' 个）：</div>'
+      + '<div class="task-result-list">' + list.map((s) => escHtml(String(s))).join('<br>') + '</div>';
+  }
+  return html;
+}
+
+/** 失败说明：区分「服务端明确返回失败」与「前端未取得结果」 */
+function renderTaskFailure(e) {
+  const msg = (e && e.message) || '';
+  const isAbort = !!(e && e.name === 'AbortError') || /请求超时/.test(msg);
+  const isNetwork = !isAbort && /Failed to fetch|NetworkError|Load failed|network error/i.test(msg);
+  let title;
+  let note;
+  if (isAbort) {
+    title = '请求超时';
+    note = '前端未能在等待上限内取得任务结果。<b>服务端任务是否仍在执行无法确认</b>，请稍后查看节点列表或健康数据是否已更新，不要据此认定任务已终止。';
+  } else if (isNetwork) {
+    title = '网络异常';
+    note = '前端未能取得任务结果。<b>服务端任务是否仍在执行无法确认</b>，请稍后检查节点列表 / 统计数据是否已变化。';
+  } else {
+    title = msg || '任务失败';
+    note = '服务端已返回失败，本次任务未完成。可点右上角 ✕ 关闭后重试。';
+  }
+  return '<div class="task-result-title err">❌ ' + escHtml(title) + '</div>'
+    + '<div class="task-result-note">' + note + '</div>';
+}
+
+/**
+ * 节点页任务统一入口（立即测活 / 重新检测国家码）。
+ * - 并发守卫：_taskBusy 为真时直接忽略，事件处理函数本身不会再发起第二次请求
+ * - running → success / failed；结果保留在窗口内，不自动关闭、不改用 Toast
+ * - 终态标题：successTitle / failedTitle（省略则保留运行态标题）
+ * - 返回 { ok, res }，由调用方决定是否刷新列表（刷新失败不影响已展示的结果）
+ */
+async function runNodeTask({ title, successTitle, failedTitle, capMs = 120000, fn, renderSuccess }) {
+  if (_taskBusy) return { ok: false, busy: true };
+  _taskBusy = true;
+  setNodeTaskButtonsDisabled(true);
+  showProgress(title, capMs, { indeterminate: true, status: '正在执行，请稍候…' });
+  try {
+    const res = await fn();
+    const html = typeof renderSuccess === 'function' ? renderSuccess(res) : '';
+    finishTaskWindow('success', html, '✅ 已完成', successTitle);
+    return { ok: true, res };
+  } catch (e) {
+    finishTaskWindow('failed', renderTaskFailure(e), '❌ 未完成', failedTitle);
+    return { ok: false, error: e };
+  } finally {
+    _taskBusy = false;
+    setNodeTaskButtonsDisabled(false);
   }
 }
 
@@ -1324,34 +1562,20 @@ async function loadGeoPending() {
 }
 
 // 手动触发重新检测未识别国家码（POST /api/nodes/geo-redetect，复用后端批次+限流管线）
+// 任务窗口：running → success/failed，结果保留在窗口内，仅右上角 X 关闭
 async function redetectGeo() {
-  const btn = event.target;
-  const orig = btn ? btn.textContent : null;
-  if (btn) btn.disabled = true;
-  try {
-    // v2.17.0：居中进度条，120s 长时限；geo-redetect 并发锁 60s 幂等，真实耗时取决于未识别数量
-    const res = await runWithProgress({
-      title: '🔍 重新检测国家码',
-      capMs: 120000,
-      fn: () => api('/nodes/geo-redetect', { method: 'POST', body: JSON.stringify({ scope: 'unlocated' }), timeout: 120000 }),
-    });
-    const d = (res && res.data) || {};
-    let msg = `✅ 重新检测完成：检索 ${d.queried ?? 0}，新识别 ${d.resolved ?? 0}，失败 ${d.failed ?? 0}；剩余未识别 ${d.unlocatedAfter ?? 0}`;
-    if (Array.isArray(d.unlocatedServers) && d.unlocatedServers.length) {
-      const shown = d.unlocatedServers.slice(0, 8).join(', ');
-      const more = d.unlocatedServers.length > 8 ? ` 等${d.unlocatedServers.length}个` : '';
-      msg += `：${shown}${more}`;
-    }
-    updateProgress(msg);
-    toast(msg);
-    loadNodes(); // 刷新 stats（geoUnlocated 归零或减少）
-  } catch (e) {
-    const msg = (e && e.message) || '重新检测失败';
-    // 409 GEO_SCAN_IN_PROGRESS / 429 已在 message 里带中文提示，直接透出
-    toast('⚠️ ' + msg, 'error');
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  const outcome = await runNodeTask({
+    title: '🔍 正在重新检测国家码…',
+    successTitle: '🔍 国家码检测完成',
+    failedTitle: '🔍 国家码检测未完成',
+    capMs: 120000,
+    // 接口与参数保持原样
+    fn: () => api('/nodes/geo-redetect', { method: 'POST', body: JSON.stringify({ scope: 'unlocated' }), timeout: 120000 }),
+    renderSuccess: renderGeoResult,
+  });
+  if (!outcome.ok) return; // 结果（或失败原因）已保留在窗口内
+  // 结果已展示，再做非关键刷新；刷新失败不影响已展示的结果
+  try { loadNodes(); } catch (e) { /* loadNodes 内部已提示 */ }
 }
 
 // ============ 协议显示名（独立链路，只影响展示） ============
@@ -1500,22 +1724,21 @@ function renderNodes() {
   }).join('');
 }
 
-// ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待，走通用进度弹窗）
+// ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待）
+// 任务窗口：running → success/failed，结果保留在窗口内，仅右上角 X 关闭
 async function probeAllNodes() {
-  try {
-    const res = await runWithProgress({
-      title: '⚡ 正在连通性探测所有节点…',
-      capMs: 180000,
-      fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
-    });
-    const s = res.stats || {};
-    const parts = [`共 ${s.total ?? res.nodeCount ?? 0}`, `存活 ${s.alive ?? 0}`, `不通 ${s.dead ?? 0}`];
-    if (s.unknown) parts.push(`不适用 ${s.unknown}`);
-    if (s.avgLatency != null) parts.push(`平均 ${s.avgLatency}ms`);
-    if (s.disabled) parts.push(`已抛弃 ${s.disabled}`);
-    toast(`连通性探测完成 · ${parts.join(' · ')}`);
-    await loadNodes(true);
-  } catch (e) { /* runWithProgress 已弹出失败提示 */ }
+  const outcome = await runNodeTask({
+    title: '⚡ 正在连通性探测所有节点…',
+    successTitle: '⚡ 连通性探测完成',
+    failedTitle: '⚡ 连通性探测未完成',
+    capMs: 180000,
+    // 接口与调用方式保持原样
+    fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
+    renderSuccess: renderProbeResult,
+  });
+  if (!outcome.ok) return; // 结果（或失败原因）已保留在窗口内
+  // 结果已展示，再做非关键刷新；刷新失败不影响已展示的结果
+  try { await loadNodes(true); } catch (e) { /* loadNodes 内部已提示 */ }
 }
 
 // ============ 节点健康历史（点击状态列弹出，纯前端折线图） ============
