@@ -199,6 +199,7 @@ tbody tr:hover { background: var(--accent-soft); }
 .task-result-title.ok { color: var(--green); }
 .task-result-title.err { color: var(--red); }
 .task-result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
+.task-result-sub { margin: 12px 0 6px; font-size: 13px; font-weight: 600; color: var(--text2); }
 .task-result-row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 10px; background: var(--bg); border-radius: 8px; font-size: 14px; }
 .task-result-row > span:first-child { color: var(--text2); }
 .task-result-row > span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -943,20 +944,49 @@ function renderProbeResult(res) {
     + '<div class="task-result-note">延迟为 TCP/TLS 握手 RTT（非真实代理延迟）；UDP 协议节点基础探测不适用。</div>';
 }
 
-/** 国家码结果：POST /api/nodes/geo-redetect → { data:{ total, cached, queried, resolved, failed, unlocatedBefore, unlocatedAfter, unlocatedServers } } */
+/**
+ * 国家码结果：POST /api/nodes/geo-redetect
+ * → { data:{ serverTotal, targets, cached, queried, resolved, failed, unresolved,
+ *            unlocatedBefore, unlocatedAfter, unlocatedServers } }
+ *
+ * 口径（v2.38.5）：serverTotal/检测前后未识别/待检测/新识别/仍无法识别/无法解析 为服务器级；
+ * cached/queried 为 IP 级。缺失字段显示「暂无数据」，不伪装成 0；响应结构异常时明确报错。
+ */
 function renderGeoResult(res) {
-  const d = (res && res.data) || {};
-  const rows = [
-    taskRow('目标服务器总数', taskNum(d.total)),
+  const d = (res && res.data) || null;
+  if (!d) {
+    return '<div class="task-result-title err">❌ 结果数据缺失</div>'
+      + '<div class="task-result-note">服务端未返回国家码检测结果（响应结构异常）。请关闭窗口后重试；若持续出现，请确认服务端与前端版本一致。</div>';
+  }
+  const targets = (d.targets !== undefined) ? d.targets : d.total;
+  const serverRows = [
+    taskRow('服务器总数', taskNum(d.serverTotal)),
+    taskRow('检测前未识别', taskNum(d.unlocatedBefore)),
+    taskRow('本次待检测', taskNum(targets)),
+    taskRow('检测后未识别', taskNum(d.unlocatedAfter)),
+  ];
+  const detectRows = [
+    taskRow('新识别成功', taskNum(d.resolved)),
+    taskRow('仍无法识别', taskNum(d.failed)),
+    taskRow('无法解析、未查询', taskNum(d.unresolved)),
     taskRow('缓存命中（IP）', taskNum(d.cached)),
     taskRow('本次查询（IP）', taskNum(d.queried)),
-    taskRow('新识别成功（服务器）', taskNum(d.resolved)),
-    taskRow('失败（服务器）', taskNum(d.failed)),
-    taskRow('重检前未识别', taskNum(d.unlocatedBefore)),
-    taskRow('重检后未识别', taskNum(d.unlocatedAfter)),
   ];
-  let html = '<div class="task-result-title ok">✅ 重新检测完成</div>'
-    + '<div class="task-result-grid">' + rows.join('') + '</div>';
+  let html = '<div class="task-result-title ok">📊 国家码检测结果</div>'
+    + '<div class="task-result-sub">服务器</div>'
+    + '<div class="task-result-grid">' + serverRows.join('') + '</div>'
+    + '<div class="task-result-sub">本次检测</div>'
+    + '<div class="task-result-grid">' + detectRows.join('') + '</div>';
+
+  if (targets === 0) {
+    html += '<div class="task-result-note">本次没有需要检测的服务器（全部已识别国家码），未发起外部查询。</div>';
+  }
+  if (typeof d.unresolved === 'number' && d.unresolved > 0) {
+    html += '<div class="task-result-note">其中 ' + d.unresolved + ' 台服务器的地址无法解析为 IP（域名解析失败或为保留地址），未进入归属地查询。</div>';
+  }
+  if (typeof d.failed === 'number' && d.failed > 0) {
+    html += '<div class="task-result-note">其中 ' + d.failed + ' 台服务器已查询但仍无国家码（归属地库无记录），会由后台重试继续兜底。</div>';
+  }
   const list = Array.isArray(d.unlocatedServers) ? d.unlocatedServers.filter(Boolean) : [];
   if (list.length) {
     html += '<div class="task-result-note">仍未识别国家码（后端最多返回 50 个，本次 ' + list.length + ' 个）：</div>'

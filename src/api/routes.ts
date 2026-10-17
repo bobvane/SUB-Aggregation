@@ -19,7 +19,7 @@ import { rateLimit, createKvRateLimit } from './rate-limit';
 import { nodeToLink } from '@/services/config.service';
 import { nodeFingerprint } from '@/models/node';
 import { deduplicateNodes } from '@/parser';
-import { prewarmIpGeo } from '@/services/ip-geo.service';
+import { prewarmIpGeo, type PrewarmResult } from '@/services/ip-geo.service';
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
 import { RuleCatalogMeta } from '@/models/rule-catalog';
@@ -484,7 +484,8 @@ export function createApp(deps: AppDeps): Hono {
     const unlocatedBefore = await config.countUnlocatedGeo(servers);
     // 3. 仅重检未识别项（默认 scope='unlocated'），全量则为所有 server
     const targets = body.scope === 'all' ? servers : await config.getUnlocatedServers(servers);
-    let result = { total: 0, cached: 0, queried: 0, resolved: 0, failed: 0 };
+    // 与 prewarmIpGeo 返回同构；没有待检测项时保持真实 0（不是占位数据）
+    let result: PrewarmResult = { total: 0, cached: 0, queried: 0, resolved: 0, failed: 0, unresolved: 0 };
     try {
       if (targets.length > 0) {
         result = await prewarmIpGeo(targets, ipGeoCache);
@@ -502,14 +503,23 @@ export function createApp(deps: AppDeps): Hono {
     } catch {
       // 激活失败不阻塞正常响应
     }
+    // 口径说明（v2.38.5）：
+    //   serverTotal     —— 参与本次检测的全部服务器数
+    //   targets         —— 其中「未识别国家码」、真正需要检测的服务器数（= result.total）
+    //   cached/queried  —— IP 级：命中缓存 / 实际发起查询的 IP 数
+    //   resolved/failed —— 服务器级：已识别成功 / 已查询但仍无国家
+    //   unresolved      —— 服务器级：地址解析不出 IP，未进入查询（不伪装成 0）
     return c.json({
       success: true,
       data: {
+        serverTotal: servers.length,
+        targets: targets.length,
         total: result.total,
         cached: result.cached,
         queried: result.queried,
         resolved: result.resolved,
         failed: result.failed,
+        unresolved: result.unresolved,
         unlocatedBefore: unlocatedBefore,
         unlocatedAfter,
         unlocatedServers,
