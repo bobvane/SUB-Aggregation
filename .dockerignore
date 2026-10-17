@@ -2,7 +2,8 @@ node_modules
 dist
 coverage
 .git
-.github
+# 只排除 workflows（镜像内 npm test 需要 .github/scripts/release-audit.mjs）
+.github/workflows
 docs
 .hermes
 .omh
