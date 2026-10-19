@@ -405,6 +405,25 @@ tbody tr:hover { background: var(--bg3); }
 [data-theme="dark"] .nav-tab.active { color: var(--accent); background: transparent; }
 [data-theme="dark"] .card-value { color: var(--text); }
 [data-theme="dark"] tbody tr:hover { background: var(--bg3); }
+/* Atlas type scale: keep the same compact hierarchy across every page. */
+.btn { font-size: 14px; }
+.btn-sm { font-size: 12px; }
+.sidebar-version { font-size: 12px !important; }
+.sub-item .name { font-size: 14px; }
+.sub-group-label { font-size: 11px; }
+.rules-group-title { font-size: 14px; }
+.rules-group-index, .rules-group-count, .rules-lock-icon { font-size: 11px; }
+.rules-item, .rules-arrow { font-size: 12px; }
+.catalog-chip { font-size: 12px; }
+.task-result-title { font-size: 14px; }
+.task-result-sub, .task-result-note, .task-result-list { font-size: 12px; }
+.toast { font-size: 14px; }
+#subTable td, #nodesTable td { font-size: 12px !important; }
+/* Explicit legacy inline sizes on metric values should not outrank Atlas. */
+#statsGrid .card-value[style*="font-size"] { font-family: Georgia, serif; font-size: 14px !important; font-weight: 500; letter-spacing: 0; }
+@media (max-width: 620px) {
+  #statsGrid .card-value[style*="font-size"] { font-size: 13px !important; }
+}
 @media (max-width: 900px) {
   .sidebar { width: 100%; padding: 10px 14px; }
   .atlas-topbar { height: 58px; padding: 0 23px; }
