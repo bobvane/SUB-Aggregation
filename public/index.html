@@ -241,6 +241,9 @@ tbody tr:hover { background: var(--accent-soft); }
 .upgrade-banner { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 20px; font-size: 14px; font-weight: 600; background: #fff8e1; color: #b45309; }
 .upgrade-banner a { color: #b45309; text-decoration: none; }
 .upgrade-banner a:hover { text-decoration: underline; }
+.sidebar-version-link { position: relative; display: inline-flex; align-items: center; gap: 5px; color: var(--text2); text-decoration: none; }
+.sidebar-version-link:hover { color: var(--text); }
+.upgrade-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.15); }
 /* ===== Toast ===== */
 .toast { position: fixed; bottom: 24px; right: 24px; z-index: 99999; padding: 12px 20px; border-radius: var(--radius); color: #fff; font-size: 16px; font-weight: 500; max-width: 360px; animation: fadeIn .3s; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
 .toast-success { background: #1d9159; }
@@ -358,9 +361,11 @@ tbody tr:hover { background: var(--accent-soft); }
         <span id="userBadge" style="font-size:12.5px;color:var(--text2)">admin</span>
         <button class="btn btn-sm" onclick="logout()">🚪 退出</button>
         <div class="sidebar-version" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:14px;color:var(--text2);display:flex;flex-direction:column;gap:4px;align-items:center">
-          <span>SUB-Aggregation v<span id="appVersion">-</span></span>
+          <a id="sidebarVersion" class="sidebar-version-link" href="https://github.com/bobvane/SUB-Aggregation/releases" target="_blank" rel="noopener" title="正在检查 GitHub 最新版本">
+            <span>SUB-Aggregation v<span id="appVersion">-</span></span>
+            <span id="upgradeDot" class="upgrade-dot" aria-label="发现新版本" hidden></span>
+          </a>
           <a href="https://github.com/bobvane/SUB-Aggregation" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">GitHub</a>
-          <span id="upgradeStatusSidebar" style="font-size:14px"></span>
         </div>
       </div>
     </aside>
@@ -2473,11 +2478,22 @@ async function loadMeta() {
   try {
     const upRes = await api('/meta/check-upgrade');
     const up = upRes.data || {};
-    // 更新 sidebar 升级状态
-    const elSidebar = document.getElementById('upgradeStatusSidebar');
-    if (up.hasUpdate && up.latest && elSidebar) {
-      elSidebar.innerHTML = '<span class="upgrade-banner" style="padding:2px 8px;font-size:14px">🆕 <a href="' + escHtml(up.releaseUrl || '') + '" target="_blank" rel="noopener">v' + escHtml(up.latest) + '</a></span>';
+    const versionLink = document.getElementById('sidebarVersion');
+    const upgradeDot = document.getElementById('upgradeDot');
+    const currentVersion = document.getElementById('appVersion')?.textContent || '-';
+    const latest = /^\d+\.\d+\.\d+$/.test(String(up.latest || '')) ? String(up.latest) : '';
+    const hasUpdate = Boolean(up.checked && up.hasUpdate && latest);
+    if (versionLink) {
+      versionLink.title = hasUpdate
+        ? `发现 GitHub 新版本 v${latest}，当前版本 v${currentVersion}`
+        : up.checked
+          ? `当前已是最新版本 v${currentVersion}`
+          : '暂时无法检查 GitHub 最新版本';
+      if (hasUpdate) {
+        versionLink.href = `https://github.com/bobvane/SUB-Aggregation/releases/tag/v${latest}`;
+      }
     }
+    if (upgradeDot) upgradeDot.hidden = !hasUpdate;
   } catch { /* 升级检测失败忽略 */ }
 }
 
