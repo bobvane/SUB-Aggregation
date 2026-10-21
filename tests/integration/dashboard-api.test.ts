@@ -58,13 +58,14 @@ describe('Dashboard API', () => {
     const res = await app.request('/api/dashboard', { headers });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { success: boolean; data: {
-      subscriptions: number; enabledSubscriptions: number; disabledSubscriptions: number;
+      subscriptions: number; failedSubscriptions: number; enabledSubscriptions: number; disabledSubscriptions: number;
       nodes: number; uniqueNodes: number; duplicates: number; enabledNodes: number; disabledNodes: number;
       alive: number; dead: number; droppedNodes: number; lastProbe: number | null;
       protoCount: Record<string, number>; lastUpdate: number | null; status: string;
     } };
     expect(json.success).toBe(true);
     expect(json.data.subscriptions).toBe(1);
+    expect(json.data.failedSubscriptions).toBe(0);
     expect(json.data.enabledSubscriptions).toBe(1);
     expect(json.data.disabledSubscriptions).toBe(0);
     expect(json.data.nodes).toBe(2);
@@ -79,6 +80,17 @@ describe('Dashboard API', () => {
     expect(json.data.protoCount.vmess).toBe(1);
     expect(json.data.protoCount.trojan).toBe(1);
     expect(json.data.status).toBe('ok');
+  });
+
+  it('仪表盘只统计启用且上次更新失败的订阅作为待处理问题', async () => {
+    const [active] = await repos.subscriptions.list();
+    await repos.subscriptions.update(active.id, { status: 'error', errorMessage: 'upstream timeout' });
+    const paused = await repos.subscriptions.create({ name: 'paused', url: 'https://example.com/paused' });
+    await repos.subscriptions.update(paused.id, { enabled: false, status: 'error', errorMessage: 'old failure' });
+
+    const res = await app.request('/api/dashboard', { headers });
+    const json = (await res.json()) as { data: { failedSubscriptions: number } };
+    expect(json.data.failedSubscriptions).toBe(1);
   });
 
   it('节点总数含停用订阅的节点，已禁用订阅单独计数（2026-09-24 用户指令）', async () => {

@@ -440,6 +440,67 @@ tbody tr:hover { background: var(--bg3); }
   .card { padding: 15px 4px; }
   th, td { padding: 9px 7px; }
 }
+.dashboard-attention { margin: 0 0 20px; padding: 18px 20px; border: 1px solid var(--border); background: var(--bg2); }
+.attention-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.attention-heading h3 { font-size: 16px; font-weight: 650; }
+.attention-summary, .list-count { color: var(--text2); font-size: 12px; }
+.attention-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.attention-item { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; text-align: left; padding: 12px 14px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; font: inherit; }
+.attention-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+.attention-item > span { color: var(--text2); font-size: 12px; }
+.attention-item strong { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 24px; font-variant-numeric: tabular-nums; }
+.attention-item small { color: var(--text2); font-size: 11px; }
+.attention-error strong { color: var(--red); }
+.attention-warn strong { color: var(--orange); }
+.attention-clear { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
+.list-toolbar, .node-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.list-toolbar { margin: 0 0 10px; }
+.list-toolbar input { flex: 1 1 220px; width: auto; min-width: 180px; }
+.list-toolbar select, .node-toolbar select { width: auto; min-width: 140px; }
+.node-toolbar input { width: auto; min-width: 200px; max-width: 260px; }
+.list-toolbar .list-count { margin-left: auto; white-space: nowrap; }
+.node-list-toolbar { justify-content: flex-end; }
+.table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.sub-table-scroll table { min-width: 760px; }
+.node-table-scroll table { min-width: 900px; }
+.list-empty { color: var(--text2); padding: 24px; text-align: center; }
+.status-error { color: var(--red); font-weight: 650; }
+.sub-error-detail { max-width: 300px; font-size: 12px; color: var(--text2); }
+.sub-error-message { color: var(--red); overflow-wrap: anywhere; }
+.primary-navigation { display: contents; }
+.mobile-nav-toggle { display: none; }
+.toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 99999; display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none; }
+.toast { position: static; display: flex; align-items: flex-start; gap: 10px; max-width: min(420px, calc(100vw - 32px)); padding: 12px 15px; border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: 8px; background: var(--bg2); color: var(--text); font-size: 13px; box-shadow: 0 8px 24px rgba(20, 30, 25, .14); pointer-events: auto; }
+.toast-success { background: var(--bg2); border-left-color: var(--green); color: var(--text); }
+.toast-error { background: var(--bg2); border-left-color: var(--red); color: var(--text); }
+.toast-icon { flex: none; color: var(--green); font-weight: 800; }
+.toast-error .toast-icon { color: var(--red); }
+.toast-message { overflow-wrap: anywhere; }
+th, td { font-size: 13px; }
+#subTable td, #nodesTable td { font-size: 13px !important; }
+.card-title { font-size: 12px; }
+.sub-error-detail { line-height: 1.55; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 900px) {
+  .sidebar { position: sticky; top: 0; z-index: 20; overflow: visible; flex-wrap: wrap; }
+  .mobile-nav-toggle { display: inline-flex; margin-left: auto; }
+  .primary-navigation { display: contents; }
+  .sidebar:not(.is-open) .sgroup, .sidebar:not(.is-open) .nav-tab, .sidebar:not(.is-open) .sidebar-footer { display: none; }
+  .sidebar.is-open .nav-tab { flex: 1 1 40%; white-space: normal; }
+  .sidebar.is-open .sidebar-footer { display: flex; flex: 1 0 100%; margin: 6px 0 0; }
+  .node-toolbar { width: 100%; }
+}
+@media (max-width: 620px) {
+  .attention-actions { grid-template-columns: 1fr; }
+  .attention-heading { align-items: flex-start; flex-direction: column; }
+  .list-toolbar input, .list-toolbar select, .node-toolbar input, .node-toolbar select { flex: 1 1 140px; width: auto; min-width: 0; max-width: none; }
+  .node-toolbar .btn { flex: 1 1 100%; }
+  .list-toolbar .list-count { flex-basis: 100%; margin-left: 0; }
+  .toast-region { right: 12px; bottom: 12px; left: 12px; }
+  .toast { max-width: 100%; }
+}
+[data-theme="light"] { --text2: #5f6b63; }
+[data-theme="dark"] { --text2: #a3afbd; }
 </style>
 </head>
 <body>
@@ -447,6 +508,8 @@ tbody tr:hover { background: var(--bg3); }
   <div class="app-shell">
     <aside class="sidebar">
       <div class="logo" id="sidebarLogo">SUB<span>·</span>Aggregation</div>
+      <button type="button" class="mobile-nav-toggle" id="mobileNavToggle" onclick="toggleSidebar()" aria-expanded="false" aria-controls="primaryNavigation">☰ 菜单</button>
+      <nav id="primaryNavigation" class="primary-navigation" aria-label="主导航">
       <div class="sgroup">工作台</div>
       <div class="nav-tab active" data-page="dashboard" onclick="switchPage('dashboard')"><span class="nav-icon">▦</span>仪表盘</div>
       <div class="nav-tab" data-page="subscribe" onclick="switchPage('subscribe')"><span class="nav-icon">◉</span>订阅管理</div>
@@ -454,6 +517,7 @@ tbody tr:hover { background: var(--bg3); }
       <div class="nav-tab" data-page="rules" onclick="switchPage('rules')"><span class="nav-icon">◇</span>分流规则</div>
       <div class="nav-tab" data-page="output" onclick="switchPage('output')"><span class="nav-icon">▤</span>输出配置</div>
       <div class="nav-tab" data-page="settings" onclick="switchPage('settings')"><span class="nav-icon">⚙</span>设置</div>
+      </nav>
       <div class="sidebar-footer">
         <button class="btn btn-sm" onclick="cycleTheme()" id="themeBtn">🌙</button>
         <button class="btn btn-sm" onclick="logout()">🚪 退出</button>
@@ -481,6 +545,23 @@ tbody tr:hover { background: var(--bg3); }
         <div class="atlas-subtitle">订阅与节点状态，一眼掌握。</div>
       </div>
     </div>
+    <section class="dashboard-attention" aria-labelledby="attentionHeading">
+      <div class="attention-heading">
+        <div><div class="atlas-eyebrow">快速定位</div><h3 id="attentionHeading">需要关注</h3></div>
+        <span id="attentionSummary" class="attention-summary">正在读取状态…</span>
+      </div>
+      <div class="attention-actions">
+        <button class="attention-item attention-error" onclick="openSubscriptionFilter('error')">
+          <span>订阅更新失败</span><strong id="attentionFailedSubs">-</strong><small>查看失败原因或立即重试</small>
+        </button>
+        <button class="attention-item attention-warn" onclick="openNodeFilter('dead')">
+          <span>节点不通</span><strong id="attentionDeadNodes">-</strong><small>查看探测失败节点</small>
+        </button>
+        <button class="attention-item" onclick="openNodeFilter('dropped')">
+          <span>已从配置抛弃</span><strong id="attentionDroppedNodes">-</strong><small>查看当前不输出的节点</small>
+        </button>
+      </div>
+    </section>
     <div class="stats-grid" id="statsGrid">
       <div class="card"><div class="card-title">订阅数量</div><div class="card-value" id="statSubs">-</div></div>
       <div class="card"><div class="card-title">已启用订阅</div><div class="card-value" id="statEnabledSubs">-</div></div>
@@ -510,18 +591,37 @@ tbody tr:hover { background: var(--bg3); }
       <div><div class="atlas-eyebrow">资源</div><h2>订阅管理</h2><div class="atlas-subtitle">集中更新和管理订阅源。</div></div>
       <button class="btn btn-primary" onclick="showAddSub()">＋ 添加订阅</button>
     </div>
-    <table id="subTable">
+    <div class="list-toolbar">
+      <input id="subSearch" type="search" placeholder="搜索订阅名称或链接…" oninput="filterSubscriptions()" aria-label="搜索订阅">
+      <select id="subStatusFilter" onchange="filterSubscriptions()" aria-label="按订阅状态筛选">
+        <option value="all">所有状态</option><option value="error">更新失败</option><option value="enabled">已启用</option><option value="disabled">已停用</option>
+      </select>
+      <select id="subSort" onchange="sortSubscriptions()" aria-label="订阅排序">
+        <option value="default">默认顺序</option><option value="name">名称 A–Z</option><option value="updated">最近更新</option><option value="nodes">节点数从多到少</option>
+      </select>
+      <span id="subListCount" class="list-count"></span>
+    </div>
+    <div class="table-scroll sub-table-scroll"><table id="subTable">
       <thead><tr><th>名称</th><th>链接</th><th>状态</th><th>节点数</th><th>更新时间</th><th>操作</th></tr></thead>
       <tbody id="subTableBody"></tbody>
-    </table>
+    </table></div>
   </div>
 
   <!-- Nodes -->
   <div class="page" id="page-nodes">
     <div class="atlas-pagehead">
       <div><div class="atlas-eyebrow">资源</div><h2>节点列表</h2><div class="atlas-subtitle">维护节点状态、连通性和输出范围。</div></div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input style="width:auto;max-width:300px" placeholder="🔍 搜索节点名或地址..." id="nodeSearch" oninput="filterNodes()">
+      <div class="node-toolbar">
+        <input type="search" placeholder="搜索节点名或地址…" id="nodeSearch" oninput="filterNodes()" aria-label="搜索节点">
+        <select id="nodeHealthFilter" onchange="filterNodes()" aria-label="按节点状态筛选">
+          <option value="all">所有状态</option><option value="alive">存活</option><option value="dead">不通</option><option value="dropped">已抛弃</option><option value="unprobed">未探测</option>
+        </select>
+        <select id="nodeProtocolFilter" onchange="filterNodes()" aria-label="按协议筛选">
+          <option value="all">所有协议</option><option value="vmess">VMess</option><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="ss">Shadowsocks</option><option value="ssr">ShadowsocksR</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="wireguard">WireGuard</option><option value="anytls">AnyTLS</option><option value="other">其他</option>
+        </select>
+        <select id="nodeSort" onchange="sortNodes()" aria-label="节点排序">
+          <option value="default">默认顺序</option><option value="name">名称 A–Z</option><option value="latency-asc">延迟从低到高</option><option value="latency-desc">延迟从高到低</option>
+        </select>
         <button class="btn btn-sm btn-primary" id="btnProbe" onclick="probeAllNodes()" title="对所有节点执行基础连通性探测（TCP/TLS 握手 RTT，非真实代理延迟）。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。真实代理端到端延迟由客户端 Mihomo 自动选择组负责。">⚡ 立即测活</button>
       </div>
     </div>
@@ -548,10 +648,11 @@ tbody tr:hover { background: var(--bg3); }
       <span>🏷 节点名自动生成</span>
       <span style="color:var(--text2)">格式：旗帜 国家码 协议-序号（如 🇭🇰 HK VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
     </div>
-    <table id="nodesTable">
+    <div class="list-toolbar node-list-toolbar"><span id="nodeListCount" class="list-count"></span></div>
+    <div class="table-scroll node-table-scroll"><table id="nodesTable">
       <thead><tr><th style="width:40px" title="锁定后无视连通性探测/延迟，强制进配置">锁定</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换连通性延迟排序（TCP/TLS 握手 RTT，非真实代理延迟）">连通性延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
       <tbody id="nodesTableBody"></tbody>
-    </table>
+    </table></div>
     <p class="text-center" id="nodesEmpty" style="color:var(--text2);padding:24px">暂无节点数据</p>
   </div>
 
@@ -816,6 +917,34 @@ tbody tr:hover { background: var(--bg3); }
 // ============ State ============
 let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
 
+const LIST_PREFS_KEY = 'sub-aggregation-list-view';
+function readListPrefs() {
+  try { return JSON.parse(localStorage.getItem(LIST_PREFS_KEY) || '{}'); } catch { return {}; }
+}
+function saveListPrefs() {
+  try {
+    const prefs = {
+      subSearch: document.getElementById('subSearch')?.value || '',
+      subStatusFilter: document.getElementById('subStatusFilter')?.value || 'all',
+      subSort: document.getElementById('subSort')?.value || 'default',
+      nodeSearch: document.getElementById('nodeSearch')?.value || '',
+      nodeHealthFilter: document.getElementById('nodeHealthFilter')?.value || 'all',
+      nodeProtocolFilter: document.getElementById('nodeProtocolFilter')?.value || 'all',
+      nodeSort: document.getElementById('nodeSort')?.value || 'default',
+    };
+    localStorage.setItem(LIST_PREFS_KEY, JSON.stringify(prefs));
+  } catch { /* 浏览器隐私模式下列表偏好仍可在当前会话使用 */ }
+}
+function loadListPrefs() {
+  const prefs = readListPrefs();
+  for (const [id, value] of Object.entries(prefs)) {
+    const el = document.getElementById(id);
+    if (el && typeof value === 'string') el.value = value;
+  }
+  state.nodeLatencySort = document.getElementById('nodeSort')?.value === 'latency-asc' ? 'asc'
+    : (document.getElementById('nodeSort')?.value === 'latency-desc' ? 'desc' : null);
+}
+
 // ============ Theme ============
 const themes = ['light', 'dark'];
 let themeIdx = 0;
@@ -838,11 +967,31 @@ function cycleTheme() {
 
 // ============ Toast ============
 function toast(msg, type = 'success') {
+  let region = document.getElementById('toastRegion');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'toastRegion';
+    region.className = 'toast-region';
+    region.setAttribute('aria-label', '操作结果');
+    document.body.appendChild(region);
+  }
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = type === 'error' ? '!' : '✓';
+  const message = document.createElement('span');
+  message.className = 'toast-message';
+  message.textContent = msg;
+  el.append(icon, message);
+  region.appendChild(el);
+  setTimeout(() => {
+    el.remove();
+    if (region && !region.children.length) region.remove();
+  }, 4000);
 }
 
 // ============ Modal ============
@@ -1277,6 +1426,12 @@ async function logout() {
 // ============ Page Switching ============
 function switchPage(page) {
   state.currentPage = page;
+  const sidebar = document.querySelector('.sidebar');
+  const navToggle = document.getElementById('mobileNavToggle');
+  if (sidebar && window.matchMedia('(max-width: 900px)').matches) {
+    sidebar.classList.remove('is-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
   const pageLabels = { dashboard: '仪表盘', subscribe: '订阅管理', nodes: '节点列表', rules: '分流规则', output: '输出配置', settings: '设置' };
@@ -1291,6 +1446,14 @@ function switchPage(page) {
   if (page === 'output') loadOutput();
   if (page === 'rules') { loadRules(); ensureCatalogLoaded(); }
   if (page === 'settings') { loadSettings(); loadCurrentUsername(); }
+}
+
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  const button = document.getElementById('mobileNavToggle');
+  if (!sidebar || !button) return;
+  const isOpen = sidebar.classList.toggle('is-open');
+  button.setAttribute('aria-expanded', String(isOpen));
 }
 
 // ============ 分流规则 ============
@@ -1509,6 +1672,7 @@ function loadRules() {
 
 // ============ Dashboard ============
 function renderDashboard(d) {
+  const failedSubs = d.failedSubscriptions ?? 0;
   document.getElementById('statSubs').textContent = d.subscriptions;
   document.getElementById('statEnabledSubs').textContent = d.enabledSubscriptions ?? '-';
   document.getElementById('statDisabledSubs').textContent = d.disabledSubscriptions ?? '-';
@@ -1529,6 +1693,29 @@ function renderDashboard(d) {
   document.getElementById('statProto').textContent = protoStr || '-';
   // 最近更新时间
   document.getElementById('statUpdate').textContent = d.lastUpdate ? new Date(d.lastUpdate).toLocaleString() : '暂无';
+  document.getElementById('attentionFailedSubs').textContent = failedSubs;
+  document.getElementById('attentionDeadNodes').textContent = d.dead ?? 0;
+  document.getElementById('attentionDroppedNodes').textContent = d.droppedNodes ?? 0;
+  const needsAttention = failedSubs + (d.dead ?? 0) + (d.droppedNodes ?? 0);
+  document.getElementById('attentionSummary').textContent = needsAttention
+    ? `有 ${needsAttention} 项状态需要查看`
+    : '目前没有待处理问题';
+  document.querySelector('.dashboard-attention')?.classList.toggle('attention-clear', needsAttention === 0);
+}
+
+function openSubscriptionFilter(filter) {
+  document.getElementById('subSearch').value = '';
+  document.getElementById('subStatusFilter').value = filter;
+  saveListPrefs();
+  switchPage('subscribe');
+}
+
+function openNodeFilter(filter) {
+  document.getElementById('nodeSearch').value = '';
+  document.getElementById('nodeHealthFilter').value = filter;
+  document.getElementById('nodeProtocolFilter').value = 'all';
+  saveListPrefs();
+  switchPage('nodes');
 }
 
 async function loadDashboard() {
@@ -1594,39 +1781,68 @@ async function loadSubscriptions() {
 
 function renderSubTable() {
   const tbody = document.getElementById('subTableBody');
+  const search = (document.getElementById('subSearch')?.value || '').trim().toLocaleLowerCase();
+  const filter = document.getElementById('subStatusFilter')?.value || 'all';
+  const sort = document.getElementById('subSort')?.value || 'default';
+  let visible = state.subscriptions.filter((s) => {
+    const matchesSearch = !search || `${s.name || ''} ${s.url || ''}`.toLocaleLowerCase().includes(search);
+    const matchesFilter = filter === 'all'
+      || (filter === 'error' && s.status === 'error')
+      || (filter === 'enabled' && s.enabled)
+      || (filter === 'disabled' && !s.enabled);
+    return matchesSearch && matchesFilter;
+  });
+  if (sort === 'name') visible.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'));
+  if (sort === 'updated') visible.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (sort === 'nodes') visible.sort((a, b) => (b.nodeCount || 0) - (a.nodeCount || 0));
+  document.getElementById('subListCount').textContent = `显示 ${visible.length} / ${state.subscriptions.length}`;
   if (state.subscriptions.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color:var(--text2);padding:24px">暂无订阅，点击右上角添加</td></tr>';
     return;
   }
-  tbody.innerHTML = state.subscriptions.map(s => `
+  if (visible.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center list-empty">没有符合条件的订阅</td></tr>';
+    return;
+  }
+  tbody.innerHTML = visible.map(s => {
+    const failed = s.status === 'error';
+    const retryCount = Number(s.retryCount) || 0;
+    const retryState = !s.enabled
+      ? '订阅已停用，不会自动重试'
+      : s.nextRetryAt
+        ? `下次重试：${new Date(s.nextRetryAt).toLocaleString()}`
+        : (retryCount >= 4 ? '自动重试已暂停，可手动重试' : '将在下次常规同步时重试');
+    return `
     <tr>
       <td><strong>${escHtml(s.name)}</strong></td>
       <td style="font-size:14px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(s.url || '')}">
         ${s.url ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${escHtml(s.url)}</a>` : '-'}
       </td>
       <td>
-        ${s.enabled
-          ? '<span class="status-active">✅ 已启用</span>'
-          : '<span class="status-disabled">⏸ 未启用</span>'}
-        ${s.status === 'error' && s.enabled ? `
+        ${failed
+          ? `<span class="status-error">⚠️ ${retryCount >= 4 ? '重试已暂停' : '更新失败'}</span>`
+          : s.enabled ? '<span class="status-active">✅ 已启用</span>' : '<span class="status-disabled">⏸ 已停用</span>'}
+        ${failed ? `
           <div class="sub-error-detail" title="${escHtml(s.errorMessage || '未知错误')}">
-            <div>❌ ${escHtml(s.errorMessage || '更新失败')}</div>
-            <div>最近失败：${new Date(s.lastErrorAt || s.updatedAt).toLocaleString()}</div>
-            <div>${s.nextRetryAt
-              ? `自动重试：${new Date(s.nextRetryAt).toLocaleString()}`
-              : (s.retryCount >= 4 ? '自动重试已暂停；可手动更新' : '将在下次常规同步时重试')}</div>
+            <div class="sub-error-message">${escHtml(s.errorMessage || '更新失败')}</div>
+            <div>最近失败：${s.lastErrorAt || s.updatedAt ? new Date(s.lastErrorAt || s.updatedAt).toLocaleString() : '时间未知'}</div>
+            <div>${retryState}</div>
           </div>` : ''}
       </td>
       <td>${s.nodeCount ?? 0}</td>
       <td style="font-size:14px;color:var(--text2)">${s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}</td>
       <td>
         <button class="btn btn-sm" onclick="toggleSub('${s.id}')">${s.enabled ? '⏸ 停用' : '▶ 启用'}</button>
-        <button class="btn btn-sm" onclick="updateSub('${s.id}')">🔄 更新</button>
+        <button class="btn btn-sm${failed ? ' btn-primary' : ''}" onclick="updateSub('${s.id}')" title="${failed ? '立即重新尝试获取此订阅' : '立即更新此订阅'}">${failed ? '↻ 立即重试' : '🔄 更新'}</button>
         <button class="btn btn-sm btn-danger" onclick="deleteSub('${s.id}')">🗑 删除</button>
       </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 }
+
+function filterSubscriptions() { saveListPrefs(); renderSubTable(); }
+function sortSubscriptions() { saveListPrefs(); renderSubTable(); }
 
 function showAddSub() { showModal('addSubModal'); }
 
@@ -1656,7 +1872,8 @@ async function addSub() {
 }
 
 async function updateSub(id) {
-  const btn = document.querySelector(`button[onclick*="updateSub('${id}')"]`);
+  const findButton = () => document.querySelector(`button[onclick*="updateSub('${id}')"]`);
+  const btn = findButton();
   if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = '⏳ 更新中'; }
   try {
     // v2.17.0：居中进度条，120s 长时限（后台 prewarm 已异步，只等订阅抓取+解析）
@@ -1667,10 +1884,15 @@ async function updateSub(id) {
     });
     toast('更新成功');
     if (res && res.data) updateProgress(`✅ 更新完成：${res.data.nodeCount ?? 0} 个节点`);
-    loadSubscriptions();
-  } catch (e) { toast('更新失败: ' + e.message, 'error'); loadSubscriptions(); }
+    await loadSubscriptions();
+  } catch (e) { toast('更新失败: ' + e.message, 'error'); await loadSubscriptions(); }
   finally {
-    if (btn) { btn.disabled = false; btn.textContent = '🔄 更新'; }
+    const currentBtn = findButton();
+    if (currentBtn) {
+      currentBtn.disabled = false;
+      const sub = state.subscriptions.find((item) => item.id === id);
+      currentBtn.textContent = sub?.status === 'error' ? '↻ 立即重试' : '🔄 更新';
+    } else if (btn) btn.disabled = false;
   }
 }
 
@@ -1869,18 +2091,40 @@ function defaultNodeOrder(a, b) {
 // 点击「延迟」表头切换 升序 → 降序 → 取消
 function sortNodesByLatency() {
   state.nodeLatencySort = state.nodeLatencySort === null ? 'asc' : (state.nodeLatencySort === 'asc' ? 'desc' : null);
+  const select = document.getElementById('nodeSort');
+  if (select) select.value = state.nodeLatencySort ? `latency-${state.nodeLatencySort}` : 'default';
+  saveListPrefs();
+  renderNodes();
+}
+
+function sortNodes() {
+  const sort = document.getElementById('nodeSort')?.value || 'default';
+  state.nodeLatencySort = sort === 'latency-asc' ? 'asc' : (sort === 'latency-desc' ? 'desc' : null);
+  saveListPrefs();
   renderNodes();
 }
 
 function renderNodes() {
   const tbody = document.getElementById('nodesTableBody');
   const empty = document.getElementById('nodesEmpty');
-  const search = document.getElementById('nodeSearch').value.toLowerCase();
+  const search = (document.getElementById('nodeSearch')?.value || '').trim().toLocaleLowerCase();
+  const healthFilter = document.getElementById('nodeHealthFilter')?.value || 'all';
+  const protocolFilter = document.getElementById('nodeProtocolFilter')?.value || 'all';
+  const sort = document.getElementById('nodeSort')?.value || 'default';
   // v2.36：被系统剔除的节点也列出并标 🚫 —— 用户要能看到"哪些被剔除了"（仅不输出到配置，记录保留、继续测活）
   let filtered = state.nodes.slice();
-  if (search) filtered = filtered.filter(n => (n.name + ' ' + n.server).toLowerCase().includes(search));
-  if (state.nodeLatencySort) {
-    const dir = state.nodeLatencySort === 'asc' ? 1 : -1;
+  if (search) filtered = filtered.filter(n => `${n.name || ''} ${n.server || ''} ${n.protocol || ''}`.toLocaleLowerCase().includes(search));
+  if (protocolFilter !== 'all') {
+    filtered = filtered.filter(n => protocolFilter === 'other'
+      ? !['vmess','vless','trojan','ss','shadowsocks','ssr','hysteria2','tuic','wireguard','anytls'].includes(String(n.protocol || '').toLowerCase())
+      : (protocolFilter === 'ss' ? ['ss','shadowsocks'].includes(String(n.protocol || '').toLowerCase()) : String(n.protocol || '').toLowerCase() === protocolFilter));
+  }
+  if (healthFilter === 'alive') filtered = filtered.filter(n => n.healthStatus === 'alive');
+  if (healthFilter === 'dead') filtered = filtered.filter(n => n.healthStatus && n.healthStatus !== 'alive');
+  if (healthFilter === 'dropped') filtered = filtered.filter(n => n.dropped);
+  if (healthFilter === 'unprobed') filtered = filtered.filter(n => !n.healthStatus);
+  if (sort === 'latency-asc' || sort === 'latency-desc') {
+    const dir = sort === 'latency-asc' ? 1 : -1;
     filtered = filtered.sort((a, b) => {
       const la = nodeLatency(a), lb = nodeLatency(b);
       if (la == null && lb == null) return 0;
@@ -1888,6 +2132,8 @@ function renderNodes() {
       if (lb == null) return -1;
       return (la - lb) * dir;
     });
+  } else if (sort === 'name') {
+    filtered.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'));
   } else {
     filtered = filtered.sort(defaultNodeOrder);
   }
@@ -1899,9 +2145,12 @@ function renderNodes() {
   setStat2('statsDropped', cnt(n => n.dropped));
   const mark = document.getElementById('latencySortMark');
   if (mark) mark.textContent = state.nodeLatencySort === 'asc' ? '▲' : (state.nodeLatencySort === 'desc' ? '▼' : '');
+  const count = document.getElementById('nodeListCount');
+  if (count) count.textContent = `显示 ${filtered.length} / ${state.nodes.length}`;
   if (filtered.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
+    empty.textContent = state.nodes.length ? '没有符合条件的节点，请调整搜索或筛选条件' : '暂无节点数据';
     return;
   }
   empty.style.display = 'none';
@@ -1996,7 +2245,7 @@ function renderHealthChart(hist) {
     <p style="color:var(--text2);font-size:13px;margin-top:8px">共 ${pts.length} 次探测 · ✅ 成功 ❌ 失败 · 悬停查看单次详情</p>`;
 }
 
-function filterNodes() { renderNodes(); }
+function filterNodes() { saveListPrefs(); renderNodes(); }
 
 // ============ 节点名清洗（v2.35 已废弃：改为生成时自动命名，见 config.service.smartRename） ============
 
@@ -2621,6 +2870,7 @@ async function loadMeta() {
 
 // ============ Init ============
 window.addEventListener('DOMContentLoaded', async () => {
+  loadListPrefs();
   // 从 hash 恢复页面
   const savedPage = window.location.hash.replace('#', '') || 'dashboard';
   if (['dashboard','subscribe','nodes','rules','output','settings'].includes(savedPage)) {

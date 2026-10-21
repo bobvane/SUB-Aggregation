@@ -17,6 +17,8 @@
 
 路由完整列表、参数校验和各端点的认证要求以 `src/api/routes.ts` 为准。修改 API 时同步更新浏览器端 `public/api.js`、相关集成测试和本页。
 
+仪表盘数据包含 `failedSubscriptions`，表示启用且最近一次更新失败的订阅数，供首页关注概览定位问题。
+
 `GET /api/meta/check-upgrade` 在页面打开或刷新时从 GitHub Releases Atom 源读取版本；该接口及浏览器请求均禁用缓存。GitHub 不可达时返回 `checked: false`，前端应显示暂时无法检查。
 
 ## 认证与敏感信息

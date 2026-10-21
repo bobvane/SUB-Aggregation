@@ -232,6 +232,7 @@ export function createApp(deps: AppDeps): Hono {
     allNodes.forEach(n => { const p = n.protocol || 'unknown'; protoCount[p] = (protoCount[p] || 0) + 1; });
     return {
       subscriptions: subs.length,
+      failedSubscriptions: subs.filter((s) => s.enabled && s.status === 'error').length,
       enabledSubscriptions: subs.filter(s => s.enabled).length,
       disabledSubscriptions: subs.filter(s => !s.enabled).length,
       nodes: allNodes.length,
