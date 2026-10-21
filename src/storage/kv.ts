@@ -359,7 +359,7 @@ export class KvSessionRepository implements SessionRepository {
 
 export interface SettingsRepository {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
+  set(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
 }
 
 export class KvSettingsRepository implements SettingsRepository {
@@ -369,8 +369,8 @@ export class KvSettingsRepository implements SettingsRepository {
     return this.kv.get(KV_KEYS.setting(key));
   }
 
-  async set(key: string, value: string): Promise<void> {
-    await this.kv.put(KV_KEYS.setting(key), value);
+  async set(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
+    await this.kv.put(KV_KEYS.setting(key), value, options);
   }
 }
 

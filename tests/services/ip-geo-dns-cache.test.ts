@@ -8,12 +8,14 @@ import { resolveDomainToIP, prewarmIpGeo, batchQuery, emptyGeoRequestStats } fro
 
 function makeCache(seed: Record<string, string> = {}) {
   const store = new Map<string, string>(Object.entries(seed));
+  const ttls = new Map<string, number>();
   return {
     cache: {
       get: async (k: string) => store.get(k) ?? null,
-      set: async (k: string, v: string) => { store.set(k, v); },
+      set: async (k: string, v: string, ttl?: number) => { store.set(k, v); if (ttl !== undefined) ttls.set(k, ttl); },
     },
     dump: () => Object.fromEntries(store),
+    ttls,
   };
 }
 
@@ -51,13 +53,14 @@ describe('resolveDomainToIP：DNS 缓存（v2.38.6）', () => {
 
   it('缓存过期后重新解析并写回缓存', async () => {
     const old = Date.now() - 7 * 60 * 60 * 1000; // 7 小时 > 6 小时 TTL
-    const { cache, dump } = makeCache({ 'dns_ip:hk.example.com': `${old}|9.9.9.9` });
+    const { cache, dump, ttls } = makeCache({ 'dns_ip:hk.example.com': `${old}|9.9.9.9` });
     const { fetchFn } = makeFetch({ google: 'ok' });
     const stats = emptyGeoRequestStats();
     const ip = await resolveDomainToIP('hk.example.com', fetchFn, { cache, stats });
     expect(ip).toBe('1.2.3.4');
     expect(stats.dnsQueried).toBe(1);
     expect(dump()['dns_ip:hk.example.com']).toContain('1.2.3.4');
+    expect(ttls.get('dns_ip:hk.example.com')).toBe(6 * 60 * 60);
   });
 
   it('Google 成功时不调用 Cloudflare', async () => {

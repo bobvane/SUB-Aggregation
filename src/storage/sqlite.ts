@@ -16,12 +16,25 @@ const BATCH_LIMIT = 100;
 
 type Row = { key: string; value: string; expires_at: number | null };
 
+/** 返回所有以 prefix 开头的字符串范围上界（BINARY/Unicode 码点序）。 */
+function prefixUpperBound(prefix: string): string | null {
+  const points = Array.from(prefix, (char) => char.codePointAt(0)!);
+  for (let i = points.length - 1; i >= 0; i--) {
+    let next = points[i] + 1;
+    // Unicode surrogate 区间不是合法码点，跳过它。
+    if (next === 0xd800) next = 0xe000;
+    if (next <= 0x10ffff) return points.slice(0, i).map((point) => String.fromCodePoint(point)).join('') + String.fromCodePoint(next);
+  }
+  return null;
+}
+
 export class SqliteAdapter implements KVStorage {
   private readonly db: DatabaseSync;
   private readonly getStmt;
   private readonly putStmt;
   private readonly deleteStmt;
-  private readonly listStmt;
+  private readonly listRangeStmt;
+  private readonly listFromStmt;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
@@ -44,12 +57,12 @@ export class SqliteAdapter implements KVStorage {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at`
     );
     this.deleteStmt = this.db.prepare('DELETE FROM kv WHERE key = ?');
-    // 不能用 LIKE prefix||'%'：键名里带下划线（ip_geo:、setting:password_version…），
-    // LIKE 的 _ 是单字符通配符会误匹配，必须用 substr 精确比较。
-    this.listStmt = this.db.prepare(
-      `SELECT key FROM kv
-        WHERE substr(key, 1, length(?)) = ? AND (expires_at IS NULL OR expires_at > ?)
-        ORDER BY key`
+    // 前缀转成主键范围，避免 substr() 导致全索引扫描；也不会把 _ / % 当通配符。
+    this.listRangeStmt = this.db.prepare(
+      `SELECT key FROM kv WHERE key >= ? AND key < ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key`
+    );
+    this.listFromStmt = this.db.prepare(
+      `SELECT key FROM kv WHERE key >= ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY key`
     );
   }
 
@@ -95,7 +108,9 @@ export class SqliteAdapter implements KVStorage {
   }
 
   async list(prefix: string): Promise<{ key: string }[]> {
-    return this.listStmt.all(prefix, prefix, Date.now()) as { key: string }[];
+    const upper = prefixUpperBound(prefix);
+    if (upper === null) return this.listFromStmt.all(prefix, Date.now()) as { key: string }[];
+    return this.listRangeStmt.all(prefix, upper, Date.now()) as { key: string }[];
   }
 
   /** 关闭数据库（进程退出前调用，确保 WAL 落盘） */

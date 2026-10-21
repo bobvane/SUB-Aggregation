@@ -5,12 +5,13 @@ import { countryDisplayName } from '@/data/country-codes';
 /** 内存缓存 adapter + 手动控制 fetch 的测试替身 */
 function makeCache(initial: Record<string, string> = {}) {
   const store = new Map(Object.entries(initial));
+  const ttls = new Map<string, number>();
   const cache: IpGeoCache = {
     get: async (k) => store.get(k) ?? null,
-    set: async (k, v) => { store.set(k, v); },
+    set: async (k, v, ttl) => { store.set(k, v); if (ttl !== undefined) ttls.set(k, ttl); },
   };
   const dump = () => Object.fromEntries(store);
-  return { cache, dump, store };
+  return { cache, dump, store, ttls };
 }
 
 function makeFetch(mock: (url: string) => unknown) {
@@ -188,7 +189,7 @@ describe('createIpGeoResolver', () => {
 
   it('__NULL__ 带时间戳缓存应触发重新查询（不视为有效命中）', async () => {
     const now = Date.now();
-    const { cache, dump } = makeCache({
+    const { cache, dump, ttls } = makeCache({
       'ip_geo:1.2.3.4': `${now}|__NULL__`, // 30 天内负缓存
       'ip_geo:5.6.7.8': `${now}|__NULL__`,
     });
@@ -218,6 +219,8 @@ describe('createIpGeoResolver', () => {
     expect(stored2).toBeDefined();
     expect(stored1).not.toContain('__NULL__');
     expect(stored2).not.toContain('__NULL__');
+    expect(ttls.get('ip_geo:1.2.3.4')).toBe(30 * 24 * 60 * 60);
+    expect(ttls.get('ip_geo:5.6.7.8')).toBe(30 * 24 * 60 * 60);
   });
 });
 

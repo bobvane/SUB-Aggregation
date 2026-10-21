@@ -40,6 +40,17 @@ describe('SqliteAdapter', () => {
     expect((await kv.list('aXb:')).map((e) => e.key)).toEqual(['aXb:1']);
   });
 
+  it('list 以前缀范围精确匹配百分号、Unicode 和空前缀', async () => {
+    const kv = make();
+    await kv.put('ip%:1', 'a');
+    await kv.put('ipX:1', 'b');
+    await kv.put('节点:1', 'c');
+    await kv.put('节杠:1', 'd');
+    expect((await kv.list('ip%:')).map((e) => e.key)).toEqual(['ip%:1']);
+    expect((await kv.list('节点:')).map((e) => e.key)).toEqual(['节点:1']);
+    expect((await kv.list('')).map((e) => e.key)).toEqual(['ip%:1', 'ipX:1', '节杠:1', '节点:1']);
+  });
+
   it('list 按 key 升序、不含过期键', async () => {
     const kv = make();
     await kv.put('nodes:b', 'b');

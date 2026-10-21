@@ -102,7 +102,7 @@ export async function resolveDomainToIP(
           if (ans.type === 1 && isPureIP(ans.data)) {
             if (cache) {
               try {
-                await cache.set(cacheKey, `${Date.now()}|${ans.data}`);
+                await cache.set(cacheKey, `${Date.now()}|${ans.data}`, DNS_CACHE_MS / 1000);
               } catch {
                 // 写缓存失败不影响本次解析
               }
@@ -127,7 +127,7 @@ interface IpApiBatchResponse {
 
 export interface IpGeoCache {
   get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
+  set(key: string, value: string, expirationTtlSeconds?: number): Promise<void>;
 }
 
 /** 批量 IP 查询（最多 100 个 IP），返回 Map<ip, country>，失败或无 countryCode 则为 null */
@@ -234,7 +234,7 @@ export async function batchQuery(
       // 仅成功结果写缓存；null 不写（允许后续重试）
       if (country) {
         try {
-          await cache.set(IP_GEO_KEY_PREFIX + ip, `${Date.now()}|${country}`);
+          await cache.set(IP_GEO_KEY_PREFIX + ip, `${Date.now()}|${country}`, IP_GEO_CACHE_MS / 1000);
         } catch {}
       }
     }
@@ -403,7 +403,7 @@ export async function prewarmIpGeo(
     if (country) {
       result.resolved++;
       try {
-        await cache.set(IP_GEO_KEY_PREFIX + server, `${Date.now()}|${country}`);
+        await cache.set(IP_GEO_KEY_PREFIX + server, `${Date.now()}|${country}`, IP_GEO_CACHE_MS / 1000);
       } catch {}
     } else {
       result.failed++;

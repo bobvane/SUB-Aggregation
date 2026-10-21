@@ -103,7 +103,7 @@ export interface ConfigService {
    */
   getDroppedNodes(): Promise<string[]>;
   /**
-   * 清理「已退出有效节点池」节点的最新健康快照（health:latest:{fp}）。
+   * 清理「已退出有效节点池」节点的最新健康快照，并清除超过 30 天的健康历史。
    *
    * 背景：health:hist 有 30 天 TTL，但 health:latest 从无清理机制。
    * 节点被订阅移除或标记 removed_at 墓碑后，其 latest 快照会永久残留，导致：
@@ -118,7 +118,7 @@ export interface ConfigService {
    * 安全机制：
    *  · 节点池读取失败 / 解析异常 → 直接跳过本轮，**不删除任何快照**（宁可不清理，不可误删）；
    *  · 幂等：重复执行结果一致；
-   *  · 只删 latest，**不触碰 health:hist**（历史继续遵守既有 30 天 TTL）。
+   *  · 历史记录按时间戳清理 30 天以前的数据，包含已退出节点留下的孤儿记录。
    */
   cleanupOrphanedHealthSnapshots(): Promise<{ scanned: number; removed: number; skipped: boolean }>;
   /** 设置禁用的节点指纹列表 */
@@ -355,21 +355,21 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
     async prewarmGeo(servers: string[]): Promise<PrewarmResult> {
       return prewarmIpGeo(
         servers,
-        { get: (k) => repos.settings.get(k), set: (k, v) => repos.settings.set(k, v) },
+        { get: (k) => repos.settings.get(k), set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) },
       );
     },
 
     async getUnlocatedServers(servers: string[]): Promise<string[]> {
       return filterUnlocatedServers(
         servers,
-        { get: (k) => repos.settings.get(k), set: (k, v) => repos.settings.set(k, v) },
+        { get: (k) => repos.settings.get(k), set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) },
       );
     },
 
     async countUnlocatedGeo(servers: string[]): Promise<number> {
       return countUnlocatedGeo(
         servers,
-        { get: (k) => repos.settings.get(k), set: (k, v) => repos.settings.set(k, v) },
+        { get: (k) => repos.settings.get(k), set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) },
       );
     },
 
@@ -470,7 +470,15 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       }
       if (!Array.isArray(keys)) return { scanned: 0, removed: 0, skipped: true };
 
-      // ---- 3. 逐个比对并删除孤儿快照（只删 latest，不动 health:hist） ----
+      // 两类键都必须能正常枚举，才开始删除，避免部分清理后报告 skipped。
+      let historyKeys: Array<{ key: string }>;
+      try {
+        historyKeys = await kv.list('health:hist:');
+      } catch {
+        return { scanned: 0, removed: 0, skipped: true };
+      }
+
+      // ---- 3. 删除孤儿 latest 快照 ----
       let removed = 0;
       for (const { key } of keys) {
         const fp = key.slice('health:latest:'.length);
@@ -484,7 +492,20 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
         }
       }
 
-      return { scanned: keys.length, removed, skipped: false };
+      // ---- 4. 清理历史保留期之外的数据（兼顾升级前没有 SQLite TTL 的旧记录） ----
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      for (const { key } of historyKeys) {
+        const timestamp = Number(key.slice(key.lastIndexOf(':') + 1));
+        if (!Number.isFinite(timestamp) || timestamp >= cutoff) continue;
+        try {
+          await kv.delete(key);
+          removed++;
+        } catch {
+          // 单条删除失败不影响其余清理。
+        }
+      }
+
+      return { scanned: keys.length + historyKeys.length, removed, skipped: false };
     },
 
     /**
@@ -497,7 +518,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       const copy = nodes.map((n) => ({ ...n }));
       const ipGeoResolver = createIpGeoResolver({
         get: (k) => repos.settings.get(k),
-        set: (k, v) => repos.settings.set(k, v),
+        set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
       });
       await smartRename(copy, ipGeoResolver);
       return copy;
@@ -522,7 +543,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       // 自动命名（v2.34 废弃人工清洗）：[旗帜][国家代码] [协议] [延迟ms]-NN
       const ipGeoResolver = createIpGeoResolver({
         get: (k) => repos.settings.get(k),
-        set: (k, v) => repos.settings.set(k, v),
+        set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
       });
       const healthList = await getAllNodeHealth(kv);
       const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));

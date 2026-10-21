@@ -117,19 +117,22 @@ describe('孤儿健康快照清理：已移除节点', () => {
     expect(await kv.get(`health:latest:${aliveFp}`)).not.toBeNull();
   });
 
-  it('⑤ 清理不提前删除历史记录（health:hist 仍遵守 30 天 TTL）', async () => {
+  it('⑤ 清理升级前超过 30 天的孤儿历史，保留有效期内历史', async () => {
     const { kv, svc } = await setup([mkNode('n1', 'A')]);
     const gone = nodeFingerprint(mkNode('n9', 'Gone'));
-    const old = Date.now() - 1000;
+    const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const recent = Date.now() - 1000;
     await putLatest(kv, gone);
     await putHist(kv, gone, old);
+    await putHist(kv, gone, recent);
 
     await svc.cleanupOrphanedHealthSnapshots();
 
     // latest 被清理
     expect(await kv.get(`health:latest:${gone}`)).toBeNull();
-    // history 保留（清理由既有 cleanupOldHistory 按 TTL 处理，与本方法无关）
-    expect(await kv.get(`health:hist:${gone}:${old}`)).not.toBeNull();
+    // 旧版本没有数据库 TTL 标记，清理任务按 key 时间戳兜底；近期历史继续保留。
+    expect(await kv.get(`health:hist:${gone}:${old}`)).toBeNull();
+    expect(await kv.get(`health:hist:${gone}:${recent}`)).not.toBeNull();
   });
 
   it('⑥ 同指纹重新加入时不继承已清理的旧快照', async () => {

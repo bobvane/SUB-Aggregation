@@ -377,7 +377,7 @@ export function createApp(deps: AppDeps): Hono {
             const servers = [...new Set(nodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
             if (servers.length > 0) {
               const geoService = await import('@/services/ip-geo.service');
-              const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string) => repos.settings.set(k, v) };
+              const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
               const geoResult = await geoService.prewarmIpGeo(servers, ipGeoCache);
               // v2.25.0：预热后若有未识别 IP 则激活 GeoRetry 门闩，唤醒每分钟 cron 继续重查
               const unlocated = await geoService.filterUnlocatedServers(servers, ipGeoCache);
@@ -477,7 +477,7 @@ export function createApp(deps: AppDeps): Hono {
     }
     await repos.settings.set(LOCK_KEY, JSON.stringify({ ts: Date.now() }));
 
-    const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string) => repos.settings.set(k, v) };
+    const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
     // 2. 统计重检前未识别数（countUnlocatedGeo 返回的即未识别数）
     const unlocatedBefore = await config.countUnlocatedGeo(servers);
     // 3. 仅重检未识别项（默认 scope='unlocated'），全量则为所有 server

@@ -207,7 +207,7 @@ export async function runScheduled(
   if (cron === '* * * * *') {
     try {
       const { prewarmIpGeo, filterUnlocatedServers, getGeoRetryGate, setGeoRetryGate, deactivateGeoRetry, GEO_RETRY_MAX } = await import('@/services/ip-geo.service');
-      const ipGeoCache = { get: (k: string): Promise<string | null> => repos.settings.get(k), set: (k: string, v: string) => repos.settings.set(k, v) };
+      const ipGeoCache = { get: (k: string): Promise<string | null> => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
 
       // ① 门闩短路：无激活重试任务 → 直接 return（0 KV 写，不跑 getAll、不查 IP）
       const gate = await getGeoRetryGate(repos.settings);
@@ -301,7 +301,7 @@ export async function runScheduled(
       const config = createConfigService(repos, kv);
       const r = await config.cleanupOrphanedHealthSnapshots();
       if (r.removed > 0 || r.skipped) {
-        console.warn(`[SubAutoUpdate] 健康快照清理: 扫描 ${r.scanned} 清理 ${r.removed}${r.skipped ? '（节点池不可确认，本轮跳过）' : ''}`);
+        console.warn(`[SubAutoUpdate] 健康数据清理: 扫描 ${r.scanned} 清理 ${r.removed}${r.skipped ? '（节点池不可确认，本轮跳过）' : ''}`);
       }
     } catch (e) {
       console.warn(`[SubAutoUpdate] 健康快照清理失败(不阻塞): ${(e as Error).message}`);
@@ -331,7 +331,7 @@ export async function runScheduled(
     const allNodes = deduplicateNodes(await repos.nodes.getAll());
     const servers = [...new Set(allNodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
     if (servers.length > 0) {
-      const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string) => repos.settings.set(k, v) };
+      const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
       const geoResult = await prewarmIpGeo(servers, ipGeoCache);
       const unlocated = await filterUnlocatedServers(servers, ipGeoCache);
       await activateGeoRetry(unlocated.length, repos.settings);

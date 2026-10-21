@@ -497,7 +497,7 @@ export function evaluateStateMachine(
  */
 export interface HealthStorage {
   get(key: string): Promise<string | null>;
-  put(key: string, value: string): Promise<void>;
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<{ key: string }[]>;
 }
@@ -696,7 +696,8 @@ async function doProbeAllNodes(
     }
     await storage.put(
       historyKey,
-      JSON.stringify({ ...result, timestamp: historyTs, statusMachine: stateMachine.status })
+      JSON.stringify({ ...result, timestamp: historyTs, statusMachine: stateMachine.status }),
+      { expirationTtl: HEALTH_HISTORY_TTL_MS / 1000 }
     );
     
     // 写最新快照（覆盖）
