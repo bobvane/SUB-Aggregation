@@ -16,6 +16,12 @@ export interface Subscription {
   nodeCount?: number;
   status: SubscriptionStatus;
   errorMessage?: string;
+  /** 连续抓取失败次数；达到自动重试上限后保留计数，等待下一次常规同步或手动操作。 */
+  retryCount?: number;
+  /** 下次自动重试时间戳（毫秒），undefined 表示当前没有排定的自动重试。 */
+  nextRetryAt?: number;
+  /** 最近一次失败时间戳（毫秒），用于界面状态说明。 */
+  lastErrorAt?: number;
   version: number;
 }
 
@@ -36,6 +42,9 @@ export function createSubscription(
     status: partial.status ?? 'active',
     nodeCount: partial.nodeCount,
     lastFetchAt: partial.lastFetchAt,
+    retryCount: partial.retryCount,
+    nextRetryAt: partial.nextRetryAt,
+    lastErrorAt: partial.lastErrorAt,
     errorMessage: partial.errorMessage,
     version: 1,
   };

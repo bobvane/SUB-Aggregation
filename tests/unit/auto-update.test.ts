@@ -61,4 +61,39 @@ describe('runScheduled - 订阅自动更新', () => {
     await runScheduled('0 * * * *', NOW, kv, env);
     expect(await repos.settings.get('sub_update_last_at')).toBe(String(NOW));
   });
+
+  it('常规更新失败后，到重试时间只重试失败订阅且不推进常规更新时间', async () => {
+    await repos.settings.set('sub_update_interval', '24');
+    await repos.settings.set('sub_update_last_at', String(NOW - H));
+    const failed = await repos.subscriptions.create({ name: 'failed', url: 'https://example.com/failed' });
+    await repos.subscriptions.update(failed.id, {
+      status: 'error', errorMessage: 'network down', retryCount: 1,
+      nextRetryAt: NOW - 1, lastErrorAt: NOW - H,
+    });
+    const healthy = await repos.subscriptions.create({ name: 'healthy', url: 'https://example.com/healthy' });
+    const called: string[] = [];
+
+    await runScheduled('0 * * * *', NOW, kv, env, async (url) => {
+      called.push(url);
+      throw new Error('still offline');
+    });
+
+    expect(called).toEqual([failed.url]);
+    expect((await repos.subscriptions.getById(failed.id))?.retryCount).toBe(2);
+    expect((await repos.subscriptions.getById(failed.id))?.nextRetryAt).toBeGreaterThan(NOW);
+    expect((await repos.subscriptions.getById(healthy.id))?.status).toBe('active');
+    expect(await repos.settings.get('sub_update_last_at')).toBe(String(NOW - H));
+  });
+
+  it('超过三次自动重试后暂停，等待常规更新或手动操作', async () => {
+    await repos.settings.set('sub_update_interval', '24');
+    await repos.settings.set('sub_update_last_at', String(NOW - H));
+    const failed = await repos.subscriptions.create({ name: 'failed', url: 'https://example.com/failed' });
+    await repos.subscriptions.update(failed.id, { status: 'error', retryCount: 4, nextRetryAt: undefined });
+    const fetcher = async () => { throw new Error('must not run'); };
+
+    await runScheduled('0 * * * *', NOW, kv, env, fetcher);
+
+    expect((await repos.subscriptions.getById(failed.id))?.retryCount).toBe(4);
+  });
 });

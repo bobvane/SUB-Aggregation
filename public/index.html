@@ -152,6 +152,7 @@ tbody tr:hover { background: var(--accent-soft); }
 /* ===== Status ===== */
 .status-active { color: var(--green); }
 .status-error { color: var(--red); }
+.sub-error-detail { margin-top: 4px; max-width: 260px; color: var(--red); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .status-disabled { color: var(--text2); }
 /* ===== Modal ===== */
 .modal-overlay {
@@ -1607,7 +1608,14 @@ function renderSubTable() {
         ${s.enabled
           ? '<span class="status-active">✅ 已启用</span>'
           : '<span class="status-disabled">⏸ 未启用</span>'}
-        ${s.status === 'error' && s.enabled ? ' <span class="status-error">❌ 更新失败</span>' : ''}
+        ${s.status === 'error' && s.enabled ? `
+          <div class="sub-error-detail" title="${escHtml(s.errorMessage || '未知错误')}">
+            <div>❌ ${escHtml(s.errorMessage || '更新失败')}</div>
+            <div>最近失败：${new Date(s.lastErrorAt || s.updatedAt).toLocaleString()}</div>
+            <div>${s.nextRetryAt
+              ? `自动重试：${new Date(s.nextRetryAt).toLocaleString()}`
+              : (s.retryCount >= 4 ? '自动重试已暂停；可手动更新' : '将在下次常规同步时重试')}</div>
+          </div>` : ''}
       </td>
       <td>${s.nodeCount ?? 0}</td>
       <td style="font-size:14px;color:var(--text2)">${s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}</td>
@@ -1660,7 +1668,7 @@ async function updateSub(id) {
     toast('更新成功');
     if (res && res.data) updateProgress(`✅ 更新完成：${res.data.nodeCount ?? 0} 个节点`);
     loadSubscriptions();
-  } catch (e) { toast('更新失败: ' + e.message, 'error'); }
+  } catch (e) { toast('更新失败: ' + e.message, 'error'); loadSubscriptions(); }
   finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 更新'; }
   }

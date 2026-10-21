@@ -186,7 +186,8 @@ export async function runScheduled(
   cron: string,
   scheduledTime: number,
   kv: KVStorage,
-  env: Env
+  env: Env,
+  subscriptionFetcher: (url: string) => Promise<string> = fetchSubscription
 ): Promise<void> {
   const repos = createRepositories(kv);
 
@@ -260,7 +261,7 @@ export async function runScheduled(
   const parsedInterval = Number.parseInt((await repos.settings.get('sub_update_interval')) ?? '', 10);
   const interval = Number.isInteger(parsedInterval) ? parsedInterval : 24;
   const lastAt = Number((await repos.settings.get('sub_update_last_at')) ?? 0);
-  if (!isSubAutoUpdateDue(interval, lastAt, now)) return;
+  const regularUpdateDue = isSubAutoUpdateDue(interval, lastAt, now);
 
   const subs = createSubscriptionService(
     repos,
@@ -271,23 +272,37 @@ export async function runScheduled(
   const results: string[] = [];
   let updateAttempts = 0;
   let updateFailures = 0;
-  for (const s of await subs.list()) {
+  const allSubscriptions = await subs.list();
+  const subscriptionsToUpdate = regularUpdateDue
+    ? allSubscriptions.filter((s) => s.enabled)
+    : interval > 0
+      ? allSubscriptions.filter((s) =>
+          s.enabled && s.status === 'error' &&
+          (s.retryCount ?? 0) > 0 && (s.retryCount ?? 0) <= 3 &&
+          typeof s.nextRetryAt === 'number' && s.nextRetryAt <= now
+        )
+      : [];
+  if (!regularUpdateDue && subscriptionsToUpdate.length === 0) return;
+
+  const updateIds = new Set(subscriptionsToUpdate.map((s) => s.id));
+  for (const s of allSubscriptions) {
     // 停用的订阅不参与自动更新（用户 2026-09-24）
     if (!s.enabled) {
       results.push(`${s.name}:已停用`);
       continue;
     }
+    if (!updateIds.has(s.id)) continue;
     updateAttempts++;
     try {
-      const { nodeCount } = await subs.update(s.id, fetchSubscription);
+      const { nodeCount } = await subs.update(s.id, subscriptionFetcher);
       results.push(`${s.name}:${nodeCount}节点`);
     } catch (e) {
       updateFailures++;
       results.push(`${s.name}:失败(${(e as Error).message})`);
     }
   }
-  // 记下本次自动更新的时刻（无论个别订阅成败），下一次间隔从这个点开始算
-  await repos.settings.set('sub_update_last_at', String(now));
+  // 只让完整同步推进常规更新时间；失败订阅的补偿重试不影响全局同步间隔。
+  if (regularUpdateDue) await repos.settings.set('sub_update_last_at', String(now));
 
   // 孤儿健康快照清理（health:latest:{fp} 无 TTL，节点退出有效节点池后旧快照永久残留）。
   // 保守门槛：

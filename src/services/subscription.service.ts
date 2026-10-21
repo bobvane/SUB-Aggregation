@@ -19,6 +19,7 @@ import { createOperationLog } from '@/services/operation-log.service';
 import { createSnapshotCache } from '@/services/config-cache.service';
 
 const NODE_LINK_PREFIXES = ['vmess://', 'vless://', 'trojan://', 'ss://', 'ssr://', 'hysteria2://', 'tuic://'];
+const SUBSCRIPTION_RETRY_DELAYS_MS = [60, 120, 240].map((minutes) => minutes * 60 * 1000);
 
 /**
  * 判断是否为直接节点链接（非 HTTP 订阅 URL）
@@ -203,6 +204,9 @@ export function createSubscriptionService(
           lastFetchAt: Date.now(),
           nodeCount: mergedNodes.filter(n => !n.removed_at).length,
           errorMessage: undefined,
+          retryCount: 0,
+          nextRetryAt: undefined,
+          lastErrorAt: undefined,
         });
 
         // 10. v2.38.6：节点数据已落库 → 配置快照失效（不重拉订阅、不测速、不查国家码）
@@ -223,9 +227,15 @@ export function createSubscriptionService(
           diff,
         };
       } catch (err) {
+        const failedAt = Date.now();
+        const retryCount = Math.min((existing.retryCount ?? 0) + 1, SUBSCRIPTION_RETRY_DELAYS_MS.length + 1);
+        const retryDelay = SUBSCRIPTION_RETRY_DELAYS_MS[retryCount - 1];
         await repos.subscriptions.update(id, {
           status: 'error',
           errorMessage: (err as Error).message,
+          retryCount,
+          nextRetryAt: retryDelay ? failedAt + retryDelay : undefined,
+          lastErrorAt: failedAt,
         });
         throw err;
       }

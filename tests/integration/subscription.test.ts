@@ -99,6 +99,20 @@ describe('subscription pipeline integration', () => {
     const updated = await repos.subscriptions.getById(sub.id);
     expect(updated?.status).toBe('error');
     expect(updated?.errorMessage).toBe('network down');
+    expect(updated?.retryCount).toBe(1);
+    expect(updated?.nextRetryAt).toBeGreaterThan(Date.now());
+    expect(updated?.lastErrorAt).toBeGreaterThan(0);
+  });
+
+  it('successful update resets automatic retry state', async () => {
+    const sub = await service.create('T', 'https://example.com/sub');
+    await expect(service.update(sub.id, async () => { throw new Error('temporary outage'); })).rejects.toThrow();
+    await service.update(sub.id, async () => TEST_SUBSCRIPTION);
+    const updated = await repos.subscriptions.getById(sub.id);
+    expect(updated?.status).toBe('active');
+    expect(updated?.retryCount).toBe(0);
+    expect(updated?.nextRetryAt).toBeUndefined();
+    expect(updated?.lastErrorAt).toBeUndefined();
   });
 
   it('should apply exclude rules to filter nodes', async () => {
