@@ -110,20 +110,16 @@ export function createApp(deps: AppDeps): Hono {
   // 为什么不用 REST API（/releases/latest）：匿名额度只有 60 次/小时/出口 IP，
   // 共享出口（代理/旁路由）下经常是 403，而 403 会被静默当成「无更新」→ 前端永远不提示。
   // Atom 免鉴权、无配额，实测可用。
-  let upgradeCheck: { at: number; ttl: number; body: unknown } | null = null;
   app.get('/api/meta/check-upgrade', async (c) => {
     const FEED = 'https://github.com/bobvane/SUB-Aggregation/releases.atom';
-    const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 成功缓存 6h
-    const FAIL_TTL_MS = 10 * 60 * 1000; // 失败只缓存 10min，别把一次网络抖动锁 6 小时
-    const now = Date.now();
-    if (upgradeCheck && now - upgradeCheck.at < upgradeCheck.ttl) {
-      return c.json(upgradeCheck.body);
-    }
-
     let payload: unknown;
-    let ttl = FAIL_TTL_MS;
     try {
-      const res = await fetch(FEED, { headers: { 'User-Agent': 'sub-aggregation' } });
+      const res = await fetch(FEED, {
+        headers: {
+          'User-Agent': 'sub-aggregation',
+          'Cache-Control': 'no-cache',
+        },
+      });
       const entry = res.ok ? ((await res.text()).split('<entry>')[1] ?? '') : '';
       const tag = entry.match(/<title>([^<]+)<\/title>/)?.[1] ?? '';
       const url = entry.match(/href="([^"]*\/releases\/tag\/[^"]+)"/)?.[1];
@@ -139,7 +135,6 @@ export function createApp(deps: AppDeps): Hono {
             checked: true,
           },
         };
-        ttl = CACHE_TTL_MS;
       } else {
         payload = {
           success: true,
@@ -164,8 +159,12 @@ export function createApp(deps: AppDeps): Hono {
         },
       };
     }
-    upgradeCheck = { at: Date.now(), ttl, body: payload };
-    return c.json(payload);
+    // 页面每次打开/刷新都应读取最新结果，不让浏览器、代理或 NAS 中间层复用旧版本。
+    return c.json(payload, 200, {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      Pragma: 'no-cache',
+      Expires: '0',
+    });
   });
 
   // ============ Auth ============

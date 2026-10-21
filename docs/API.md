@@ -17,6 +17,8 @@
 
 路由完整列表、参数校验和各端点的认证要求以 `src/api/routes.ts` 为准。修改 API 时同步更新浏览器端 `public/api.js`、相关集成测试和本页。
 
+`GET /api/meta/check-upgrade` 在页面打开或刷新时从 GitHub Releases Atom 源读取版本；该接口及浏览器请求均禁用缓存。GitHub 不可达时返回 `checked: false`，前端应显示暂时无法检查。
+
 ## 认证与敏感信息
 
 - 管理端使用 `sub_session` HttpOnly Cookie；会话默认 7 天，改密码后旧会话失效。

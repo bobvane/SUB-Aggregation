@@ -89,6 +89,24 @@ describe('Meta API', () => {
     }
   });
 
+  it('GET /api/meta/check-upgrade 每次都重新检查且禁止缓存结果', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      '<feed><entry><title>v9.9.9</title></entry></feed>',
+      { status: 200 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const first = await app.request('/api/meta/check-upgrade');
+      const second = await app.request('/api/meta/check-upgrade');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(first.headers.get('Cache-Control')).toContain('no-store');
+      expect(second.headers.get('Cache-Control')).toContain('no-store');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('GET /api/meta/check-upgrade：GitHub 不可达时如实标记 checked=false（不再谎报无更新）', async () => {
     vi.stubGlobal(
       'fetch',

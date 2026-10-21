@@ -2602,7 +2602,7 @@ async function loadMeta() {
 
   // 升级检测（静默，不阻塞页面）
   try {
-    const upRes = await api('/meta/check-upgrade');
+    const upRes = await api('/meta/check-upgrade', { cache: 'no-store' });
     const up = upRes.data || {};
     const versionLink = document.getElementById('sidebarVersion');
     const upgradeDot = document.getElementById('upgradeDot');
