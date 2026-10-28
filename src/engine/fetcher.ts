@@ -156,6 +156,22 @@ async function fetchWithTimeout(input: string | URL | Request, init: RequestInit
 }
 
 /**
+ * 网络错误往往只有笼统的 “fetch failed”，把 Node/undici 的 cause（DNS、连接被拒等）
+ * 一并带给管理界面，NAS 用户才能判断是域名解析、出站网络还是远端拦截。
+ */
+function describeFetchError(err: unknown): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  if (err.name === 'AbortError') return new Error('Fetch timeout');
+
+  const cause = (err as Error & { cause?: unknown }).cause;
+  const causeMessage = cause instanceof Error
+    ? cause.message
+    : typeof cause === 'string' ? cause : '';
+  if (!causeMessage || err.message.includes(causeMessage)) return err;
+  return new Error(`${err.message}: ${causeMessage}`);
+}
+
+/**
  * 抓取订阅内容
  * 校验：URL 合法 → 超时 → 重定向限制 → 响应大小限制
  */
@@ -205,9 +221,6 @@ export async function fetchSubscription(url: string): Promise<string> {
     }
     throw new Error('Too many redirects');
   } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Fetch timeout');
-    }
-    throw err;
+    throw describeFetchError(err);
   }
 }

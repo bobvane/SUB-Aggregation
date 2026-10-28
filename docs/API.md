@@ -8,7 +8,7 @@
 |---|---|---|
 | 元信息 | `GET /api/health`, `/api/meta`, `/api/meta/check-upgrade` | 健康状态、应用信息和版本检查 |
 | 认证 | `/api/auth/*` | 登录、登出、会话、用户名和密码 |
-| 订阅 | `/api/subscriptions`、`/api/subscriptions/:id/*` | 列表、增删、启停、更新 |
+| 订阅 | `/api/subscriptions`、`/api/subscriptions/:id/*` | 列表、新增、编辑、删除、启停、更新 |
 | 节点 | `/api/nodes*` | 节点列表、启停、锁定、探测、健康和 GeoIP |
 | 规则 | `/api/rules*` | 自定义规则、固定组、目录和选择状态 |
 | 配置 | `GET /api/output/:format` | 管理界面预览/下载生成配置 |

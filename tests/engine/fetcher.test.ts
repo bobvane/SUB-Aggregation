@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { validateUrl, isBlockedIp, fetchSubscription } from '@/engine/fetcher';
 
 describe('SSRF URL validation', () => {
@@ -118,5 +118,18 @@ describe('fetchSubscription', () => {
 
   it('should throw on localhost', async () => {
     await expect(fetchSubscription('http://localhost/sub')).rejects.toThrow('SSRF check failed');
+  });
+
+  it('should include the underlying cause when fetch itself fails', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND sub.example.com') });
+    });
+    try {
+      await expect(fetchSubscription('https://sub.example.com/sub')).rejects.toThrow(
+        'fetch failed: getaddrinfo ENOTFOUND sub.example.com'
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

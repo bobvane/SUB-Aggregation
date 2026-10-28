@@ -115,6 +115,33 @@ describe('subscription pipeline integration', () => {
     expect(updated?.lastErrorAt).toBeUndefined();
   });
 
+  it('updateDetails edits name/url and clears stale failure state when url changes', async () => {
+    const sub = await service.create('Old name', 'https://old.example/sub');
+    await expect(service.update(sub.id, async () => { throw new Error('old failure'); })).rejects.toThrow();
+
+    const edited = await service.updateDetails(sub.id, {
+      name: 'New name',
+      url: 'https://new.example/sub',
+    });
+    expect(edited?.name).toBe('New name');
+    expect(edited?.url).toBe('https://new.example/sub');
+    expect(edited?.status).toBe('active');
+    expect(edited?.errorMessage).toBeUndefined();
+    expect(edited?.retryCount).toBe(0);
+    expect(edited?.nextRetryAt).toBeUndefined();
+    expect(edited?.lastErrorAt).toBeUndefined();
+  });
+
+  it('updateDetails keeps failure state when only the name changes', async () => {
+    const sub = await service.create('Old name', 'https://old.example/sub');
+    await expect(service.update(sub.id, async () => { throw new Error('still failing'); })).rejects.toThrow();
+
+    const edited = await service.updateDetails(sub.id, { name: 'Renamed' });
+    expect(edited?.name).toBe('Renamed');
+    expect(edited?.status).toBe('error');
+    expect(edited?.errorMessage).toBe('still failing');
+  });
+
   it('should apply exclude rules to filter nodes', async () => {
     const sub = await service.create('T', 'https://example.com/sub');
     const filteredService = createSubscriptionService(

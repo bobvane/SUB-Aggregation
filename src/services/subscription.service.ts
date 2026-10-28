@@ -43,6 +43,7 @@ export interface SubscriptionService {
   getById(id: string): Promise<Subscription | null>;
   create(name: string, url: string): Promise<Subscription>;
   delete(id: string): Promise<boolean>;
+  updateDetails(id: string, input: { name?: string; url?: string }): Promise<Subscription | null>;
   setEnabled(id: string, enabled: boolean): Promise<Subscription | null>;
   update(id: string, fetcher: (url: string) => Promise<string>): Promise<{
     subscription: Subscription;
@@ -154,6 +155,33 @@ export function createSubscriptionService(
 
     async delete(id: string) {
       return repos.subscriptions.delete(id);
+    },
+
+    async updateDetails(id: string, input: { name?: string; url?: string }) {
+      const existing = await repos.subscriptions.getById(id);
+      if (!existing) return null;
+
+      const patch: Partial<Subscription> = {};
+      if (input.name !== undefined) patch.name = input.name;
+
+      // 订阅地址变化后，旧的失败/重试状态不再对应当前地址，重置为可更新状态。
+      // 节点保留到下一次「更新」，避免编辑名称时误删已有缓存。
+      if (input.url !== undefined && input.url !== existing.url) {
+        patch.url = input.url;
+        patch.status = 'active';
+        patch.errorMessage = undefined;
+        patch.retryCount = 0;
+        patch.nextRetryAt = undefined;
+        patch.lastErrorAt = undefined;
+      }
+
+      if (Object.keys(patch).length === 0) return existing;
+
+      const updated = await repos.subscriptions.update(id, patch);
+      // 名称/地址属于订阅元数据；失效配置快照，避免下游继续使用旧的订阅标识。
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(`编辑订阅「${updated?.name ?? existing.name}」`);
+      return updated;
     },
 
     async setEnabled(id: string, enabled: boolean) {

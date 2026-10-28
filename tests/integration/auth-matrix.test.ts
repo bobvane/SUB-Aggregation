@@ -40,6 +40,7 @@ describe('Authorization Matrix（受保护端点未登录应 401）', () => {
   const protectedRequests: Array<{ method: string; path: string; desc: string }> = [
     { method: 'GET', path: '/api/subscriptions', desc: '订阅列表' },
     { method: 'POST', path: '/api/subscriptions', desc: '创建订阅' },
+    { method: 'PATCH', path: '/api/subscriptions/test-id', desc: '编辑订阅' },
     { method: 'GET', path: '/api/nodes', desc: '节点列表' },
     { method: 'GET', path: '/api/rules/groups', desc: '规则分组' },
     { method: 'GET', path: '/api/dashboard', desc: '仪表盘' },

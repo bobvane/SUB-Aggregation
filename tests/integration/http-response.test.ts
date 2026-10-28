@@ -83,4 +83,86 @@ describe('HTTP 响应层（压缩 / 订阅 url 字段）', () => {
     const sub = data.find((s) => s.name === 'Test Airport');
     expect(sub?.url).toBe('https://example.com/sub?token=abc');
   });
+
+  it('订阅列表必须返回失败原因和自动重试状态（前端错误详情的数据源）', async () => {
+    const created = await repos.subscriptions.create({
+      name: 'Failing Airport',
+      url: 'https://example.com/fail',
+    });
+    const now = Date.now();
+    await repos.subscriptions.update(created.id, {
+      status: 'error',
+      errorMessage: 'getaddrinfo ENOTFOUND example.com',
+      retryCount: 2,
+      nextRetryAt: now + 3_600_000,
+      lastErrorAt: now,
+    });
+
+    const res = await app.request('/api/subscriptions', { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: Array<{
+        id: string;
+        status: string;
+        errorMessage: string | null;
+        retryCount: number;
+        nextRetryAt: number | null;
+        lastErrorAt: number | null;
+      }>;
+    };
+    const sub = data.find((s) => s.id === created.id);
+    expect(sub?.status).toBe('error');
+    expect(sub?.errorMessage).toBe('getaddrinfo ENOTFOUND example.com');
+    expect(sub?.retryCount).toBe(2);
+    expect(sub?.nextRetryAt).toBe(now + 3_600_000);
+    expect(sub?.lastErrorAt).toBe(now);
+  });
+
+  it('PATCH /api/subscriptions/:id 可编辑名称和链接，并在链接变化时清除旧失败状态', async () => {
+    const created = await repos.subscriptions.create({
+      name: 'Old Name',
+      url: 'https://example.com/old',
+    });
+    await repos.subscriptions.update(created.id, {
+      status: 'error',
+      errorMessage: 'old failure',
+      retryCount: 4,
+      lastErrorAt: Date.now(),
+    });
+
+    const res = await app.request(`/api/subscriptions/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: 'New Name', url: 'https://example.com/new' }),
+    });
+    expect(res.status).toBe(200);
+    const { data } = (await res.json()) as {
+      data: { name: string; url: string; status: string; errorMessage: string | null; retryCount: number };
+    };
+    expect(data.name).toBe('New Name');
+    expect(data.url).toBe('https://example.com/new');
+    expect(data.status).toBe('active');
+    expect(data.errorMessage).toBeNull();
+    expect(data.retryCount).toBe(0);
+
+    const stored = await repos.subscriptions.getById(created.id);
+    expect(stored?.name).toBe('New Name');
+    expect(stored?.url).toBe('https://example.com/new');
+    expect(stored?.status).toBe('active');
+    expect(stored?.errorMessage).toBeUndefined();
+  });
+
+  it('PATCH /api/subscriptions/:id 拒绝空名称/空链接', async () => {
+    const created = await repos.subscriptions.create({
+      name: 'Valid',
+      url: 'https://example.com/sub',
+    });
+
+    const res = await app.request(`/api/subscriptions/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ name: '   ' }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

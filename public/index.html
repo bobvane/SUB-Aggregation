@@ -857,6 +857,19 @@ th, td { font-size: 13px; }
   </div>
 </div>
 
+<!-- Edit Subscription Modal -->
+<div class="modal-overlay" id="editSubModal">
+  <div class="modal-content">
+    <div class="modal-header"><h3>编辑订阅</h3><button class="modal-close" onclick="closeModal('editSubModal')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>名称</label><input id="editSubName" placeholder="例如: My Airport"></div>
+      <div class="form-group"><label>订阅 URL</label><input id="editSubUrl" placeholder="https://example.com/sub"></div>
+      <p style="margin:0 0 14px;font-size:13px;color:var(--text2)">保存后请点击「更新」重新拉取该地址的节点。</p>
+      <button class="btn btn-primary" id="editSubSaveBtn" onclick="saveEditSub()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- Progress / Task Modal：running 不可关闭；success/failed 保留结果，仅右上角 X 关闭 -->
 <div class="modal-overlay" id="progressModal">
   <div class="modal-content" style="max-width:480px;text-align:center">
@@ -1812,6 +1825,7 @@ function renderSubTable() {
       : s.nextRetryAt
         ? `下次重试：${new Date(s.nextRetryAt).toLocaleString()}`
         : (retryCount >= 4 ? '自动重试已暂停，可手动重试' : '将在下次常规同步时重试');
+    const errorReason = s.errorMessage || '未记录具体错误，请点击「立即重试」获取最新错误';
     return `
     <tr>
       <td><strong>${escHtml(s.name)}</strong></td>
@@ -1823,8 +1837,8 @@ function renderSubTable() {
           ? `<span class="status-error">⚠️ ${retryCount >= 4 ? '重试已暂停' : '更新失败'}</span>`
           : s.enabled ? '<span class="status-active">✅ 已启用</span>' : '<span class="status-disabled">⏸ 已停用</span>'}
         ${failed ? `
-          <div class="sub-error-detail" title="${escHtml(s.errorMessage || '未知错误')}">
-            <div class="sub-error-message">${escHtml(s.errorMessage || '更新失败')}</div>
+          <div class="sub-error-detail" title="${escHtml(errorReason)}">
+            <div class="sub-error-message"><strong>失败原因：</strong>${escHtml(errorReason)}</div>
             <div>最近失败：${s.lastErrorAt || s.updatedAt ? new Date(s.lastErrorAt || s.updatedAt).toLocaleString() : '时间未知'}</div>
             <div>${retryState}</div>
           </div>` : ''}
@@ -1832,6 +1846,7 @@ function renderSubTable() {
       <td>${s.nodeCount ?? 0}</td>
       <td style="font-size:14px;color:var(--text2)">${s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '-'}</td>
       <td>
+        <button class="btn btn-sm" onclick="showEditSub('${s.id}')">✏️ 编辑</button>
         <button class="btn btn-sm" onclick="toggleSub('${s.id}')">${s.enabled ? '⏸ 停用' : '▶ 启用'}</button>
         <button class="btn btn-sm${failed ? ' btn-primary' : ''}" onclick="updateSub('${s.id}')" title="${failed ? '立即重新尝试获取此订阅' : '立即更新此订阅'}">${failed ? '↻ 立即重试' : '🔄 更新'}</button>
         <button class="btn btn-sm btn-danger" onclick="deleteSub('${s.id}')">🗑 删除</button>
@@ -1852,23 +1867,75 @@ async function addSub() {
   if (!name || !url) { toast('请填写名称和 URL', 'error'); return; }
   try {
     const data = await api('/subscriptions', { method: 'POST', body: JSON.stringify({ name, url }) });
-    toast('添加成功');
     document.getElementById('subName').value = '';
     document.getElementById('subUrl').value = '';
     closeModal('addSubModal');
+
+    // 新增后如果仍停留在「更新失败」等筛选，订阅会被隐藏，看起来像添加失败。
+    // 清空搜索/状态筛选，确保用户马上能看到刚添加的订阅。
+    const searchEl = document.getElementById('subSearch');
+    const filterEl = document.getElementById('subStatusFilter');
+    const hadFilter = (filterEl && filterEl.value !== 'all') || (searchEl && searchEl.value.trim() !== '');
+    if (searchEl) searchEl.value = '';
+    if (filterEl) filterEl.value = 'all';
+    if (hadFilter) saveListPrefs();
+
     // 乐观更新：立即把新订阅插进列表（避免 KV 最终一致性的读取延迟）
     state.subscriptions.unshift({
       id: data.data.id,
       name: name,
+      url: url,
       enabled: true,
       status: 'active',
       nodeCount: 0,
       updatedAt: Date.now(),
     });
     renderSubTable();
+    toast(hadFilter ? '添加成功，已清除筛选显示新订阅' : '添加成功');
     // 后台再拉一次，确保拿到服务器最新数据（含其他字段）
     setTimeout(loadSubscriptions, 800);
   } catch (e) { toast('添加失败: ' + e.message, 'error'); }
+}
+
+let editingSubId = null;
+
+function showEditSub(id) {
+  const sub = state.subscriptions.find((item) => item.id === id);
+  if (!sub) { toast('订阅不存在，请刷新后重试', 'error'); return; }
+  editingSubId = id;
+  document.getElementById('editSubName').value = sub.name || '';
+  document.getElementById('editSubUrl').value = sub.url || '';
+  showModal('editSubModal');
+  setTimeout(() => document.getElementById('editSubName')?.focus(), 50);
+}
+
+async function saveEditSub() {
+  if (!editingSubId) return;
+  const name = document.getElementById('editSubName').value.trim();
+  const url = document.getElementById('editSubUrl').value.trim();
+  if (!name || !url) { toast('请填写名称和 URL', 'error'); return; }
+
+  const btn = document.getElementById('editSubSaveBtn');
+  const originalText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '💾 保存中...'; }
+  try {
+    const res = await api('/subscriptions/' + editingSubId, {
+      method: 'PATCH',
+      body: JSON.stringify({ name, url }),
+    });
+    const sub = state.subscriptions.find((item) => item.id === editingSubId);
+    if (sub && res.data) Object.assign(sub, res.data);
+    closeModal('editSubModal');
+    editingSubId = null;
+    renderSubTable();
+    toast('保存成功，请点击「更新」拉取最新节点');
+    // 后台校准一次，避免本地状态与服务器不一致
+    setTimeout(loadSubscriptions, 300);
+  } catch (e) {
+    toast('保存失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalText; }
+  }
 }
 
 async function updateSub(id) {

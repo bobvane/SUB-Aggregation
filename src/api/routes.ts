@@ -287,7 +287,13 @@ export function createApp(deps: AppDeps): Hono {
         enabled: s.enabled,
         status: s.status,
         nodeCount: s.nodeCount ?? 0,
+        createdAt: s.createdAt,
         updatedAt: s.updatedAt,
+        lastFetchAt: s.lastFetchAt ?? null,
+        errorMessage: s.errorMessage ?? null,
+        retryCount: s.retryCount ?? 0,
+        nextRetryAt: s.nextRetryAt ?? null,
+        lastErrorAt: s.lastErrorAt ?? null,
       })),
     });
   });
@@ -324,6 +330,47 @@ export function createApp(deps: AppDeps): Hono {
     const sub = await subscriptions.getById(id);
     if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
     return c.json({ success: true, data: { id: sub.id, name: sub.name, url: sub.url } });
+  });
+
+  // 编辑订阅名称 / 地址
+  app.patch('/api/subscriptions/:id', async (c) => {
+    const id = c.req.param('id') as string;
+    const body = await readBody<{ name?: unknown; url?: unknown }>(c);
+    const hasName = body.name !== undefined;
+    const hasUrl = body.url !== undefined;
+
+    if (!hasName && !hasUrl) {
+      throw ERRORS.INVALID_PARAMETER('name or url is required');
+    }
+    if (hasName && (typeof body.name !== 'string' || body.name.trim().length === 0)) {
+      throw ERRORS.INVALID_PARAMETER('name must be a non-empty string');
+    }
+    if (hasUrl && (typeof body.url !== 'string' || body.url.trim().length === 0)) {
+      throw ERRORS.INVALID_PARAMETER('url must be a non-empty string');
+    }
+
+    const sub = await subscriptions.updateDetails(id, {
+      ...(hasName ? { name: (body.name as string).trim() } : {}),
+      ...(hasUrl ? { url: (body.url as string).trim() } : {}),
+    });
+    if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
+
+    return c.json({
+      success: true,
+      data: {
+        id: sub.id,
+        name: sub.name,
+        url: sub.url,
+        enabled: sub.enabled,
+        status: sub.status,
+        nodeCount: sub.nodeCount ?? 0,
+        updatedAt: sub.updatedAt,
+        errorMessage: sub.errorMessage ?? null,
+        retryCount: sub.retryCount ?? 0,
+        nextRetryAt: sub.nextRetryAt ?? null,
+        lastErrorAt: sub.lastErrorAt ?? null,
+      },
+    });
   });
 
   // 删除订阅
