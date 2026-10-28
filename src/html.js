@@ -1915,26 +1915,50 @@ function showEditSub(id) {
 
 async function saveEditSub() {
   if (!editingSubId) return;
+  const subId = editingSubId;
   const name = document.getElementById('editSubName').value.trim();
   const url = document.getElementById('editSubUrl').value.trim();
   if (!name || !url) { toast('请填写名称和 URL', 'error'); return; }
+
+  const previousUrl = state.subscriptions.find((item) => item.id === subId)?.url;
+  const urlChanged = previousUrl !== undefined && previousUrl !== url;
 
   const btn = document.getElementById('editSubSaveBtn');
   const originalText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '💾 保存中...'; }
   try {
-    const res = await api('/subscriptions/' + editingSubId, {
+    const res = await api('/subscriptions/' + subId, {
       method: 'PATCH',
       body: JSON.stringify({ name, url }),
     });
-    const sub = state.subscriptions.find((item) => item.id === editingSubId);
+    const sub = state.subscriptions.find((item) => item.id === subId);
     if (sub && res.data) Object.assign(sub, res.data);
     closeModal('editSubModal');
     editingSubId = null;
     renderSubTable();
-    toast('保存成功，请点击「更新」拉取最新节点');
     // 后台校准一次，避免本地状态与服务器不一致
     setTimeout(loadSubscriptions, 300);
+
+    if (!urlChanged) {
+      toast('保存成功');
+      return;
+    }
+
+    // 链接变化：旧节点会一直保留到下一次「更新」，这里直接拉取，避免用户以为已生效
+    if (btn) btn.textContent = '⏳ 拉取节点...';
+    try {
+      const updated = await runWithProgress({
+        title: '🔄 更新订阅',
+        capMs: 120000,
+        fn: () => api('/subscriptions/' + subId + '/update', { method: 'POST', timeout: 120000 }),
+      });
+      toast('保存成功，已拉取最新节点');
+      if (updated && updated.data) updateProgress(\`✅ 更新完成：\${updated.data.nodeCount ?? 0} 个节点\`);
+      await loadSubscriptions();
+    } catch (e) {
+      toast('保存成功，但拉取节点失败: ' + e.message, 'error');
+      await loadSubscriptions();
+    }
   } catch (e) {
     toast('保存失败: ' + e.message, 'error');
   } finally {

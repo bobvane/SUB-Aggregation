@@ -18,6 +18,8 @@ interface ClashProxy {
   tls?: boolean;
   flow?: string;
   sni?: string;
+  /** Clash/Mihomo 用 servername 表示 TLS SNI（与 sni 等价） */
+  servername?: string;
   'skip-cert-verify'?: boolean;
   'client-fingerprint'?: string;
   network?: string;
@@ -36,10 +38,14 @@ interface ClashProxy {
   realityOpts?: {
     'public-key'?: string;
     'short-id'?: string;
+    spx?: string;
+    'support-x25519mlkem768'?: boolean | string;
   };
   'reality-opts'?: {
     'public-key'?: string;
     'short-id'?: string;
+    spx?: string;
+    'support-x25519mlkem768'?: boolean | string;
   };
   /** Hysteria2 专用 */
   ports?: string;
@@ -139,6 +145,8 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
   try {
     const { type, server, name, port, uuid, password, cipher, tls, flow, sni } = proxy;
     const serverPort = proxy.server_port || port;
+    // Clash/Mihomo 订阅用 servername 表示 SNI；只读 sni 会让 VLESS 节点丢 SNI
+    const tlsName = sni || proxy.servername;
 
     let transport: Transport | undefined;
 
@@ -147,6 +155,12 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
         if (!uuid) return null;
         transport = parseClashTransport(proxy);
         const realityOpts = proxy['reality-opts'] ?? proxy.realityOpts;
+        // 保留 mihomo 不支持的扩展字段，供 Xray 链接回写；生成 mihomo 时不会输出 spx
+        const realityExtra: Record<string, string> = {};
+        if (realityOpts?.spx !== undefined) realityExtra.spx = String(realityOpts.spx);
+        if (realityOpts?.['support-x25519mlkem768'] !== undefined) {
+          realityExtra['support-x25519mlkem768'] = String(realityOpts['support-x25519mlkem768']);
+        }
         return createNode({
           name,
           protocol: 'vless',
@@ -155,7 +169,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           uuid,
           tls: tls ?? false,
           flow,
-          sni,
+          sni: tlsName,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
           pbk: realityOpts?.['public-key'],
           sid: realityOpts?.['short-id'],
@@ -165,6 +179,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
             originalName: name,
             tags: [],
             fingerprint: proxy['client-fingerprint'],
+            extra: Object.keys(realityExtra).length > 0 ? realityExtra : undefined,
           },
         });
       }
@@ -193,7 +208,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           port: serverPort,
           password,
           tls: tls ?? true,
-          sni: sni || server,
+          sni: tlsName || server,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
           metadata: { source: 'clash', originalName: name, tags: [] },
         });
@@ -223,7 +238,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           port: serverPort,
           password,
           tls: true,
-          sni: sni || server,
+          sni: tlsName || server,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
           ports: proxy.ports,
           up: proxy.up,
@@ -248,7 +263,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           password,
           token: proxy.token,
           tls: true,
-          sni: sni || server,
+          sni: tlsName || server,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
           udpRelayMode: proxy['udp-relay-mode'],
           congestionController: proxy['congestion-controller'],
@@ -291,7 +306,7 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           port: serverPort,
           password,
           tls: true,
-          sni: sni || server,
+          sni: tlsName || server,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
           idleSessionCheckInterval: proxy['idle-session-check-interval'],
           idleSessionTimeout: proxy['idle-session-timeout'],

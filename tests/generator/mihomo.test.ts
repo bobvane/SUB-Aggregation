@@ -91,6 +91,39 @@ describe('nodeToMihomoProxy', () => {
     expect(proxy['client-fingerprint']).toBe('chrome');
   });
 
+  it('reality 默认输出 support-x25519mlkem768: true（Xray 26.9.8+ 必需）', async () => {
+    const proxy = nodeToMihomoProxy(makeNode({ pbk: 'pubkey', sid: 'abc' }));
+    const realityOpts = proxy['reality-opts'] as Record<string, unknown>;
+    expect(realityOpts['support-x25519mlkem768']).toBe(true);
+  });
+
+  it('链接显式 support-x25519mlkem768=false/0 时尊重原值', async () => {
+    const off = nodeToMihomoProxy(
+      makeNode({ pbk: 'pubkey', metadata: { source: 'test', originalName: 'JP-01', tags: [], extra: { 'support-x25519mlkem768': 'false' } } })
+    );
+    const zero = nodeToMihomoProxy(
+      makeNode({ pbk: 'pubkey', metadata: { source: 'test', originalName: 'JP-01', tags: [], extra: { 'support-x25519mlkem768': '0' } } })
+    );
+    expect((off['reality-opts'] as Record<string, unknown>)['support-x25519mlkem768']).toBe(false);
+    expect((zero['reality-opts'] as Record<string, unknown>)['support-x25519mlkem768']).toBe(false);
+  });
+
+  it('spx（Xray spiderX）不写入 mihomo reality-opts', async () => {
+    const proxy = nodeToMihomoProxy(
+      makeNode({ pbk: 'pubkey', metadata: { source: 'test', originalName: 'JP-01', tags: [], extra: { spx: '/abc123' } } })
+    );
+    const realityOpts = proxy['reality-opts'] as Record<string, unknown>;
+    expect(realityOpts.spx).toBeUndefined();
+  });
+
+  it('type=tcp 不输出 network（mihomo 默认 TCP，不误入 WS 分支）', async () => {
+    const proxy = nodeToMihomoProxy(
+      makeNode({ pbk: 'pubkey', transport: { type: 'tcp' } })
+    );
+    expect(proxy.network).toBeUndefined();
+    expect(proxy['ws-opts']).toBeUndefined();
+  });
+
   it('vless ws + tls 无显式 sni 时用 Host 头兜底作 servername（Cloudflare/CDN 不拒握）', async () => {
     const proxy = nodeToMihomoProxy(
       makeNode({

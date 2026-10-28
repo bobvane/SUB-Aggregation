@@ -103,3 +103,35 @@ describe('Clash YAML subscription', () => {
     expect(ss?.password).toBe('sspassword');
   });
 });
+
+describe('Clash YAML VLESS REALITY 字段保真', () => {
+  const REALITY_YAML = `proxies:
+- name: REALITY-01
+  type: vless
+  server: reality.example.com
+  port: 443
+  uuid: 550e8400-e29b-41d4-a716-446655440000
+  tls: true
+  flow: xtls-rprx-vision
+  servername: target.example.com
+  client-fingerprint: chrome
+  reality-opts:
+    public-key: MyPublicKeyHere
+    short-id: abc123
+    spx: /spider-path
+    support-x25519mlkem768: false
+`;
+
+  it('servername 应映射为 node.sni（与 sni 等价）', () => {
+    const result = parseSubscriptionContent(REALITY_YAML, 'test');
+    expect(result.success).toBe(1);
+    expect(result.nodes[0].sni).toBe('target.example.com');
+  });
+
+  it('reality-opts 的 spx / support-x25519mlkem768 保留在 metadata.extra', () => {
+    const result = parseSubscriptionContent(REALITY_YAML, 'test');
+    const extra = result.nodes[0].metadata.extra;
+    expect(extra?.spx).toBe('/spider-path');
+    expect(extra?.['support-x25519mlkem768']).toBe('false');
+  });
+});

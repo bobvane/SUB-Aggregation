@@ -41,23 +41,64 @@ for (const code of Object.keys(COUNTRIES)) {
  */
 async function smartRename(
   nodes: Node[],
-  ipGeoResolver: (server: string) => Promise<string | null>
+  ipGeoResolver: (server: string) => Promise<string | null>,
+  lockedFingerprints: Set<string> = new Set()
 ): Promise<void> {
   const geoCache = new Map<string, string | null>();
+  const countries: string[] = new Array(nodes.length);
+
+  // 1) 解析每个节点的国家（同一 server 只查一次）
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
-    let country = '';
     if (!geoCache.has(n.server)) {
       geoCache.set(n.server, ipGeoResolver ? await ipGeoResolver(n.server) : null);
     }
     const geoName = geoCache.get(n.server);
-    if (geoName) country = DISPLAY_TO_CODE[geoName] || '';
+    const country = geoName ? DISPLAY_TO_CODE[geoName] || '' : '';
+    countries[i] = country;
+    if (country) n.metadata = { ...n.metadata, country };
+  }
+
+  // 2) 按国家分组、组内按 server:port:protocol 排序后编号。
+  //    旧实现用过滤后的全局数组下标，节点增删/抛弃变化会让所有名字整体重编号，
+  //    客户端会因此把同一节点当成新节点。改为「每个国家独立序号」后，
+  //    新增/移除其他国家的节点不会改变本组名字。
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < nodes.length; i++) {
+    const key = countries[i] || '';
+    const list = groups.get(key);
+    if (list) list.push(i);
+    else groups.set(key, [i]);
+  }
+
+  const numbers: number[] = new Array(nodes.length);
+  for (const indexes of groups.values()) {
+    indexes.sort((a, b) => {
+      // 锁定节点优先拿小号（用户 2026-10-28：锁定的排前面）
+      const la = lockedFingerprints.has(nodeFingerprint(nodes[a])) ? 0 : 1;
+      const lb = lockedFingerprints.has(nodeFingerprint(nodes[b])) ? 0 : 1;
+      if (la !== lb) return la - lb;
+      const fa = nodeFingerprint(nodes[a]);
+      const fb = nodeFingerprint(nodes[b]);
+      if (fa !== fb) return fa < fb ? -1 : 1;
+      // 同指纹（理论上已去重）时用原始名兜底，保证排序确定
+      const na = nodes[a].metadata?.originalName ?? '';
+      const nb = nodes[b].metadata?.originalName ?? '';
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
+    indexes.forEach((nodeIndex, position) => {
+      numbers[nodeIndex] = position + 1;
+    });
+  }
+
+  // 3) 保持原数组顺序输出，只替换名称
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const country = countries[i];
     const flag = country ? countryFlag(country) : '';
     const proto = PROTOCOL_LABELS[n.protocol] || n.protocol;
     const head = country ? `${flag} ${country} ${proto}` : proto;
-    const nn = String(i + 1).padStart(2, '0');
-    n.name = `${head}-${nn}`;
-    if (country) n.metadata = { ...n.metadata, country };
+    n.name = `${head}-${String(numbers[i]).padStart(2, '0')}`;
   }
 }
 
@@ -520,7 +561,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
         get: (k) => repos.settings.get(k),
         set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
       });
-      await smartRename(copy, ipGeoResolver);
+      await smartRename(copy, ipGeoResolver, new Set(await this.getLockedNodes()));
       return copy;
     },
 
@@ -547,7 +588,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       });
       const healthList = await getAllNodeHealth(kv);
       const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));
-      await smartRename(nodes, ipGeoResolver);
+      await smartRename(nodes, ipGeoResolver, new Set(await this.getLockedNodes()));
 
       let content = '';
       switch (format) {

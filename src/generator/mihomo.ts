@@ -20,6 +20,17 @@ function isIPAddress(host: string): boolean {
 }
 
 /**
+ * REALITY 的 X25519MLKEM768 开关。
+ * - 链接未提供该参数 → 默认 true（Xray 26.9.8+ 服务端不接受缺失 key share 的 ClientHello）
+ * - 链接显式 false/0/no/off → 尊重用户选择
+ */
+function parseMlkemFlag(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
+  const value = raw.trim().toLowerCase();
+  return !(value === 'false' || value === '0' || value === 'no' || value === 'off');
+}
+
+/**
  * 节点名去重：同名节点追加数字后缀
  */
 export function makeUniqueNames(nodes: Node[]): Node[] {
@@ -92,14 +103,16 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
       // XHTTP 传输已降级为普通 VLESS(用户 2026-08-30 决定暂停 XHTTP 支持):不输出 network/xhttp-opts
       // Reality:字段名用连字符 reality-opts,加 client-fingerprint 做 TLS 指纹伪装
       if (node.pbk) {
-        const realityOpts: Record<string, string> = {
+        const realityOpts: Record<string, string | boolean> = {
           'public-key': node.pbk,
           'short-id': node.sid ?? '',
+          // Xray-core v26.9.8+ 的 REALITY 服务端要求 ClientHello 带 X25519MLKEM768 key share；
+          // mihomo PR #3326 起由该布尔开关控制（缺省关闭），因此必须显式输出。
+          // 链接里显式 false/0 时尊重原值，未提供时默认开启（现代服务端普遍要求）。
+          'support-x25519mlkem768': parseMlkemFlag(node.metadata?.extra?.['support-x25519mlkem768']),
         };
-        // spx 是 Reality 的扩展协议参数
-        if (node.metadata?.extra?.spx) {
-          realityOpts.spx = node.metadata.extra.spx;
-        }
+        // 注意：spx（Xray spiderX）只保留在 metadata.extra / originalUrl 中，mihomo 无此字段，
+        // 不能因为名字相似就写进 reality-opts。
         base['reality-opts'] = realityOpts;
         base['client-fingerprint'] = node.metadata?.fingerprint ?? 'chrome';
       }
