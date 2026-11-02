@@ -29,16 +29,20 @@ describe('nodeToMihomoProxy', () => {
     expect(proxy.tls).toBe(true);
   });
 
-  it('should downgrade xhttp to plain vless (2026-08-30 user decision)', async () => {
+  it('should output xhttp transport with xhttp-opts', async () => {
     const proxy = nodeToMihomoProxy(
       makeNode({
         transport: { type: 'xhttp', path: '/my-xhttp', host: 'xhttp.domain.com', mode: 'stream-up' },
       })
     );
-    // 降级:不再输出 XHTTP 特有字段
     expect(proxy.type).toBe('vless');
-    expect(proxy.network).toBeUndefined();
-    expect(proxy['xhttp-opts']).toBeUndefined();
+    expect(proxy.network).toBe('xhttp');
+    expect(proxy.alpn).toEqual(['h2']);
+    expect(proxy['xhttp-opts']).toEqual({
+      path: '/my-xhttp',
+      host: 'xhttp.domain.com',
+      mode: 'stream-up',
+    });
     // 保留普通 VLESS 字段
     expect(proxy.server).toBe('jp.example.com');
     expect(proxy.port).toBe(443);

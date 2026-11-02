@@ -1,6 +1,9 @@
-#!/usr/bin/env node
 /**
  * 发布门禁辅助脚本（只读）
+ *
+ * 注意：不要加 shebang。本脚本在 CI 中通过 `node .github/scripts/release-audit.mjs`
+ * 调用；而 tests/tools/release-audit.test.ts 会 import 它，Vite 的 SSR 会把模块
+ * 内联进 AsyncFunction 执行，此时行首 `#!` 会触发 `SyntaxError: Invalid or unexpected token`。
  *
  * 两个用途：
  *   --latest-release  输出「最近一个确认存在正式 GitHub Release 的版本」，供版本门禁日志使用（A1）

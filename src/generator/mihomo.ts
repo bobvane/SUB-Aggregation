@@ -89,13 +89,17 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
       base.udp = true;
       base.encryption = 'none';
       if (node.tls) base.tls = true;
-      if (node.flow) base.flow = node.flow;
-      // SNI 优先用显式 sni 参数；若缺省但开启了 TLS 且是 ws 传输（Host 头一般是真实 SNI 域名），
+      // XTLS Vision 只对 TCP 系有效；XHTTP/WS/gRPC 与 Vision 互斥，不能把 flow 写进这些传输层
+      if (node.flow && (!node.transport || node.transport.type === 'tcp')) base.flow = node.flow;
+      // SNI 优先用显式 sni 参数；若缺省但开启了 TLS 且是 ws/xhttp 传输（Host 头一般是真实 SNI 域名），
       // 用 transport.host 兜底——否则 TLS 握手会用 server 的 IP 当 SNI，Cloudflare/CDN 会拒握。
       if (node.sni) base.servername = node.sni;
-      else if (node.tls && node.transport?.type === 'ws' && node.transport.host) base.servername = node.transport.host;
-      // ALPN:链接带 alpn 参数时原样输出(XHTTP 缺省默认 [h2] 已随 XHTTP 支持移除,2026-08-30)
+      else if (node.tls && (node.transport?.type === 'ws' || node.transport?.type === 'xhttp') && node.transport.host) {
+        base.servername = node.transport.host;
+      }
+      // ALPN:链接带 alpn 参数时原样输出；XHTTP 缺省时默认 [h2]（HTTP/2 握手必需）
       if (node.alpn?.length) base.alpn = node.alpn;
+      else if (node.tls && node.transport?.type === 'xhttp') base.alpn = ['h2'];
       if (node.allowInsecure) base['skip-cert-verify'] = true;
       if (node.transport?.type === 'ws') {
         base.network = 'ws';
@@ -110,7 +114,15 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
           grpcServiceName: node.transport.path?.replace(/^\/+/, '') || '',
         };
       }
-      // XHTTP 传输已降级为普通 VLESS(用户 2026-08-30 决定暂停 XHTTP 支持):不输出 network/xhttp-opts
+      // XHTTP 传输：Mihomo/Clash Meta/OpenClash 使用 network: xhttp + xhttp-opts
+      if (node.transport?.type === 'xhttp') {
+        base.network = 'xhttp';
+        base['xhttp-opts'] = {
+          path: node.transport.path || '/',
+          host: node.transport.host || undefined,
+          mode: node.transport.mode || 'auto',
+        };
+      }
       // Reality:字段名用连字符 reality-opts,加 client-fingerprint 做 TLS 指纹伪装
       if (node.pbk) {
         const realityOpts: Record<string, string | boolean> = {
@@ -132,9 +144,62 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
         base['client-fingerprint'] = node.metadata?.fingerprint ?? 'chrome';
       }
 
-      // ECH(加密 Client Hello)已随 XHTTP 支持暂停移除(2026-08-30 用户决定)
+      // ECH（加密 Client Hello）：从 extra.ech 读取。
+      // query-server-name = ech 参数 '+' 前的域名（config DoH 不输出，用户 2026-08-30 确认）。
+      const echRaw = node.metadata?.extra?.ech;
+      if (echRaw) {
+        const echOpts: Record<string, unknown> = { enable: true };
+        const queryServerName = String(echRaw).split('+')[0];
+        if (queryServerName) echOpts['query-server-name'] = queryServerName;
+        base['ech-opts'] = echOpts;
+      }
 
-      // XHTTP 额外字段(x-padding-* 等)已随 XHTTP 支持暂停移除(2026-08-30 用户决定)
+      // XHTTP 额外字段：从 extra 中读取 x-padding-* 等。
+      // 注意：3X-UI/v2rayN 链接把 x-padding 参数封装在 extra=JSON（camelCase）里，需先解析。
+      if (node.transport?.type === 'xhttp' && node.metadata?.extra) {
+        const xOpts = (base['xhttp-opts'] as Record<string, unknown>) || {};
+        const ex = node.metadata.extra;
+
+        const camelToKebab: Record<string, string> = {
+          xPaddingObfsMode: 'x-padding-obfs-mode',
+          xPaddingMethod: 'x-padding-method',
+          xPaddingPlacement: 'x-padding-placement',
+          xPaddingHeader: 'x-padding-header',
+          xPaddingKey: 'x-padding-key',
+          xPaddingBytes: 'x-padding-bytes',
+        };
+        if (ex['extra']) {
+          try {
+            const parsed = JSON.parse(ex['extra']) as Record<string, unknown>;
+            for (const [k, v] of Object.entries(parsed)) {
+              const target = camelToKebab[k];
+              if (target) xOpts[target] = v;
+            }
+          } catch {
+            // extra 不是合法 JSON 时忽略（顶层 kebab-case 参数仍会处理）
+          }
+        }
+
+        // 顶层 kebab-case 参数（链接直接携带的）优先覆盖 JSON 解析结果
+        if (ex['x-padding-obfs-mode']) xOpts['x-padding-obfs-mode'] = ex['x-padding-obfs-mode'] === 'true';
+        if (ex['x-padding-key']) xOpts['x-padding-key'] = ex['x-padding-key'];
+        if (ex['x-padding-header']) xOpts['x-padding-header'] = ex['x-padding-header'];
+        if (ex['x-padding-placement']) xOpts['x-padding-placement'] = ex['x-padding-placement'];
+        if (ex['x-padding-method']) xOpts['x-padding-method'] = ex['x-padding-method'];
+        if (ex['x-padding-bytes']) xOpts['x-padding-bytes'] = ex['x-padding-bytes'];
+        if (ex['no-grpc-header']) xOpts['no-grpc-header'] = ex['no-grpc-header'] === 'true';
+        if (ex['uplink-http-method']) xOpts['uplink-http-method'] = ex['uplink-http-method'];
+        if (ex['session-placement']) xOpts['session-placement'] = ex['session-placement'];
+        if (ex['session-key']) xOpts['session-key'] = ex['session-key'];
+        if (ex['session-table']) xOpts['session-table'] = ex['session-table'];
+        if (ex['session-length']) xOpts['session-length'] = ex['session-length'];
+        if (ex['seq-placement']) xOpts['seq-placement'] = ex['seq-placement'];
+        if (ex['seq-key']) xOpts['seq-key'] = ex['seq-key'];
+        if (ex['uplink-data-placement']) xOpts['uplink-data-placement'] = ex['uplink-data-placement'];
+        if (ex['uplink-data-key']) xOpts['uplink-data-key'] = ex['uplink-data-key'];
+        if (ex['uplink-chunk-size']) xOpts['uplink-chunk-size'] = parseInt(ex['uplink-chunk-size'], 10) || 0;
+        if (Object.keys(xOpts).length > 0) base['xhttp-opts'] = xOpts;
+      }
       break;
 
     case 'trojan':

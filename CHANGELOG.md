@@ -1,5 +1,13 @@
 # 更新日志
 
+## v2.43.0 — 2026-11-02
+
+- 修复节点列表「锁定」点击后刷新失效：移除已删除的 `refreshNodeCount()` 调用，锁定状态现在会正常保存并在刷新后保留。
+- 恢复 Mihomo / Clash Meta / OpenClash / Stash 的 VLESS-XHTTP 输出：`network: xhttp`、`xhttp-opts.path/host/mode`，并保留 REALITY、ECH、x-padding 与缺省 `alpn: [h2]`。
+- 修复同一服务器、同一端口、同协议的 TCP 与 XHTTP 节点被误去重的问题：节点指纹对 XHTTP 追加 `:xhttp`，去重、锁定/禁用与健康数据统一使用同一指纹。
+- XTLS `flow` 仅对 TCP 传输输出，避免 WS/XHTTP/gRPC 携带互斥的 Vision 参数。
+- 修复发布门禁脚本的 shebang 导致 `tests/tools/release-audit.test.ts` 在 Vite SSR 下报 `SyntaxError` 的问题，全量测试恢复通过。
+
 ## v2.42.0 — 2026-11-02
 
 - 按 sing-box 1.14/1.15 官方 schema 重写输出映射，修复配置无法加载的问题：

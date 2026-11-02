@@ -31,7 +31,7 @@
 
 - `DB_PATH` 默认 `/data/app.db`，生产容器通过 `./data:/data` 持久化。备份时复制整个数据目录。
 - 所有持久化访问经 `src/storage/kv.ts` 的仓储接口；新增键先在 `src/models/config.ts` 登记。
-- 订阅节点以 `subscriptionId` 分组存放；节点指纹为规范化的 `server:port:protocol`，用于去重及锁定/禁用状态关联。
+- 订阅节点以 `subscriptionId` 分组存放；节点指纹为规范化的 `server:port:protocol`（XHTTP 追加 `:xhttp`），用于去重及锁定/禁用状态关联。
 - 健康数据使用 `health:latest:*` 快照和 `health:hist:*` 历史键。配置缓存带应用版本和配置版本，升级或改配置后会失效。
 
 ## 进程与定时任务

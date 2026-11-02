@@ -6,7 +6,7 @@
 
 支持的节点协议：VMess、VLESS、Trojan、Shadowsocks、ShadowsocksR、Hysteria2、TUIC、WireGuard、AnyTLS。
 
-解析链路：检测订阅类型 → 解码文本 → 按协议解析 → 字段归一化 → 按 `server:port:protocol` 去重。尽可能保留原始 URI 和未知参数，方便复制或导出时保持兼容。
+解析链路：检测订阅类型 → 解码文本 → 按协议解析 → 字段归一化 → 按 `nodeFingerprint`（`server:port:protocol`，XHTTP 追加 `:xhttp`）去重。尽可能保留原始 URI 和未知参数，方便复制或导出时保持兼容。
 
 主要代码：`src/parser/detector.ts`、`decoder.ts`、`index.ts`、各 `*.parser.ts` 和 `clash.ts`。新增协议时补解析器、类型定义、生成器支持情况及协议测试。
 

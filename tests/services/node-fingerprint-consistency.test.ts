@@ -20,13 +20,20 @@ import { nodeFingerprint as probeFingerprint } from '@/services/node-probe.servi
 import { KV_KEYS } from '@/models/config';
 import { createNode, type Node } from '@/models/node';
 
-const mk = (server: string, port = 443, protocol = 'vless', name = 'N'): Node =>
+const mk = (
+  server: string,
+  port = 443,
+  protocol = 'vless',
+  name = 'N',
+  transport?: Node['transport']
+): Node =>
   createNode({
     id: `n-${server}-${port}`,
     name,
     protocol: protocol as Node['protocol'],
     server,
     port,
+    transport,
     metadata: { source: 'test', originalName: name, tags: [] },
   });
 
@@ -98,6 +105,19 @@ describe('P1 指纹规范：锁定 / 禁用 / 剔除按同一口径关联', () =
     const a = mk('hk.example.com', 443, 'VLESS', 'A');
     const b = mk('HK.EXAMPLE.COM', 443, 'vless', 'B');
     expect(nodeFingerprint(a)).toBe(nodeFingerprint(b));
+  });
+
+  it('同 server:port:protocol 的 TCP 与 XHTTP 不得被误合并', () => {
+    const tcp = mk('hk.example.com', 443, 'vless', 'TCP', { type: 'tcp' });
+    const xhttp = mk('hk.example.com', 443, 'vless', 'XHTTP', {
+      type: 'xhttp',
+      path: '/xhttp',
+      host: 'hk.example.com',
+      mode: 'auto',
+    });
+
+    expect(nodeFingerprint(tcp)).not.toBe(nodeFingerprint(xhttp));
+    expect(deduplicateNodes([tcp, xhttp])).toHaveLength(2);
   });
 });
 

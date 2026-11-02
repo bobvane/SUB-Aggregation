@@ -126,6 +126,15 @@ describe('deduplicateNodes', () => {
     const result = deduplicateNodes(nodes as never[]);
     expect(result.length).toBe(3);
   });
+
+  it('should keep tcp and xhttp nodes with same server:port:protocol', () => {
+    const nodes = [
+      { server: 'example.com', port: 443, protocol: 'vless', transport: { type: 'tcp' } },
+      { server: 'example.com', port: 443, protocol: 'vless', transport: { type: 'xhttp' } },
+    ];
+    const result = deduplicateNodes(nodes as never[]);
+    expect(result.length).toBe(2);
+  });
 });
 
 describe('applyRules', () => {

@@ -4,7 +4,7 @@
  * 08_PARSER_SPEC.md §3-5：Content Decoder → Protocol Detector → Parser → Normalized Node
  */
 
-import { Node } from '@/models/node';
+import { Node, nodeFingerprint } from '@/models/node';
 import { detectProtocol, splitLines } from './detector';
 import { decodeSubscriptionContent } from './decoder';
 import { parseVmess } from './vmess.parser';
@@ -119,13 +119,15 @@ export function parseSubscriptionContent(content: string, source: string): Parse
 }
 
 /**
- * 节点去重：按 server:port:protocol 判断
+ * 节点去重：统一使用 nodeFingerprint()。
+ * 不能在这里另写一份 server:port:protocol 逻辑，否则 XHTTP 后缀等
+ * 指纹语义变更会与锁定/禁用/健康数据脱节。
  */
 export function deduplicateNodes(nodes: Node[]): Node[] {
   const seen = new Set<string>();
   const result: Node[] = [];
   for (const node of nodes) {
-    const key = `${node.server}:${node.port}:${node.protocol}`.toLowerCase();
+    const key = nodeFingerprint(node);
     if (!seen.has(key)) {
       seen.add(key);
       result.push(node);

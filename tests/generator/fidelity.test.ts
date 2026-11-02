@@ -73,17 +73,30 @@ describe('整链保真', () => {
     expect(nodeToUrl(node)).toContain('vless://');
   });
 
-  it('Mihomo 生成器: XHTTP 已降级为普通 VLESS(2026-08-30 用户决定暂停 XHTTP)', () => {
+  it('Mihomo 生成器: XHTTP 输出 network/xhttp/xhttp-opts/ECH/x-padding', () => {
     const result = parseVless(REAL_XHTTP_LINK);
     const proxy = nodeToMihomoProxy(result.node!);
 
-    // 降级:不再输出 XHTTP 特有字段
-    expect(proxy.network).toBeUndefined();
-    expect(proxy['xhttp-opts']).toBeUndefined();
-    expect(proxy['ech-opts']).toBeUndefined();
-    expect(proxy.alpn).toBeUndefined();
+    // Mihomo/Clash Meta/OpenClash XHTTP 标准字段
+    expect(proxy.network).toBe('xhttp');
+    expect(proxy.alpn).toEqual(['h2']);
+    expect(proxy['xhttp-opts']).toMatchObject({
+      path: '/',
+      host: 'bot.wenbo.de5.net',
+      mode: 'stream-one',
+      'x-padding-obfs-mode': true,
+      'x-padding-method': 'tokenish',
+      'x-padding-placement': 'queryInHeader',
+      'x-padding-header': 'c1f510',
+      'x-padding-key': '_3db7c0',
+    });
+    // ECH：query-server-name 取 ech 参数 '+' 前的域名
+    expect(proxy['ech-opts']).toEqual({
+      enable: true,
+      'query-server-name': 'cloudflare-ech.com',
+    });
 
-    // 保留普通 VLESS 输出
+    // 普通 VLESS 字段仍然保留
     expect(proxy.type).toBe('vless');
     expect(proxy.uuid).toBe('bc1f510f-8ac5-4071-88e5-b3db7c0a5ecd');
     expect(proxy.server).toBe('172.237.7.122');
@@ -92,7 +105,6 @@ describe('整链保真', () => {
     expect(proxy.encryption).toBe('none');
     expect(proxy.tls).toBe(true);
     expect(proxy.servername).toBe('bot.wenbo.de5.net');
-    // 非 Reality TLS VLESS:client-fingerprint 默认 chrome
     expect(proxy['client-fingerprint']).toBe('chrome');
   });
 });

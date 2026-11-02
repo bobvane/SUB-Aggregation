@@ -2381,7 +2381,7 @@ async function toggleNodeLock(fp, locked) {
   if (!node) return;
   node.locked = locked;
   renderNodes();
-  refreshNodeCount();
+  // 输出页会在进入时重新拉取状态，这里不需要额外刷新计数
   try {
     await api('/nodes/locked', { method: 'POST', body: JSON.stringify({ fingerprint: fp, locked }) });
     toast(locked ? '🔒 已锁定：该节点将强制进配置' : '🔓 已解锁：跟随连通性探测/延迟判定');

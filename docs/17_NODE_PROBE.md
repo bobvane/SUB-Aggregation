@@ -225,7 +225,7 @@ probe:score_version   ← "4"  评分公式代次（变更不清数据）
 probe:schema_version  ← "1"  历史记录结构代次（仅在结构真正不兼容时才允许迁移）
 ```
 
-**去重键**：`nodeFingerprint(server:port:protocol)`——同指纹只更新字段，保留 `original_address`。
+**去重键**：`nodeFingerprint(server:port:protocol[:xhttp])`——同指纹只更新字段，保留 `original_address`。XHTTP 节点额外带 `:xhttp` 后缀，避免与同机同端口同协议的 TCP 节点互相覆盖。
 
 **`history.score` 语义（阶段 2 起）**：字段仍随每条历史记录落盘（兼容既有结构），
 但**评分公式不再读取它**——「稳定性」维度改为在有效延迟样本 S 上计算变异系数。

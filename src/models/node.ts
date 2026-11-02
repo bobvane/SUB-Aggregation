@@ -207,9 +207,20 @@ export function createNode(partial: Partial<Node> & { name: string }): Node {
 }
 
 /**
- * 节点指纹：server:port:protocol
- * 用于节点禁用状态持久化（重抓订阅后状态不丢失）
+ * 节点指纹：server:port:protocol[:xhttp]
+ *
+ * 用于节点去重、禁用/锁定状态持久化、健康数据关联。
+ *
+ * XHTTP 必须单独区分：同一台服务器、同一个端口上可以同时存在
+ * VLESS TCP（含 Reality/XTLS）与 VLESS XHTTP 节点，二者仅传输层不同。
+ * 如果指纹只到 protocol，它们会被当成同一节点，导致 XHTTP 节点从列表和配置中消失。
+ *
+ * 本次只给 xhttp 追加后缀，保持现有 TCP/WS/gRPC 节点指纹不变，
+ * 避免打断已存在的 locked_nodes / disabled_nodes / health:* 数据。
  */
-export function nodeFingerprint(node: Pick<Node, 'server' | 'port' | 'protocol'>): string {
-  return `${node.server}:${node.port}:${node.protocol}`.toLowerCase();
+export function nodeFingerprint(
+  node: Pick<Node, 'server' | 'port' | 'protocol' | 'transport'>
+): string {
+  const base = `${node.server}:${node.port}:${node.protocol}`.toLowerCase();
+  return node.transport?.type === 'xhttp' ? `${base}:xhttp` : base;
 }
