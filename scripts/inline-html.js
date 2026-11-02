@@ -15,7 +15,15 @@ const htmlPath = join(root, 'public', 'index.html');
 const outputPath = join(root, 'src', 'html.js');
 
 try {
-  const html = readFileSync(htmlPath, 'utf-8');
+  const raw = readFileSync(htmlPath, 'utf-8');
+  // 内联本地依赖：<!-- @inline public/vendor/xxx.js -->
+  const html = raw.replace(/<!--\s*@inline\s+([^\s]+)\s*-->/g, (_match, relPath) => {
+    const assetPath = join(root, relPath);
+    if (!assetPath.startsWith(join(root, 'public'))) {
+      throw new Error(`@inline 只允许引用 public 目录: ${relPath}`);
+    }
+    return readFileSync(assetPath, 'utf-8');
+  });
   // 转义反斜杠、反引号和 ${} 防止模板字符串冲突
   const escaped = html
     .replaceAll('\\', '\\\\')

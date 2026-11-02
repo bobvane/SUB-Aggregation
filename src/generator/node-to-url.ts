@@ -54,6 +54,11 @@ function nodeToVlessUrl(node: Node): string {
   if (node.sni) params.set('sni', node.sni);
   if (node.pbk) params.set('pbk', node.pbk);
   if (node.sid) params.set('sid', node.sid);
+  // YAML 源没有 originalUrl，以下字段必须从结构化模型重建，否则会丢
+  if (node.metadata?.fingerprint) params.set('fp', node.metadata.fingerprint);
+  if (node.metadata?.extra?.['spx']) params.set('spx', node.metadata.extra['spx']);
+  if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
+  if (node.allowInsecure) params.set('allowInsecure', '1');
   if (node.transport?.type === 'ws') {
     params.set('type', 'ws');
     if (node.transport.path) params.set('path', node.transport.path);
@@ -61,6 +66,10 @@ function nodeToVlessUrl(node: Node): string {
   } else if (node.transport?.type === 'grpc') {
     params.set('type', 'grpc');
     if (node.transport.path) params.set('serviceName', node.transport.path.replace(/^\//, ''));
+  } else if (node.transport?.type === 'h2') {
+    params.set('type', 'http');
+    if (node.transport.path) params.set('path', node.transport.path);
+    if (node.transport.host) params.set('host', node.transport.host);
   } else if (node.transport?.type === 'xhttp') {
     params.set('type', 'xhttp');
     if (node.transport.mode) params.set('mode', node.transport.mode);
@@ -80,6 +89,13 @@ function nodeToVlessUrl(node: Node): string {
  * VMess → vmess://base64(JSON)#name
  */
 function nodeToVmessUrl(node: Node): string {
+  const net = node.transport?.type === 'ws'
+    ? 'ws'
+    : node.transport?.type === 'grpc'
+      ? 'grpc'
+      : node.transport?.type === 'h2'
+        ? 'h2'
+        : 'tcp';
   const json = JSON.stringify({
     v: '2',
     ps: node.name,
@@ -87,12 +103,16 @@ function nodeToVmessUrl(node: Node): string {
     port: node.port,
     id: node.uuid,
     aid: '0',
-    scy: 'auto',
-    net: node.transport?.type === 'ws' ? 'ws' : node.transport?.type === 'grpc' ? 'grpc' : 'tcp',
+    scy: node.metadata?.tags?.[0] || 'auto',
+    net,
     type: 'none',
     host: node.transport?.host || '',
     path: node.transport?.path || '',
     tls: node.tls ? 'tls' : '',
+    sni: node.sni || '',
+    alpn: node.alpn?.length ? node.alpn.join(',') : '',
+    fp: node.metadata?.fingerprint || '',
+    allowInsecure: node.allowInsecure ? '1' : '',
   });
   const payload = safeBase64Encode(json);
   const name = encodeURIComponent(node.name);
@@ -106,6 +126,16 @@ function nodeToTrojanUrl(node: Node): string {
   const params = new URLSearchParams();
   if (node.sni) params.set('sni', node.sni);
   if (node.allowInsecure) params.set('allowInsecure', '1');
+  if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
+  if (node.metadata?.fingerprint) params.set('fp', node.metadata.fingerprint);
+  if (node.transport?.type === 'ws') {
+    params.set('type', 'ws');
+    if (node.transport.path) params.set('path', node.transport.path);
+    if (node.transport.host) params.set('host', node.transport.host);
+  } else if (node.transport?.type === 'grpc') {
+    params.set('type', 'grpc');
+    if (node.transport.path) params.set('serviceName', node.transport.path.replace(/^\//, ''));
+  }
   const query = params.toString();
   const server = formatHost(node.server, node.port);
   const name = encodeURIComponent(node.name);
@@ -210,6 +240,13 @@ function nodeToAnytlsUrl(node: Node): string {
   if (node.sni) params.set('sni', node.sni);
   if (node.allowInsecure) params.set('insecure', '1');
   if (node.alpn?.length) params.set('alpn', node.alpn.join(','));
+  if (node.metadata?.fingerprint) params.set('fp', node.metadata.fingerprint);
+  if (node.idleSessionCheckInterval !== undefined) {
+    params.set('idle-session-check-interval', String(node.idleSessionCheckInterval));
+  }
+  if (node.idleSessionTimeout !== undefined) params.set('idle-session-timeout', String(node.idleSessionTimeout));
+  if (node.minIdleSession !== undefined) params.set('min-idle-session', String(node.minIdleSession));
+  if (node.clientMetadata) params.set('client-metadata', node.clientMetadata);
   const server = formatHost(node.server, node.port);
   const query = params.toString();
   const name = encodeURIComponent(node.name);

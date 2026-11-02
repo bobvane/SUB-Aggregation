@@ -42,6 +42,11 @@ export function parseTrojan(input: string): ParserResult {
     const sni = params.get('sni') ?? undefined;
     const allowInsecure = params.get('allowInsecure') === '1' || params.get('allowInsecure') === 'true';
     const tls = params.get('security') !== 'none';
+    const net = params.get('type') ?? 'tcp';
+    const host = params.get('host') ?? undefined;
+    const path = params.get('path') ?? params.get('serviceName') ?? undefined;
+    const alpn = params.get('alpn')?.split(',').filter(Boolean) ?? undefined;
+    const fp = params.get('fp') ?? undefined;
 
     const node: Node = createNode({
       name: name || `${server}:${port}`,
@@ -52,10 +57,17 @@ export function parseTrojan(input: string): ParserResult {
       tls,
       sni,
       allowInsecure,
+      transport: {
+        type: net === 'ws' ? 'ws' : net === 'grpc' ? 'grpc' : net === 'h2' ? 'h2' : 'tcp',
+        path,
+        host,
+      },
+      alpn,
       metadata: {
         source: 'unknown',
         originalName: name || `${server}:${port}`,
         tags: [],
+        fingerprint: fp,
         originalUrl: input.trim(),
       },
     });

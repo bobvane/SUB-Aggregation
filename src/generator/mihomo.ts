@@ -32,14 +32,24 @@ function parseMlkemFlag(raw: string | undefined): boolean {
 
 /**
  * 节点名去重：同名节点追加数字后缀
+ *
+ * v2.42.0：同时记录「已占用名称」，避免 [X, X, X-1] 生成两个 X-1。
+ * 仍保持原有稳定顺序：第一个 X 不改名，后续依次取未被占用的最小后缀。
  */
 export function makeUniqueNames(nodes: Node[]): Node[] {
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
+  const nextSuffix = new Map<string, number>();
   return nodes.map((n) => {
-    const count = seen.get(n.name) ?? 0;
-    seen.set(n.name, count + 1);
-    if (count === 0) return n;
-    return { ...n, name: `${n.name}-${count}` };
+    if (!used.has(n.name)) {
+      used.add(n.name);
+      return n;
+    }
+    let suffix = nextSuffix.get(n.name) ?? 1;
+    while (used.has(`${n.name}-${suffix}`)) suffix++;
+    nextSuffix.set(n.name, suffix + 1);
+    const name = `${n.name}-${suffix}`;
+    used.add(name);
+    return { ...n, name };
   });
 }
 

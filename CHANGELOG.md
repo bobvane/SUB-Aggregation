@@ -1,5 +1,17 @@
 # 更新日志
 
+## v2.42.0 — 2026-11-02
+
+- 按 sing-box 1.14/1.15 官方 schema 重写输出映射，修复配置无法加载的问题：
+  DNS server 改用 `type: https/local` 新格式；tcp 节点不再输出无效 transport；gRPC 使用 `service_name`；h2 映射为 `http`。
+- 修正协议字段：VMess `method → security`、Shadowsocks `ss → shadowsocks`、Hysteria2 `server_ports/up_mbps/down_mbps/tls`、TUIC 的 TLS 与 `zero_rtt_handshake`、AnyTLS 的 `tls` 与时长字符串。
+- WireGuard 改输出顶层 `endpoints` + `peers`（sing-box 1.13 起已移除 wireguard outbound）；无法表达的 SSR、XHTTP、TUIC V4 节点会自动跳过，不再产生悬空引用。
+- Base64 四格式补全 YAML 源重建字段：VLESS 的 `fp/spx/alpn/allowInsecure`、VMess 的 `sni/fp/alpn/allowInsecure`、Trojan 的 ws/gRPC 传输层与 TLS 参数；VMess 链接解析同步保留这些字段。
+- 节点重名处理修复：`[X, X, X-1]` 不再生成两个 `X-1`，所有输出格式的名称保持唯一。
+- 输出页二维码改为本地生成，订阅 token 不再发送给第三方服务；Base64 格式预览先解码再展示；下载失败时提示真实原因；Sing-box 从“纯链接”分组移入“完整配置”分组。
+- 删除未使用且语法不符合 Shadowrocket/Surge 的 `shadowrocket.ts` 生成器及其测试。
+- 新增 sing-box 官方 schema 字段一致性测试，覆盖全部支持的协议与 DNS / endpoint。
+
 ## v2.41.0 — 2026-10-28
 
 - REALITY 节点输出 `reality-opts.support-x25519mlkem768: true`（链接显式 false/0 时尊重原值），修复 Xray 26.9.8+ 服务端因缺少 X25519MLKEM768 而认证失败的问题。

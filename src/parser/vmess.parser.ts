@@ -41,6 +41,7 @@ export function parseVmess(input: string): ParserResult {
 
     const net = asString(data.net) || 'tcp';
     const tls = asString(data.tls).toLowerCase() === 'tls';
+    const alpnRaw = asString(data.alpn);
 
     const node: Node = createNode({
       name: asString(data.ps) || `${server}:${port}`,
@@ -49,6 +50,9 @@ export function parseVmess(input: string): ParserResult {
       port,
       uuid,
       tls,
+      sni: asString(data.sni) || undefined,
+      allowInsecure: isTruthy(data.allowInsecure),
+      alpn: alpnRaw ? alpnRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
       transport: {
         type: net === 'ws' ? 'ws' : net === 'grpc' ? 'grpc' : net === 'h2' ? 'h2' : 'tcp',
         path: asString(data.path) || undefined,
@@ -57,7 +61,8 @@ export function parseVmess(input: string): ParserResult {
       metadata: {
         source: 'unknown',
         originalName: asString(data.ps) || `${server}:${port}`,
-        tags: [],
+        tags: asString(data.scy) ? [asString(data.scy)] : [],
+        fingerprint: asString(data.fp) || undefined,
         extra: vmessExtra(data),
       },
     });
@@ -66,6 +71,12 @@ export function parseVmess(input: string): ParserResult {
   } catch {
     return makeError('PARSE_FAILED', 'VMess parse failed');
   }
+}
+
+function isTruthy(v: unknown): boolean {
+  if (v === true) return true;
+  const s = String(v ?? '').toLowerCase();
+  return s === '1' || s === 'true';
 }
 
 /** 保留 VMess JSON 中非结构化字段(保真用) */

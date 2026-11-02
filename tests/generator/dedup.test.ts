@@ -32,6 +32,13 @@ describe('makeUniqueNames', () => {
     const result = makeUniqueNames(nodes);
     expect(result.map(n => n.name)).toEqual(['JP', 'US', 'US-1', 'JP-1']);
   });
+
+  it('should not collide with an existing suffixed name', async () => {
+    const nodes = [makeNode('X'), makeNode('X'), makeNode('X-1')];
+    const result = makeUniqueNames(nodes);
+    expect(result.map(n => n.name)).toEqual(['X', 'X-1', 'X-1-1']);
+    expect(new Set(result.map(n => n.name)).size).toBe(3);
+  });
 });
 
 describe('generators with duplicate names', () => {

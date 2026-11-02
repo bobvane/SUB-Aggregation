@@ -927,7 +927,9 @@ th, td { font-size: 13px; }
 </div>
 
 <script>
-// ============ State ============
+<!-- @inline public/vendor/qrcode.min.js -->
+</script>
+<script>// ============ State ============
 let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
 
 const LIST_PREFS_KEY = 'sub-aggregation-list-view';
@@ -2468,15 +2470,18 @@ async function refreshOutputConfig() {
 
 function renderOutputUrls() {
   const baseUrl = window.location.origin + '/sub';
-  // 分组：带分流规则输出 / 纯节点输出（无分流规则）
+  // 分组：带分流规则输出 / 完整配置（含 DNS/路由/TUN）/ 纯节点输出（无分流规则）
   const groups = [
     { label: '分流配置（含策略组 + 规则）',
       formats: [
         { key: 'mihomo',    name: '🐱 Mihomo',       desc: 'Mihomo / Clash Meta / OpenClash / Stash' },
       ]},
+    { label: '完整配置（含 DNS / 路由 / TUN）',
+      formats: [
+        { key: 'singbox',   name: '📦 Sing-box',      desc: 'Sing-box 原生格式（完整配置）' },
+      ]},
     { label: '节点聚合（纯链接，无分流规则）',
       formats: [
-        { key: 'singbox',   name: '📦 Sing-box',      desc: 'Sing-box 原生格式' },
         { key: 'v2ray',     name: '📄 V2ray',         desc: 'V2ray 标准订阅 (Base64)' },
         { key: 'v2rayn',    name: '📱 V2RayNG',       desc: 'V2RayNG Android' },
         { key: 'nekoray',   name: '🪐 NekoRay',       desc: 'NekoRay / NekoBox' },
@@ -2540,11 +2545,20 @@ function copyFormatUrl(format) {
   copyText(`${window.location.origin}/sub/${format}/${subKey}`, '已复制订阅链接');
 }
 
-// ============ 二维码 ============
+// ============ 二维码（本地生成，订阅 token 不出本机） ============
 function showQrModal(format, name) {
-  const url = encodeURIComponent(`${window.location.origin}/sub/${format}/${subKey}`);
   if (!subKey) { toast('尚未获取订阅密钥，请刷新重试', 'error'); return; }
-  document.getElementById('qrContainer').innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${url}" alt="QR码" style="border-radius:8px">`;
+  const url = `${window.location.origin}/sub/${format}/${subKey}`;
+  if (typeof qrcode !== 'function') { toast('二维码组件加载失败，请刷新页面', 'error'); return; }
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    document.getElementById('qrContainer').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 8 });
+  } catch {
+    toast('二维码生成失败，请直接复制订阅链接', 'error');
+    return;
+  }
   document.getElementById('qrFormatName').textContent = name + ' 订阅';
   showModal('qrModal');
 }
@@ -2568,13 +2582,37 @@ function previewSelect(force) {
   previewConfig(format);
 }
 
+const BASE64_FORMATS = new Set(['v2ray', 'v2rayn', 'nekoray', 'shadowrocket']);
+
+/** Base64 订阅解码（仅用于预览；解码失败时原样返回） */
+function decodeSubscriptionText(text) {
+  try {
+    const cleaned = text.replace(/\s+/g, '');
+    if (!cleaned) return text;
+    let normalized = cleaned.replace(/-/g, '+').replace(/_/g, '/');
+    while (normalized.length % 4 !== 0) normalized += '=';
+    const binary = atob(normalized);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return text;
+  }
+}
+
 async function previewConfig(format) {
   document.getElementById('configPreview').textContent = '加载中...';
   try {
     const res = await fetch(`/api/output/${format}`, { credentials: 'include' });
-    if (!res.ok) throw new Error('加载失败');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    document.getElementById('configPreview').textContent = text;
+    if (BASE64_FORMATS.has(format)) {
+      const decoded = decodeSubscriptionText(text);
+      const count = decoded.split(/\r?\n/).filter(Boolean).length;
+      document.getElementById('configPreview').textContent =
+        `# 已解码 Base64 订阅（${count} 个节点）\n\n${decoded}`;
+    } else {
+      document.getElementById('configPreview').textContent = text;
+    }
   } catch (e) {
     document.getElementById('configPreview').textContent = '加载失败: ' + e.message;
   }
@@ -2583,11 +2621,12 @@ async function previewConfig(format) {
 async function downloadConfig(format, filename) {
   try {
     const res = await fetch(`/api/output/${format}`, { credentials: 'include' });
+    if (!res.ok) throw new Error(res.status === 401 ? '登录已过期，请重新登录' : `HTTP ${res.status}`);
     const blob = await res.blob();
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
     URL.revokeObjectURL(a.href);
     toast('下载完成');
-  } catch { toast('下载失败', 'error'); }
+  } catch (e) { toast('下载失败：' + e.message, 'error'); }
 }
 
 /** 各格式对应的标准配置文件名后缀（客户端直接识别的文件名和类型） */

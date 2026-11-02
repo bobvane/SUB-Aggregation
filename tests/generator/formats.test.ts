@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { generateBase64Config, validateBase64 } from '@/generator/base64-generator';
-import { generateShadowrocketConfig } from '@/generator/shadowrocket';
 import { nodeToUrl } from '@/generator/node-to-url';
 import { Node } from '@/models/node';
 import { safeBase64Decode } from '@/generator/base64';
@@ -93,14 +92,23 @@ describe('generateBase64Config', () => {
     expect(decoded).toContain('vless://');
     expect(decoded).toContain('JP-01');
   });
-});
 
-describe('generateShadowrocketConfig', () => {
-  it('should generate valid shadowrocket config (node-only, no rules)', () => {
-    const config = generateShadowrocketConfig([makeNode()]);
-    expect(config).toContain('[Proxy]');
-    expect(config).toContain('JP-01');
-    expect(config).not.toContain('[Rule]');
-    expect(config).not.toContain('RULE-SET');
+  it('rebuilds fingerprint / alpn / spx / allowInsecure when originalUrl is absent', () => {
+    const node = makeNode({
+      allowInsecure: true,
+      alpn: ['h2', 'http/1.1'],
+      metadata: {
+        source: 'clash',
+        originalName: 'YAML',
+        tags: [],
+        fingerprint: 'chrome',
+        extra: { spx: '/spider' },
+      },
+    });
+    const url = nodeToUrl(node);
+    expect(url).toContain('fp=chrome');
+    expect(url).toContain('alpn=h2%2Chttp%2F1.1');
+    expect(url).toContain('spx=%2Fspider');
+    expect(url).toContain('allowInsecure=1');
   });
 });

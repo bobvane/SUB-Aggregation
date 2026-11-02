@@ -174,11 +174,12 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           pbk: realityOpts?.['public-key'],
           sid: realityOpts?.['short-id'],
           transport,
+          alpn: parseAlpn(proxy.alpn),
           metadata: {
             source: 'clash',
             originalName: name,
             tags: [],
-            fingerprint: proxy['client-fingerprint'],
+            fingerprint: proxy['client-fingerprint'] ?? proxy.fingerprint,
             extra: Object.keys(realityExtra).length > 0 ? realityExtra : undefined,
           },
         });
@@ -194,8 +195,16 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           port: serverPort,
           uuid,
           tls: tls ?? false,
+          sni: tlsName,
+          allowInsecure: proxy['skip-cert-verify'] ?? false,
           transport,
-          metadata: { source: 'clash', originalName: name, tags: [] },
+          alpn: parseAlpn(proxy.alpn),
+          metadata: {
+            source: 'clash',
+            originalName: name,
+            tags: proxy.cipher ? [proxy.cipher] : [],
+            fingerprint: proxy['client-fingerprint'] ?? proxy.fingerprint,
+          },
         });
       }
 
@@ -210,7 +219,14 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
           tls: tls ?? true,
           sni: tlsName || server,
           allowInsecure: proxy['skip-cert-verify'] ?? false,
-          metadata: { source: 'clash', originalName: name, tags: [] },
+          transport: parseClashTransport(proxy),
+          alpn: parseAlpn(proxy.alpn),
+          metadata: {
+            source: 'clash',
+            originalName: name,
+            tags: [],
+            fingerprint: proxy['client-fingerprint'] ?? proxy.fingerprint,
+          },
         });
       }
 
