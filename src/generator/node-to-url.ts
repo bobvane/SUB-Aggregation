@@ -48,7 +48,13 @@ export function nodeToUrl(node: Node): string {
  */
 function nodeToVlessUrl(node: Node): string {
   const params = new URLSearchParams();
-  params.set('encryption', 'none');
+  // 链接回写同样需要保留 VLESS Encryption（mlkem768x25519plus...），
+  // 否则从结构化模型重建的 XHTTP 节点会退化成 encryption=none
+  const linkedEncryption = node.metadata?.extra?.['encryption']?.trim();
+  params.set(
+    'encryption',
+    linkedEncryption && linkedEncryption.toLowerCase() !== 'none' ? linkedEncryption : 'none'
+  );
   params.set('security', node.tls ? (node.pbk ? 'reality' : 'tls') : 'none');
   if (node.flow) params.set('flow', node.flow);
   if (node.sni) params.set('sni', node.sni);

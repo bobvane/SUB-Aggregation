@@ -51,6 +51,46 @@ describe('nodeToMihomoProxy', () => {
     expect(proxy.encryption).toBe('none');
   });
 
+  it('should pass through VLESS ML-KEM encryption (xray v25+)', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.TESTKEY';
+    const proxy = nodeToMihomoProxy(
+      makeNode({
+        transport: { type: 'xhttp', path: '/', mode: 'auto' },
+        metadata: {
+          source: 'test',
+          originalName: 'XHTTP-MLKEM',
+          tags: [],
+          extra: { encryption: enc },
+        },
+      })
+    );
+    // mihomo 的 encryption 字段必须原样透传，否则服务端解密失败 → 握手超时
+    expect(proxy.encryption).toBe(enc);
+    // 链接未携带 flow 时不输出
+    expect(proxy.flow).toBeUndefined();
+  });
+
+  it('should keep flow for xhttp when the link carries it (3X-UI cloned inbound)', () => {
+    // 实测：3X-UI 把 TCP 入站克隆成 XHTTP 时，服务端会校验链接里的
+    // flow=xtls-rprx-vision；丢掉 flow 会导致 Reality 成功后被服务端断开。
+    const proxy = nodeToMihomoProxy(
+      makeNode({
+        flow: 'xtls-rprx-vision',
+        transport: { type: 'xhttp', path: '/', mode: 'auto' },
+      })
+    );
+    expect(proxy.network).toBe('xhttp');
+    expect(proxy.flow).toBe('xtls-rprx-vision');
+  });
+
+  it('should not emit flow for ws transport', () => {
+    const proxy = nodeToMihomoProxy(
+      makeNode({ flow: 'xtls-rprx-vision', transport: { type: 'ws', path: '/ws' } })
+    );
+    expect(proxy.network).toBe('ws');
+    expect(proxy.flow).toBeUndefined();
+  });
+
   it('should convert vmess node with ws transport', async () => {
     const proxy = nodeToMihomoProxy(
       makeNode({

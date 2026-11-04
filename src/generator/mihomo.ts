@@ -87,10 +87,27 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
     case 'vless':
       base.uuid = node.uuid;
       base.udp = true;
-      base.encryption = 'none';
+      // VLESS Encryption（Xray v25+）：链接里的 encryption 可能是
+      // `mlkem768x25519plus.native.0rtt.<key>`，mihomo 支持该字段，必须原样透传；
+      // 旧链接缺省或显式 none 时保持 none。该参数落在 metadata.extra 中，无需迁移模型。
+      {
+        const linkedEncryption = node.metadata?.extra?.encryption?.trim();
+        base.encryption =
+          linkedEncryption && linkedEncryption.toLowerCase() !== 'none'
+            ? linkedEncryption
+            : 'none';
+      }
       if (node.tls) base.tls = true;
-      // XTLS Vision 只对 TCP 系有效；XHTTP/WS/gRPC 与 Vision 互斥，不能把 flow 写进这些传输层
-      if (node.flow && (!node.transport || node.transport.type === 'tcp')) base.flow = node.flow;
+      // XTLS Vision 传统上只对 TCP 生效，但 3X-UI 等面板把 TCP 入站克隆成 XHTTP 时，
+      // 会把 flow=xtls-rprx-vision 一并写进链接，服务端也会校验该字段；
+      // 此时必须原样透传（官方 Xray 客户端同样接受 xhttp + flow）。
+      // WS/gRPC 仍不写 flow，避免把 Vision 带到不支持的传输层。
+      if (
+        node.flow &&
+        (!node.transport || node.transport.type === 'tcp' || node.transport.type === 'xhttp')
+      ) {
+        base.flow = node.flow;
+      }
       // SNI 优先用显式 sni 参数；若缺省但开启了 TLS 且是 ws/xhttp 传输（Host 头一般是真实 SNI 域名），
       // 用 transport.host 兜底——否则 TLS 握手会用 server 的 IP 当 SNI，Cloudflare/CDN 会拒握。
       if (node.sni) base.servername = node.sni;

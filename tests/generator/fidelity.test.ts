@@ -107,4 +107,37 @@ describe('整链保真', () => {
     expect(proxy.servername).toBe('bot.wenbo.de5.net');
     expect(proxy['client-fingerprint']).toBe('chrome');
   });
+
+  it('XHTTP + VLESS Encryption + flow（3X-UI 克隆入站）必须原样透传', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.TESTKEY';
+    const link =
+      'vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:8443?' +
+      `encryption=${enc}&flow=xtls-rprx-vision&fp=chrome&host=&mode=auto&path=%2F` +
+      '&pbk=TEST_PUBLIC_KEY&security=reality&sid=abcd1234&sni=www.apple.com' +
+      '&type=xhttp&x_padding_bytes=100-1000#XHTTP-MLKEM';
+
+    const result = parseVless(link);
+    expect(result.success).toBe(true);
+    const node = result.node!;
+    expect(node.flow).toBe('xtls-rprx-vision');
+    expect(node.metadata?.extra?.['encryption']).toBe(enc);
+
+    const proxy = nodeToMihomoProxy(node);
+    expect(proxy.network).toBe('xhttp');
+    expect(proxy.encryption).toBe(enc);
+    expect(proxy.flow).toBe('xtls-rprx-vision');
+  });
+
+  it('从结构化模型回写链接时保留 VLESS Encryption（无 originalUrl 场景）', () => {
+    const enc = 'mlkem768x25519plus.native.0rtt.TESTKEY';
+    const link =
+      'vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:8443?' +
+      `encryption=${enc}&fp=chrome&host=&mode=auto&path=%2F` +
+      '&pbk=TEST_PUBLIC_KEY&security=reality&sid=abcd1234&sni=www.apple.com&type=xhttp#XHTTP-MLKEM';
+
+    const node = parseVless(link).node!;
+    // 模拟 YAML 源：没有 originalUrl，只能靠结构化字段重建
+    const rebuilt = nodeToUrl({ ...node, metadata: { ...node.metadata!, originalUrl: undefined } });
+    expect(new URL(rebuilt).searchParams.get('encryption')).toBe(enc);
+  });
 });

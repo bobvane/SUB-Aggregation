@@ -1,5 +1,13 @@
 # 更新日志
 
+## v2.43.1 — 2026-11-04
+
+- 修复 VLESS-XHTTP 节点在 Mihomo / Clash Meta / OpenClash / Stash 中测速超时：生成器不再把 `encryption` 硬编码为 `none`，改为原样透传链接中的 VLESS Encryption（`mlkem768x25519plus.native.0rtt.<key>`，Xray v25+ / 3X-UI 加密入站必需）。
+- 修复 XHTTP 传输丢弃 `flow=xtls-rprx-vision` 的问题：3X-UI 把 TCP 入站克隆为 XHTTP 时服务端会校验该字段，缺省会握手后被断开；现在 XHTTP 原样保留 `flow`，WS/gRPC 仍不输出。
+- 从结构化模型回写 VLESS 链接时同样保留 VLESS Encryption，不再退化为 `encryption=none`。
+- 新增 ML-KEM 透传、XHTTP `flow` 保留、WS 不输出 `flow`、加密链接回写的回归测试。
+- 真机验证：`US VLESS-02` / `MY VLESS-02` 在 Mihomo v1.19.33 下测速分别约 671ms / 497ms，同机 TCP 节点亦正常。
+
 ## v2.43.0 — 2026-11-02
 
 - 修复节点列表「锁定」点击后刷新失效：移除已删除的 `refreshNodeCount()` 调用，锁定状态现在会正常保存并在刷新后保留。
