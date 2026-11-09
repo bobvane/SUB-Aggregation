@@ -19,6 +19,7 @@ import { createOperationLog } from './operation-log.service';
 import { KVStorage } from '@/storage/kv';
 import { COUNTRIES, countryFlag, countryDisplayName } from '@/data/country-codes';
 import { getAllNodeHealth, nodeLatencyMs, type NodeHealthLatest } from './node-probe.service';
+import type { FetchFn } from '@/engine/http-client';
 
 /** 协议 → 配置显示名（与前端 displayProtocol 一致） */
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
@@ -260,7 +261,7 @@ const SELECTED_RULES_KEY = 'selected_rules';
 const CUSTOM_RULES_KEY = 'custom_rules';
 const DISABLED_GROUPS_KEY = 'disabled_groups';
 
-export function createConfigService(repos: Repositories, kv: KVStorage): ConfigService {
+export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch: FetchFn = fetch): ConfigService {
   const snapshotCache = createSnapshotCache(kv);
   const opLog = createOperationLog(kv);
 
@@ -397,6 +398,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       return prewarmIpGeo(
         servers,
         { get: (k) => repos.settings.get(k), set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) },
+        geoFetch,
       );
     },
 
@@ -560,7 +562,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       const ipGeoResolver = createIpGeoResolver({
         get: (k) => repos.settings.get(k),
         set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
-      });
+      }, geoFetch);
       await smartRename(copy, ipGeoResolver, new Set(await this.getLockedNodes()));
       return copy;
     },
@@ -585,7 +587,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage): ConfigS
       const ipGeoResolver = createIpGeoResolver({
         get: (k) => repos.settings.get(k),
         set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
-      });
+      }, geoFetch);
       const healthList = await getAllNodeHealth(kv);
       const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));
       await smartRename(nodes, ipGeoResolver, new Set(await this.getLockedNodes()));

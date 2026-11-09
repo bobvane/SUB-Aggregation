@@ -132,4 +132,31 @@ describe('fetchSubscription', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('展开多层 cause（代理 407 场景）', async () => {
+    await expect(fetchSubscription('https://sub.example.com/sub', async () => {
+      throw new TypeError('fetch failed', {
+        cause: new Error('Request was cancelled.', {
+          cause: new Error('Proxy response (407) !== 200 when HTTP Tunneling'),
+        }),
+      });
+    })).rejects.toThrow('fetch failed: Request was cancelled.: Proxy response (407) !== 200 when HTTP Tunneling');
+  });
+
+  it('把单条订阅的代理策略原样传给注入的抓取函数', async () => {
+    const calls: Array<{ choice?: string; redirect?: string }> = [];
+    const body = await fetchSubscription(
+      'https://sub.example.com/sub',
+      async (_purpose, _url, init) => {
+        calls.push({ choice: init?.choice, redirect: init?.redirect as string | undefined });
+        return new Response('vmess://eyJhZGQiOiJleGFtcGxlLmNvbSJ9', { status: 200 });
+      },
+      { choice: 'on' }
+    );
+
+    expect(body).toContain('vmess://');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].choice).toBe('on');
+    expect(calls[0].redirect).toBe('manual');
+  });
 });

@@ -6,7 +6,7 @@
  * v2.32: 增加 Subscription Diff + 节点探测触发
  */
 
-import { Subscription } from '@/models/subscription';
+import { Subscription, SubscriptionProxyChoice } from '@/models/subscription';
 import { Node } from '@/models/node';
 import { Repositories } from '@/storage/kv';
 import { KVStorage } from '@/storage/kv';
@@ -41,11 +41,11 @@ export interface DiffResult {
 export interface SubscriptionService {
   list(): Promise<Subscription[]>;
   getById(id: string): Promise<Subscription | null>;
-  create(name: string, url: string): Promise<Subscription>;
+  create(name: string, url: string, useProxy?: SubscriptionProxyChoice): Promise<Subscription>;
   delete(id: string): Promise<boolean>;
-  updateDetails(id: string, input: { name?: string; url?: string }): Promise<Subscription | null>;
+  updateDetails(id: string, input: { name?: string; url?: string; useProxy?: SubscriptionProxyChoice }): Promise<Subscription | null>;
   setEnabled(id: string, enabled: boolean): Promise<Subscription | null>;
-  update(id: string, fetcher: (url: string) => Promise<string>): Promise<{
+  update(id: string, fetcher: (url: string, options?: { choice?: SubscriptionProxyChoice }) => Promise<string>): Promise<{
     subscription: Subscription;
     nodes: Node[];
     nodeCount: number;
@@ -132,7 +132,7 @@ function mergeNodes(oldNodes: Node[], diff: DiffResult): Node[] {
 
 export function createSubscriptionService(
   repos: Repositories,
-  fetchRawContent: (url: string) => Promise<string>,
+  fetchRawContent: (url: string, options?: { choice?: SubscriptionProxyChoice }) => Promise<string>,
   getRules: () => Promise<{ type: 'include' | 'exclude' | 'replace'; pattern: string; enabled?: boolean }[]>,
   kv: KVStorage
 ): SubscriptionService {
@@ -149,20 +149,21 @@ export function createSubscriptionService(
       return repos.subscriptions.getById(id);
     },
 
-    async create(name: string, url: string) {
-      return repos.subscriptions.create({ name, url });
+    async create(name: string, url: string, useProxy: SubscriptionProxyChoice = 'auto') {
+      return repos.subscriptions.create({ name, url, useProxy });
     },
 
     async delete(id: string) {
       return repos.subscriptions.delete(id);
     },
 
-    async updateDetails(id: string, input: { name?: string; url?: string }) {
+    async updateDetails(id: string, input: { name?: string; url?: string; useProxy?: SubscriptionProxyChoice }) {
       const existing = await repos.subscriptions.getById(id);
       if (!existing) return null;
 
       const patch: Partial<Subscription> = {};
       if (input.name !== undefined) patch.name = input.name;
+      if (input.useProxy !== undefined) patch.useProxy = input.useProxy;
 
       // 订阅地址变化后，旧的失败/重试状态不再对应当前地址，重置为可更新状态。
       // 节点保留到下一次「更新」，避免编辑名称时误删已有缓存。
@@ -193,7 +194,7 @@ export function createSubscriptionService(
       return updated;
     },
 
-    async update(id: string, fetcher: (url: string) => Promise<string>) {
+    async update(id: string, fetcher: (url: string, options?: { choice?: SubscriptionProxyChoice }) => Promise<string>) {
       const existing = await repos.subscriptions.getById(id);
       if (!existing) {
         throw new Error('Subscription not found');
@@ -204,7 +205,7 @@ export function createSubscriptionService(
         //    否则通过 HTTP 抓取订阅
         const raw = isNodeLink(existing.url)
           ? existing.url  // 直接节点链接，本身即内容
-          : await fetcher(existing.url);
+          : await fetcher(existing.url, { choice: existing.useProxy ?? 'auto' });
 
         // 2. 解析 + 标准化
         const parsed = parseSubscriptionContent(raw, id);

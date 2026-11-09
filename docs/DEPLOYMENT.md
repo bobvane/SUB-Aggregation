@@ -4,17 +4,32 @@
 
 - Docker Engine 与 Docker Compose；镜像基于 Node.js 24。
 - 持久化挂载 `/data`，SQLite 默认文件为 `/data/app.db`。
-- 首次启动必须设置 `ADMIN_PASSWORD`。若部署环境需要代理出网，配置 `HTTP_PROXY` / `HTTPS_PROXY`，并设置 `NODE_USE_ENV_PROXY=1`。
+- 首次启动必须设置 `ADMIN_PASSWORD`。出网代理为可选项：优先在面板「设置 → 网络代理」配置；也可以使用 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量并选择「跟随环境变量」模式。不配置代理时全部直连。
 
 仓库根目录的 `docker-compose.yml` 是部署模板。将 `image:` 改为实际镜像地址，创建 `.env`：
 
 ```dotenv
 ADMIN_PASSWORD=替换为强密码
 GITHUB_TOKEN=
+# 仅「跟随环境变量」模式需要；留空即直连
 HTTP_PROXY=
 HTTPS_PROXY=
-NO_PROXY=localhost,127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,.local
+NO_PROXY=localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.local
 ```
+
+### 代理模式与用途
+
+设置页「网络代理」提供三种模式：
+
+| 模式 | 行为 |
+|---|---|
+| 直连 `off` | 所有出网请求直连（默认，没有代理也能运行） |
+| 跟随环境变量 `env` | 读取 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`，固定作用于全部用途 |
+| 手动 `manual` | 使用设置页保存的代理地址，可分别勾选用途 |
+
+用途分为订阅抓取、升级检测/规则目录、地理归属查询。单条订阅还可单独选择「自动 / 强制走代理 / 强制直连」。首选通道失败时可自动回退另一条通道（超时不回退，显式强制时不回退）。
+
+**节点测活与测速始终直连**（裸 TCP/TLS），不经过上述代理。代理密码保存在 `app.db` 的 settings 表中，界面以 `***` 脱敏显示；备份数据库即包含该密码，请妥善保管备份文件。
 
 启动和升级：
 

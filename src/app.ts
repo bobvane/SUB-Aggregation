@@ -11,7 +11,9 @@ import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
 import { createCatalogSyncService } from '@/services/catalog-sync.service';
 import { deduplicateNodes } from '@/parser';
-import { fetchSubscription } from '@/engine/fetcher';
+import { fetchSubscription, type RawFetch } from '@/engine/fetcher';
+import { createHttpClient, type HttpClient } from '@/engine/http-client';
+import type { SubscriptionFetchOptions } from '@/engine/fetcher';
 import HTML from '@/html';
 
 /** 运行时配置：来自 process.env（容器环境变量） */
@@ -20,6 +22,8 @@ export interface Env {
   SESSION_SECRET?: string;
   /** GitHub Personal Access Token（提升 API 限流至 5000/h，用于规则目录同步） */
   GITHUB_TOKEN?: string;
+  /** 代理环境变量（HTTP_PROXY / HTTPS_PROXY / NO_PROXY 等）由 index signature 透传 */
+  [key: string]: string | undefined;
 }
 
 /**
@@ -32,7 +36,7 @@ export interface ExecutionContextLike {
 }
 
 /** 创建带 GitHub Token 的 fetcher（用于 rule-catalog 同步） */
-function createCatalogFetcher(token?: string) {
+function createCatalogFetcher(token: string | undefined, http: HttpClient) {
   return (url: string) => {
     const headers: Record<string, string> = {};
     if (token && url.includes('api.github.com')) {
@@ -40,11 +44,17 @@ function createCatalogFetcher(token?: string) {
       headers['Authorization'] = `Bearer ${token}`;
       headers['User-Agent'] = 'sub-aggregation';
     }
-    return fetch(url, { headers }).then((r) => {
+    return http.fetch('github', url, { headers, timeoutMs: 15_000 }).then((r) => {
       if (!r.ok) throw new Error(`fetch ${url} failed: ${r.status}`);
       return r.text();
     });
   };
+}
+
+type SubscriptionFetcher = (url: string, options?: SubscriptionFetchOptions) => Promise<string>;
+
+function createSubscriptionFetcher(http: HttpClient): SubscriptionFetcher {
+  return (url, options) => fetchSubscription(url, http.fetch as RawFetch, options);
 }
 
 export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
@@ -79,25 +89,29 @@ export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
     return null;
   }, { get: (key) => kv.get(key), put: (key, value) => kv.put(key, value) });
 
+  const http = createHttpClient(repos.settings, { env });
+  const subscriptionFetcher = createSubscriptionFetcher(http);
+
   const subscriptions = createSubscriptionService(
     repos,
-    fetchSubscription,
+    subscriptionFetcher,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
     kv
   );
 
-  const config = createConfigService(repos, kv);
+  const config = createConfigService(repos, kv, http.asFetch('geo'));
 
   // 规则目录同步服务（供 scheduled handler + API 共用）
-  const catalogSync = createCatalogSyncService(repos, createCatalogFetcher(env.GITHUB_TOKEN));
+  const catalogSync = createCatalogSyncService(repos, createCatalogFetcher(env.GITHUB_TOKEN, http));
 
   return createApp({
     repos, auth, subscriptions, config,
     adminPassword: env.ADMIN_PASSWORD ?? '',
-    fetchRaw: fetchSubscription,
+    fetchRaw: subscriptionFetcher,
     parseContent: async () => [],
     catalogSync,
     storage: kv,
+    http,
   });
 }
 
@@ -187,13 +201,16 @@ export async function runScheduled(
   scheduledTime: number,
   kv: KVStorage,
   env: Env,
-  subscriptionFetcher: (url: string) => Promise<string> = fetchSubscription
+  subscriptionFetcher?: SubscriptionFetcher
 ): Promise<void> {
   const repos = createRepositories(kv);
+  const http = createHttpClient(repos.settings, { env });
+  const fetchSub = subscriptionFetcher ?? createSubscriptionFetcher(http);
+  const geoFetch = http.asFetch('geo');
 
   // 每月 1 号规则目录同步
   if (cron === '0 3 1 * *') {
-    const catalogSync = createCatalogSyncService(repos, createCatalogFetcher(env.GITHUB_TOKEN));
+    const catalogSync = createCatalogSyncService(repos, createCatalogFetcher(env.GITHUB_TOKEN, http));
     const result = await catalogSync.sync();
     if (result.status === 'stale') {
       console.warn(`[CatalogSync] 扫描失败: ${result.error}`);
@@ -237,7 +254,7 @@ export async function runScheduled(
       }
 
       // 全量批量重查（batchQuery 内部 15 次/分钟限流兜底，未识别 IP 全在池子里一次查完）
-      const res = await prewarmIpGeo(unlocated, ipGeoCache);
+      const res = await prewarmIpGeo(unlocated, ipGeoCache, geoFetch);
       const after = await filterUnlocatedServers(servers, ipGeoCache);
       await setGeoRetryGate(repos.settings, { ts: Date.now(), count: gate.count + 1, active: true });
       if (after.length === 0) {
@@ -265,7 +282,7 @@ export async function runScheduled(
 
   const subs = createSubscriptionService(
     repos,
-    fetchSubscription,
+    fetchSub,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
     kv
   );
@@ -294,7 +311,7 @@ export async function runScheduled(
     if (!updateIds.has(s.id)) continue;
     updateAttempts++;
     try {
-      const { nodeCount } = await subs.update(s.id, subscriptionFetcher);
+      const { nodeCount } = await subs.update(s.id, fetchSub);
       results.push(`${s.name}:${nodeCount}节点`);
     } catch (e) {
       updateFailures++;
@@ -347,7 +364,7 @@ export async function runScheduled(
     const servers = [...new Set(allNodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
     if (servers.length > 0) {
       const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
-      const geoResult = await prewarmIpGeo(servers, ipGeoCache);
+      const geoResult = await prewarmIpGeo(servers, ipGeoCache, geoFetch);
       const unlocated = await filterUnlocatedServers(servers, ipGeoCache);
       await activateGeoRetry(unlocated.length, repos.settings);
       console.warn(`[SubAutoUpdate] IP地理预填充完成: 总数 ${geoResult.total}，已缓存 ${geoResult.cached}，新查 ${geoResult.queried}，解析成功 ${geoResult.resolved}，失败 ${geoResult.failed}，剩余未识别 ${unlocated.length}`);

@@ -17,6 +17,7 @@ SUB-Aggregation 是自托管订阅聚合服务：抓取并解析订阅、维护�
 - 节点探测细节：[`17_NODE_PROBE.md`](./17_NODE_PROBE.md)
 - 性能审计：[`18_PERF_NODE_HEALTH_MIHOMO_AUDIT.md`](./18_PERF_NODE_HEALTH_MIHOMO_AUDIT.md)
 - 输出同步与 GeoIP：[`20_OUTPUT_SYNC_AND_GEO.md`](./20_OUTPUT_SYNC_AND_GEO.md)
+- 代理使用调研（哪些请求走代理、该不该走）：[`21_PROXY_USAGE_AUDIT.md`](./21_PROXY_USAGE_AUDIT.md)
 
 ## 维护约束
 

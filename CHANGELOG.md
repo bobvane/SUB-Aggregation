@@ -1,5 +1,16 @@
 # 更新日志
 
+## v2.44.0 — 2026-11-09
+
+- 出网代理改为「按用途可选」：新增订阅抓取 / GitHub 升级与规则目录 / 地理查询三类用途，支持直连（默认）、环境变量、手动地址三种模式。
+- 设置页新增「网络代理」卡片：代理模式、地址（密码脱敏）、用途勾选、绕过列表、失败回退和连通性测试；设置保存在项目设置（`app.db`）中。
+- 单条订阅新增 `useProxy`（自动 / 强制代理 / 强制直连），可覆盖全局策略；自动模式支持代理失败回退直连、直连失败回退代理，超时不回退。
+- 订阅抓取、升级检测、规则目录同步、DoH 解析与 ip-api 查询统一走 `src/engine/http-client.ts`；升级检测和目录同步补充 5 秒 / 15 秒超时。
+- 网络错误改为递归展开完整 `cause` 链，代理 407 等深层原因不再只显示「Request was cancelled.」。
+- 节点测活/测速保持裸 TCP/TLS 直连，新增隔离测试防止误接入 HTTP 代理。
+- 移除 `docker-compose.yml` 中硬编码的个人代理默认值 `192.168.2.5:7890` 与 `NODE_USE_ENV_PROXY` 运行前提；不配置代理也能正常直连运行。
+- 修复 `npm run build:server` 在 Windows 下因 banner 引号导致 esbuild 多输入文件报错的问题，改用跨平台 `scripts/build-server.js`。
+
 ## v2.43.1 — 2026-11-04
 
 - 修复 VLESS-XHTTP 节点在 Mihomo / Clash Meta / OpenClash / Stash 中测速超时：生成器不再把 `encryption` 硬编码为 `none`，改为原样透传链接中的 VLESS Encryption（`mlkem768x25519plus.native.0rtt.<key>`，Xray v25+ / 3X-UI 加密入站必需）。

@@ -23,6 +23,22 @@ import { prewarmIpGeo, emptyGeoRequestStats, type PrewarmResult } from '@/servic
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
 import { RuleCatalogMeta } from '@/models/rule-catalog';
+import { createHttpClient, resetHttpAgents, type HttpClient } from '@/engine/http-client';
+import {
+  PROXY_PURPOSES,
+  PROXY_SETTING_KEYS,
+  isProxyChoice,
+  isProxyMode,
+  isValidProxyUrl,
+  maskProxyUrl,
+  mergeMaskedProxyUrl,
+  parseProxyScope,
+  readEffectiveProxyConfig,
+  serializeProxyScope,
+  splitList,
+  type ProxyPurpose,
+} from '@/engine/proxy-config';
+import type { SubscriptionProxyChoice } from '@/models/subscription';
 
 /**
  * 请求是否走 https。
@@ -56,14 +72,16 @@ export interface AppDeps {
   subscriptions: SubscriptionService;
   config: ConfigService;
   adminPassword: string;
-  /** 订阅内容抓取函数（含 SSRF 防护） */
-  fetchRaw: (url: string) => Promise<string>;
+  /** 订阅内容抓取函数（含 SSRF 防护）：options.choice 来自单条订阅的代理策略 */
+  fetchRaw: (url: string, options?: { choice?: SubscriptionProxyChoice }) => Promise<string>;
   /** 节点解析管线（parser 完成后注入） */
   parseContent: (content: string, source: string) => Promise<unknown[]>;
   /** 规则目录同步服务（可选注入，默认内部构造） */
   catalogSync?: CatalogSyncService;
   /** KV 存储（可选）：提供时可启用跨实例 KV 限流（生产建议注入） */
   storage?: KVStorage;
+  /** 按用途区分的出网客户端（可选注入；默认按 repos.settings 构造） */
+  http?: HttpClient;
 }
 
 export function createApp(deps: AppDeps): Hono {
@@ -73,12 +91,14 @@ export function createApp(deps: AppDeps): Hono {
   // 曾用 `repos.settings as unknown as KVStorage` 强转 —— 但 KvSettingsRepository 只有 get/set，
   // 没有 list/put：导致 GET /api/nodes/health 抛 500，且探测引擎在订阅更新后静默失败（异常被 waitUntil 吞掉），一条健康数据都写不进去。
   const storage: KVStorage = deps.storage ?? repos.kv;
+  // v2.44.0：按用途区分的出网客户端（订阅 / GitHub / 地理查询），节点测活不经过它
+  const http: HttpClient = deps.http ?? createHttpClient(repos.settings);
   // v2.32: 配置快照缓存(用于订阅生效)
   // 配置快照的失效已下沉到 subscription.service / config.service（v2.38.6），路由层不再直接持有缓存实例。
-  // 规则目录同步服务：默认用全局 fetch 拉 GitHub；测试可注入 mock
+  // 规则目录同步服务：默认用 http-client 拉 GitHub；测试可注入 mock
   const catalogSync: CatalogSyncService =
     deps.catalogSync ??
-    createCatalogSyncService(repos, (url) => fetch(url).then((r) => {
+    createCatalogSyncService(repos, (url) => http.fetch('github', url, { timeoutMs: 15_000 }).then((r) => {
       if (!r.ok) throw new Error(`fetch ${url} failed: ${r.status}`);
       return r.text();
     }));
@@ -114,11 +134,12 @@ export function createApp(deps: AppDeps): Hono {
     const FEED = 'https://github.com/bobvane/SUB-Aggregation/releases.atom';
     let payload: unknown;
     try {
-      const res = await fetch(FEED, {
+      const res = await http.fetch('github', FEED, {
         headers: {
           'User-Agent': 'sub-aggregation',
           'Cache-Control': 'no-cache',
         },
+        timeoutMs: 5_000,
       });
       const entry = res.ok ? ((await res.text()).split('<entry>')[1] ?? '') : '';
       const tag = entry.match(/<title>([^<]+)<\/title>/)?.[1] ?? '';
@@ -294,21 +315,29 @@ export function createApp(deps: AppDeps): Hono {
         retryCount: s.retryCount ?? 0,
         nextRetryAt: s.nextRetryAt ?? null,
         lastErrorAt: s.lastErrorAt ?? null,
+        useProxy: s.useProxy ?? 'auto',
       })),
     });
   });
 
   // 创建订阅
   app.post('/api/subscriptions', requireAuth(auth), async (c) => {
-    const body = await readBody<{ name?: string; url?: string }>(c);
+    const body = await readBody<{ name?: string; url?: string; useProxy?: unknown }>(c);
     if (!body.name || typeof body.name !== 'string' || body.name.trim().length === 0) {
       throw ERRORS.INVALID_PARAMETER('name is required');
     }
     if (!body.url || typeof body.url !== 'string') {
       throw ERRORS.INVALID_PARAMETER('url is required');
     }
+    if (body.useProxy !== undefined && !isProxyChoice(body.useProxy)) {
+      throw ERRORS.INVALID_PARAMETER('useProxy must be auto, on or off');
+    }
 
-    const sub = await subscriptions.create(body.name.trim(), body.url.trim());
+    const sub = await subscriptions.create(
+      body.name.trim(),
+      body.url.trim(),
+      (body.useProxy as SubscriptionProxyChoice | undefined) ?? 'auto'
+    );
     // v2.35: 新增订阅完成后同样触发全量测活（§8 触发点 3/4），不阻塞响应
     c.executionCtx?.waitUntil(
       (async () => {
@@ -321,7 +350,7 @@ export function createApp(deps: AppDeps): Hono {
         }
       })()
     );
-    return c.json({ success: true, data: { id: sub.id } }, 201);
+    return c.json({ success: true, data: { id: sub.id, useProxy: sub.useProxy ?? 'auto' } }, 201);
   });
 
   // 获取单个订阅
@@ -329,18 +358,19 @@ export function createApp(deps: AppDeps): Hono {
     const id = c.req.param('id');
     const sub = await subscriptions.getById(id);
     if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
-    return c.json({ success: true, data: { id: sub.id, name: sub.name, url: sub.url } });
+    return c.json({ success: true, data: { id: sub.id, name: sub.name, url: sub.url, useProxy: sub.useProxy ?? 'auto' } });
   });
 
-  // 编辑订阅名称 / 地址
+  // 编辑订阅名称 / 地址 / 代理策略
   app.patch('/api/subscriptions/:id', async (c) => {
     const id = c.req.param('id') as string;
-    const body = await readBody<{ name?: unknown; url?: unknown }>(c);
+    const body = await readBody<{ name?: unknown; url?: unknown; useProxy?: unknown }>(c);
     const hasName = body.name !== undefined;
     const hasUrl = body.url !== undefined;
+    const hasProxy = body.useProxy !== undefined;
 
-    if (!hasName && !hasUrl) {
-      throw ERRORS.INVALID_PARAMETER('name or url is required');
+    if (!hasName && !hasUrl && !hasProxy) {
+      throw ERRORS.INVALID_PARAMETER('name, url or useProxy is required');
     }
     if (hasName && (typeof body.name !== 'string' || body.name.trim().length === 0)) {
       throw ERRORS.INVALID_PARAMETER('name must be a non-empty string');
@@ -348,10 +378,14 @@ export function createApp(deps: AppDeps): Hono {
     if (hasUrl && (typeof body.url !== 'string' || body.url.trim().length === 0)) {
       throw ERRORS.INVALID_PARAMETER('url must be a non-empty string');
     }
+    if (hasProxy && !isProxyChoice(body.useProxy)) {
+      throw ERRORS.INVALID_PARAMETER('useProxy must be auto, on or off');
+    }
 
     const sub = await subscriptions.updateDetails(id, {
       ...(hasName ? { name: (body.name as string).trim() } : {}),
       ...(hasUrl ? { url: (body.url as string).trim() } : {}),
+      ...(hasProxy ? { useProxy: body.useProxy as SubscriptionProxyChoice } : {}),
     });
     if (!sub) throw ERRORS.SUBSCRIPTION_NOT_FOUND();
 
@@ -369,6 +403,7 @@ export function createApp(deps: AppDeps): Hono {
         retryCount: sub.retryCount ?? 0,
         nextRetryAt: sub.nextRetryAt ?? null,
         lastErrorAt: sub.lastErrorAt ?? null,
+        useProxy: sub.useProxy ?? 'auto',
       },
     });
   });
@@ -425,7 +460,7 @@ export function createApp(deps: AppDeps): Hono {
             if (servers.length > 0) {
               const geoService = await import('@/services/ip-geo.service');
               const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
-              const geoResult = await geoService.prewarmIpGeo(servers, ipGeoCache);
+              const geoResult = await geoService.prewarmIpGeo(servers, ipGeoCache, http.asFetch('geo'));
               // v2.25.0：预热后若有未识别 IP 则激活 GeoRetry 门闩，唤醒每分钟 cron 继续重查
               const unlocated = await geoService.filterUnlocatedServers(servers, ipGeoCache);
               await geoService.activateGeoRetry(unlocated.length, repos.settings);
@@ -536,7 +571,7 @@ export function createApp(deps: AppDeps): Hono {
     };
     try {
       if (targets.length > 0) {
-        result = await prewarmIpGeo(targets, ipGeoCache);
+        result = await prewarmIpGeo(targets, ipGeoCache, http.asFetch('geo'));
       }
     } finally {
       // 释放锁：settings 无 delete，用一个过期时间戳(旧)覆盖，锁检查依 TTL 判定为可用
@@ -922,18 +957,35 @@ export function createApp(deps: AppDeps): Hono {
     const appName = await repos.settings.get('app_name');
     const intervalRaw = await repos.settings.get('sub_update_interval');
     const dropLatRaw = await repos.settings.get('node_drop_latency_ms');
+    const proxy = await readEffectiveProxyConfig(repos.settings);
     return c.json({
       success: true,
       data: {
         app_name: appName ?? 'SUB-Aggregation',
         sub_update_interval: intervalRaw !== null ? parseInt(intervalRaw, 10) : 24,
         node_drop_latency_ms: dropLatRaw !== null ? parseInt(dropLatRaw, 10) : 2000,
+        proxy_mode: proxy.mode,
+        proxy_url: maskProxyUrl(proxy.proxyUrl) ?? '',
+        proxy_scope: proxy.scope,
+        proxy_bypass: proxy.bypass.join(','),
+        proxy_fallback: proxy.fallback,
+        proxy_env_detected: !!(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY
+          || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy),
       },
     });
   });
 
   app.put('/api/settings', requireAuth(auth), async (c) => {
-    const body = await readBody<{ app_name?: string; sub_update_interval?: number; node_drop_latency_ms?: number }>(c);
+    const body = await readBody<{
+      app_name?: string;
+      sub_update_interval?: number;
+      node_drop_latency_ms?: number;
+      proxy_mode?: unknown;
+      proxy_url?: unknown;
+      proxy_scope?: unknown;
+      proxy_bypass?: unknown;
+      proxy_fallback?: unknown;
+    }>(c);
     if (body.app_name) {
       await repos.settings.set('app_name', body.app_name);
     }
@@ -951,7 +1003,72 @@ export function createApp(deps: AppDeps): Hono {
       }
       await repos.settings.set('node_drop_latency_ms', String(v));
     }
+
+    // ============ 网络代理（v2.44.0） ============
+    if (body.proxy_mode !== undefined) {
+      if (!isProxyMode(body.proxy_mode)) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_mode 须为 off / env / manual' } }, 400);
+      }
+      await repos.settings.set(PROXY_SETTING_KEYS.mode, body.proxy_mode);
+    }
+
+    if (body.proxy_url !== undefined) {
+      if (typeof body.proxy_url !== 'string') {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_url 必须是字符串' } }, 400);
+      }
+      const existing = await repos.settings.get(PROXY_SETTING_KEYS.url);
+      let merged: string;
+      try {
+        merged = mergeMaskedProxyUrl(existing, body.proxy_url);
+      } catch (e) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: (e as Error).message } }, 400);
+      }
+      if (merged && !isValidProxyUrl(merged)) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '代理地址须为 http:// 或 https:// 开头的合法 URL' } }, 400);
+      }
+      await repos.settings.set(PROXY_SETTING_KEYS.url, merged);
+    }
+
+    if (body.proxy_scope !== undefined) {
+      let scope: ProxyPurpose[] | null = null;
+      if (Array.isArray(body.proxy_scope)) {
+        if (body.proxy_scope.some((item) => typeof item !== 'string' || !PROXY_PURPOSES.includes(item as ProxyPurpose))) {
+          return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_scope 只能包含 subscription / github / geo' } }, 400);
+        }
+        scope = [...new Set(body.proxy_scope as ProxyPurpose[])];
+      } else if (typeof body.proxy_scope === 'string') {
+        scope = parseProxyScope(body.proxy_scope) ?? [];
+      } else {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_scope 必须是数组或逗号分隔字符串' } }, 400);
+      }
+      await repos.settings.set(PROXY_SETTING_KEYS.scope, serializeProxyScope(scope));
+    }
+
+    if (body.proxy_bypass !== undefined) {
+      if (typeof body.proxy_bypass !== 'string' || body.proxy_bypass.length > 2048) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_bypass 必须是长度不超过 2048 的字符串' } }, 400);
+      }
+      await repos.settings.set(PROXY_SETTING_KEYS.bypass, splitList(body.proxy_bypass).join(','));
+    }
+
+    if (body.proxy_fallback !== undefined) {
+      if (typeof body.proxy_fallback !== 'boolean') {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_fallback 必须是布尔值' } }, 400);
+      }
+      await repos.settings.set(PROXY_SETTING_KEYS.fallback, body.proxy_fallback ? '1' : '0');
+    }
+
+    if (body.proxy_mode !== undefined || body.proxy_url !== undefined) {
+      resetHttpAgents();
+    }
+
     return c.json({ success: true });
+  });
+
+  // 测试代理连通性：固定目标，禁止任意 URL（避免 SSRF）
+  app.post('/api/proxy/test', requireAuth(auth), sensitiveOpRateLimit, async (c) => {
+    const result = await http.testProxy();
+    return c.json({ success: true, data: result });
   });
 
 

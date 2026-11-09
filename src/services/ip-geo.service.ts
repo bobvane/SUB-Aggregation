@@ -1,4 +1,4 @@
-/**
+﻿/**
  * IP 地理定位服务（支持域名解析）
  *
  * 用途：节点不具备国家/地区识别能力时，用其 server 查 IP 归属地 → 地区（emoji中文名）或 null。
@@ -10,6 +10,7 @@
  */
 
 import { countryDisplayName } from '@/data/country-codes';
+import type { FetchFn } from '@/engine/http-client';
 
 const IP_GEO_KEY_PREFIX = 'ip_geo:';
 const IP_API_URL = 'http://ip-api.com/batch';
@@ -53,7 +54,7 @@ function isPureIP(server: string): boolean {
  */
 export async function resolveDomainToIP(
   server: string,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: FetchFn = fetch,
   opts?: { cache?: IpGeoCache; stats?: GeoRequestStats }
 ): Promise<string | null> {
   if (!server) return null;
@@ -134,7 +135,7 @@ export interface IpGeoCache {
 export async function batchQuery(
   ips: string[],
   cache: IpGeoCache,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: FetchFn = fetch,
   stats?: GeoRequestStats
 ): Promise<Map<string, string | null>> {
   if (!ips.length) return new Map();
@@ -250,7 +251,7 @@ export async function batchQuery(
 /** 单个 IP 查询（备用） */
 export async function singleQuery(
   ip: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: FetchFn = fetch
 ): Promise<string | null> {
   try {
     const res = await fetchFn(`${IP_API_JSON_URL}${encodeURIComponent(ip)}`, {
@@ -323,7 +324,7 @@ export interface PrewarmResult {
 export async function prewarmIpGeo(
   servers: string[],
   cache: IpGeoCache,
-  fetchFn: typeof fetch = fetch
+  fetchFn: FetchFn = fetch
 ): Promise<PrewarmResult> {
   const unique = [...new Set(servers.filter(Boolean))];
   const result: PrewarmResult = {
@@ -544,7 +545,7 @@ export async function deactivateGeoRetry(
 /** 创建纯 IP 地理定位 resolver */
 export function createIpGeoResolver(
   cache: IpGeoCache,
-  fetchFn: typeof fetch = fetch
+  fetchFn: FetchFn = fetch
 ): (server: string) => Promise<string | null> {
   // 用于批量查询的内存缓存，过期清理（LRU 风格，简单实现）
   const batchCache = new Map<string, { country: string | null; ts: number }>();
@@ -596,3 +597,4 @@ export function createIpGeoResolver(
     return country;
   };
 }
+

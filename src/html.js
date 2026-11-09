@@ -771,6 +771,49 @@ th, td { font-size: 13px; }
       <button class="btn btn-primary mt-12" onclick="saveSettings()">💾 保存</button>
     </div>
     <div class="card" style="margin-top:16px">
+      <h3 style="margin:0 0 12px">🌐 网络代理</h3>
+      <div class="form-group">
+        <label>代理模式</label>
+        <select id="settingProxyMode" onchange="onProxyModeChange()">
+          <option value="off">直连（不使用代理）</option>
+          <option value="env">跟随环境变量（HTTP_PROXY / HTTPS_PROXY / NO_PROXY）</option>
+          <option value="manual">手动指定代理地址</option>
+        </select>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">节点测活与测速始终直连（裸 TCP/TLS），不经过这里的代理。</div>
+      </div>
+      <div class="form-group" id="proxyUrlGroup">
+        <label>代理地址</label>
+        <input id="settingProxyUrl" placeholder="http://127.0.0.1:7890" autocomplete="off">
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">支持 http:// 与 https://，可带用户名密码；保存后界面以 *** 显示密码。</div>
+      </div>
+      <div class="form-group" id="proxyScopeGroup">
+        <label>使用代理的用途</label>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:8px;font-size:14px">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeSubscription" value="subscription"> 订阅抓取</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeGithub" value="github"> 升级检测 / 规则目录</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeGeo" value="geo"> 地理归属查询</label>
+        </div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px" id="proxyScopeHint">仅手动模式可配置：环境变量模式固定作用于以上全部用途。</div>
+      </div>
+      <div class="form-group">
+        <label>失败回退</label>
+        <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:6px;font-size:14px">
+          <input type="checkbox" id="settingProxyFallback"> 首选通道失败时自动尝试另一条通道（超时不回退）
+        </label>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">仅对「自动」策略生效；单条订阅显式选择「强制走代理 / 强制直连」时不会回退。</div>
+      </div>
+      <div class="form-group">
+        <label>绕过代理的地址</label>
+        <input id="settingProxyBypass" placeholder="localhost,127.0.0.1,192.168.0.0/16">
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">逗号分隔，支持主机名、域名后缀、IPv4 CIDR；默认已包含本机与内网段。</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" onclick="saveSettings()">💾 保存</button>
+        <button class="btn" id="proxyTestBtn" onclick="testProxy()">🔌 测试代理</button>
+        <span id="proxyTestResult" style="font-size:13px;color:var(--text2)"></span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
       <h3 style="margin:0 0 12px">👤 账号安全</h3>
       <div class="form-group">
         <label>当前用户名：<b id="currentUsername" style="color:var(--accent)">-</b></label>
@@ -856,6 +899,14 @@ th, td { font-size: 13px; }
     <div class="modal-body">
       <div class="form-group"><label>名称</label><input id="subName" placeholder="例如: My Airport"></div>
       <div class="form-group"><label>订阅 URL</label><input id="subUrl" placeholder="https://example.com/sub"></div>
+      <div class="form-group">
+        <label>代理策略</label>
+        <select id="subUseProxy">
+          <option value="auto">自动（跟随全局网络代理设置）</option>
+          <option value="on">强制走代理</option>
+          <option value="off">强制直连</option>
+        </select>
+      </div>
       <button class="btn btn-primary" onclick="addSub()">➕ 添加</button>
     </div>
   </div>
@@ -868,6 +919,14 @@ th, td { font-size: 13px; }
     <div class="modal-body">
       <div class="form-group"><label>名称</label><input id="editSubName" placeholder="例如: My Airport"></div>
       <div class="form-group"><label>订阅 URL</label><input id="editSubUrl" placeholder="https://example.com/sub"></div>
+      <div class="form-group">
+        <label>代理策略</label>
+        <select id="editSubUseProxy">
+          <option value="auto">自动（跟随全局网络代理设置）</option>
+          <option value="on">强制走代理</option>
+          <option value="off">强制直连</option>
+        </select>
+      </div>
       <p style="margin:0 0 14px;font-size:13px;color:var(--text2)">保存后请点击「更新」重新拉取该地址的节点。</p>
       <button class="btn btn-primary" id="editSubSaveBtn" onclick="saveEditSub()">💾 保存</button>
     </div>
@@ -1841,9 +1900,14 @@ function renderSubTable() {
         ? \`下次重试：\${new Date(s.nextRetryAt).toLocaleString()}\`
         : (retryCount >= 4 ? '自动重试已暂停，可手动重试' : '将在下次常规同步时重试');
     const errorReason = s.errorMessage || '未记录具体错误，请点击「立即重试」获取最新错误';
+    const proxyBadge = s.useProxy === 'on'
+      ? ' <span style="font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:1px 6px;white-space:nowrap" title="该订阅强制走代理">🌐 代理</span>'
+      : s.useProxy === 'off'
+        ? ' <span style="font-size:11px;color:var(--text2);border:1px solid var(--border);border-radius:999px;padding:1px 6px;white-space:nowrap" title="该订阅强制直连">⛔ 直连</span>'
+        : '';
     return \`
     <tr>
-      <td><strong>\${escHtml(s.name)}</strong></td>
+      <td><strong>\${escHtml(s.name)}</strong>\${proxyBadge}</td>
       <td style="font-size:14px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${escHtml(s.url || '')}">
         \${s.url ? \`<a href="\${escHtml(s.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">\${escHtml(s.url)}</a>\` : '-'}
       </td>
@@ -1879,11 +1943,13 @@ function showAddSub() { showModal('addSubModal'); }
 async function addSub() {
   const name = document.getElementById('subName').value.trim();
   const url = document.getElementById('subUrl').value.trim();
+  const useProxy = document.getElementById('subUseProxy')?.value || 'auto';
   if (!name || !url) { toast('请填写名称和 URL', 'error'); return; }
   try {
-    const data = await api('/subscriptions', { method: 'POST', body: JSON.stringify({ name, url }) });
+    const data = await api('/subscriptions', { method: 'POST', body: JSON.stringify({ name, url, useProxy }) });
     document.getElementById('subName').value = '';
     document.getElementById('subUrl').value = '';
+    document.getElementById('subUseProxy').value = 'auto';
     closeModal('addSubModal');
 
     // 新增后如果仍停留在「更新失败」等筛选，订阅会被隐藏，看起来像添加失败。
@@ -1904,6 +1970,7 @@ async function addSub() {
       status: 'active',
       nodeCount: 0,
       updatedAt: Date.now(),
+      useProxy: data.data.useProxy || useProxy,
     });
     renderSubTable();
     toast(hadFilter ? '添加成功，已清除筛选显示新订阅' : '添加成功');
@@ -1920,6 +1987,7 @@ function showEditSub(id) {
   editingSubId = id;
   document.getElementById('editSubName').value = sub.name || '';
   document.getElementById('editSubUrl').value = sub.url || '';
+  document.getElementById('editSubUseProxy').value = sub.useProxy || 'auto';
   showModal('editSubModal');
   setTimeout(() => document.getElementById('editSubName')?.focus(), 50);
 }
@@ -1929,10 +1997,14 @@ async function saveEditSub() {
   const subId = editingSubId;
   const name = document.getElementById('editSubName').value.trim();
   const url = document.getElementById('editSubUrl').value.trim();
+  const useProxy = document.getElementById('editSubUseProxy')?.value || 'auto';
   if (!name || !url) { toast('请填写名称和 URL', 'error'); return; }
 
-  const previousUrl = state.subscriptions.find((item) => item.id === subId)?.url;
+  const existing = state.subscriptions.find((item) => item.id === subId);
+  const previousUrl = existing?.url;
+  const previousProxy = existing?.useProxy || 'auto';
   const urlChanged = previousUrl !== undefined && previousUrl !== url;
+  const proxyChanged = previousProxy !== useProxy;
 
   const btn = document.getElementById('editSubSaveBtn');
   const originalText = btn ? btn.textContent : '';
@@ -1940,7 +2012,7 @@ async function saveEditSub() {
   try {
     const res = await api('/subscriptions/' + subId, {
       method: 'PATCH',
-      body: JSON.stringify({ name, url }),
+      body: JSON.stringify({ name, url, useProxy }),
     });
     const sub = state.subscriptions.find((item) => item.id === subId);
     if (sub && res.data) Object.assign(sub, res.data);
@@ -1951,7 +2023,7 @@ async function saveEditSub() {
     setTimeout(loadSubscriptions, 300);
 
     if (!urlChanged) {
-      toast('保存成功');
+      toast(proxyChanged ? '保存成功，新代理策略将在下次更新时生效' : '保存成功');
       return;
     }
 
@@ -2693,12 +2765,74 @@ function onOutputFormatChange() {
 async function loadSettings() {
   try {
     const data = await api('/settings');
-    document.getElementById('settingAppName').value = data.data?.app_name || '';
-    document.getElementById('settingSubUpdateInterval').value = data.data?.sub_update_interval ?? 24;
-    document.getElementById('settingNodeDropLatency').value = data.data?.node_drop_latency_ms ?? 2000;
+    const d = data.data || {};
+    document.getElementById('settingAppName').value = d.app_name || '';
+    document.getElementById('settingSubUpdateInterval').value = d.sub_update_interval ?? 24;
+    document.getElementById('settingNodeDropLatency').value = d.node_drop_latency_ms ?? 2000;
+
+    document.getElementById('settingProxyMode').value = d.proxy_mode || 'off';
+    document.getElementById('settingProxyUrl').value = d.proxy_url || '';
+    document.getElementById('settingProxyBypass').value = d.proxy_bypass || '';
+    document.getElementById('settingProxyFallback').checked = d.proxy_fallback !== false;
+    const scopeRaw = d.proxy_scope;
+    const scope = Array.isArray(scopeRaw)
+      ? scopeRaw
+      : String(scopeRaw || '').split(',').map((item) => item.trim()).filter(Boolean);
+    const effectiveScope = scope.length > 0 ? scope : ['subscription', 'github', 'geo'];
+    document.getElementById('proxyScopeSubscription').checked = effectiveScope.includes('subscription');
+    document.getElementById('proxyScopeGithub').checked = effectiveScope.includes('github');
+    document.getElementById('proxyScopeGeo').checked = effectiveScope.includes('geo');
+    onProxyModeChange();
   } catch {}
   loadCatalogStatus();
   searchCatalog(); // 默认显示前 100 个分类
+}
+
+/** 代理模式联动：仅手动模式可编辑地址与用途 */
+function onProxyModeChange() {
+  const mode = document.getElementById('settingProxyMode')?.value || 'off';
+  const manual = mode === 'manual';
+  const urlInput = document.getElementById('settingProxyUrl');
+  const urlGroup = document.getElementById('proxyUrlGroup');
+  urlInput.disabled = !manual;
+  urlGroup.style.opacity = manual ? '1' : '.55';
+  for (const id of ['proxyScopeSubscription', 'proxyScopeGithub', 'proxyScopeGeo']) {
+    document.getElementById(id).disabled = !manual;
+  }
+  const group = document.getElementById('proxyScopeGroup');
+  group.style.opacity = manual ? '1' : '.55';
+  document.getElementById('proxyScopeHint').textContent = manual
+    ? '勾选需要走代理的用途；未勾选的用途始终直连。'
+    : mode === 'env'
+      ? '环境变量模式固定作用于以上全部用途（由 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 决定）。'
+      : '直连模式下不会使用代理，本项不生效。';
+}
+
+async function testProxy() {
+  const btn = document.getElementById('proxyTestBtn');
+  const out = document.getElementById('proxyTestResult');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ 测试中...';
+  out.textContent = '';
+  out.style.color = 'var(--text2)';
+  try {
+    const res = await api('/proxy/test', { method: 'POST', timeout: 20000 });
+    const d = res.data || {};
+    if (d.ok) {
+      out.style.color = 'var(--green)';
+      out.textContent = \`✅ 代理可用（HTTP \${d.status ?? '-'}，\${d.ms} ms）\`;
+    } else {
+      out.style.color = 'var(--red)';
+      out.textContent = \`❌ 代理不可用：\${d.error || '未知错误'}\`;
+    }
+  } catch (e) {
+    out.style.color = 'var(--red)';
+    out.textContent = '❌ 测试失败：' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 
@@ -2710,8 +2844,32 @@ async function saveSettings() {
   const dropRaw = document.getElementById('settingNodeDropLatency').value.trim();
   const dropLat = dropRaw === '' ? 2000 : parseInt(dropRaw, 10);
   if (Number.isNaN(dropLat) || dropLat < 100 || dropLat > 2000) { toast('慢节点抛弃阈值须为 100-2000 的整数（毫秒）', 'error'); return; }
+
+  const proxyMode = document.getElementById('settingProxyMode').value;
+  const proxyUrl = document.getElementById('settingProxyUrl').value.trim();
+  if (proxyMode === 'manual' && !proxyUrl) { toast('手动代理模式需要填写代理地址', 'error'); return; }
+  const proxyScope = ['subscription', 'github', 'geo'].filter((purpose) => {
+    const map = { subscription: 'proxyScopeSubscription', github: 'proxyScopeGithub', geo: 'proxyScopeGeo' };
+    return document.getElementById(map[purpose]).checked;
+  });
+  if (proxyMode === 'manual' && proxyScope.length === 0) { toast('手动代理模式请至少勾选一个使用代理的用途', 'error'); return; }
+  const proxyBypass = document.getElementById('settingProxyBypass').value.trim();
+  const proxyFallback = document.getElementById('settingProxyFallback').checked;
+
   try {
-    await api('/settings', { method: 'PUT', body: JSON.stringify({ app_name: appName, sub_update_interval: subInterval, node_drop_latency_ms: dropLat }) });
+    await api('/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        app_name: appName,
+        sub_update_interval: subInterval,
+        node_drop_latency_ms: dropLat,
+        proxy_mode: proxyMode,
+        proxy_url: proxyUrl,
+        proxy_scope: proxyScope,
+        proxy_bypass: proxyBypass,
+        proxy_fallback: proxyFallback,
+      }),
+    });
     toast('设置已保存');
     // 立即刷新页面标题
     document.getElementById('sidebarLogo').textContent = appName;

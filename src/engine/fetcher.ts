@@ -4,10 +4,25 @@
  * 11_SECURITY.md §4-5：SSRF 防护 + Timeout + Size Limit + Redirect 限制
  */
 
+import { describeFetchError } from './net-errors';
+import type { ProxyChoice, ProxyPurpose } from './proxy-config';
+
 const ALLOWED_PROTOCOLS = ['https:', 'http:'];
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
 const FETCH_TIMEOUT_MS = 10_000; // 10 秒
 const MAX_REDIRECTS = 3;
+
+/** 底层抓取函数：生产由 http-client 注入（按用途决定代理），测试可传 mock */
+export type RawFetch = (
+  purpose: ProxyPurpose,
+  url: string,
+  init?: RequestInit & { timeoutMs?: number; choice?: ProxyChoice }
+) => Promise<Response>;
+
+export interface SubscriptionFetchOptions {
+  /** auto（默认）：跟随全局策略；on：强制代理；off：强制直连 */
+  choice?: ProxyChoice;
+}
 
 /**
  * 私有/保留 IP 判断（基于数值 CIDR，覆盖全部保留网段）
@@ -156,26 +171,21 @@ async function fetchWithTimeout(input: string | URL | Request, init: RequestInit
 }
 
 /**
- * 网络错误往往只有笼统的 “fetch failed”，把 Node/undici 的 cause（DNS、连接被拒等）
- * 一并带给管理界面，NAS 用户才能判断是域名解析、出站网络还是远端拦截。
+ * 兜底抓取：没有注入 http-client 时（测试/脚本）使用全局 fetch + 本地超时。
+ * 生产路径由 createHttpClient('subscription') 注入，按设置决定直连/代理。
  */
-function describeFetchError(err: unknown): Error {
-  if (!(err instanceof Error)) return new Error(String(err));
-  if (err.name === 'AbortError') return new Error('Fetch timeout');
-
-  const cause = (err as Error & { cause?: unknown }).cause;
-  const causeMessage = cause instanceof Error
-    ? cause.message
-    : typeof cause === 'string' ? cause : '';
-  if (!causeMessage || err.message.includes(causeMessage)) return err;
-  return new Error(`${err.message}: ${causeMessage}`);
-}
+const defaultRawFetch: RawFetch = (_purpose, input, init) =>
+  fetchWithTimeout(input, (init ?? {}) as RequestInit);
 
 /**
  * 抓取订阅内容
  * 校验：URL 合法 → 超时 → 重定向限制 → 响应大小限制
  */
-export async function fetchSubscription(url: string): Promise<string> {
+export async function fetchSubscription(
+  url: string,
+  rawFetch: RawFetch = defaultRawFetch,
+  options: SubscriptionFetchOptions = {}
+): Promise<string> {
   const validation = validateUrl(url);
   if (!validation.ok) {
     throw new Error(`SSRF check failed: ${validation.reason}`);
@@ -185,12 +195,14 @@ export async function fetchSubscription(url: string): Promise<string> {
 
   try {
     for (let i = 0; i <= MAX_REDIRECTS; i++) {
-      const res = await fetchWithTimeout(currentUrl, {
+      const res = await rawFetch('subscription', currentUrl, {
         headers: {
           'User-Agent': 'SUB-Aggregation/2.0',
           Accept: 'text/plain,text/html,application/json,*/*',
         },
         redirect: 'manual', // 手动处理重定向以计数
+        timeoutMs: FETCH_TIMEOUT_MS,
+        choice: options.choice,
       });
 
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {

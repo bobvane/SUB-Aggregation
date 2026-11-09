@@ -1,6 +1,6 @@
 {
   "name": "sub-aggregation",
-  "version": "2.43.1",
+  "version": "2.44.0",
   "description": "SUB-Aggregation V2 - 订阅聚合与配置生成平台（NAS / Docker 部署）",
   "type": "module",
   "private": true,
@@ -8,7 +8,7 @@
     "dev": "npm run build:server && node dist/server.mjs",
     "start": "node dist/server.mjs",
     "build:html": "node scripts/inline-html.js",
-    "build:server": "npm run build:html && esbuild src/server/main.ts --bundle --platform=node --format=esm --target=node24 --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);' --outfile=dist/server.mjs",
+    "build:server": "npm run build:html && node scripts/build-server.js",
     "build": "npm run build:html && tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -19,6 +19,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.8",
+    "undici": "^7.30.2",
     "yaml": "^2"
   },
   "devDependencies": {
