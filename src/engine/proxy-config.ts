@@ -7,11 +7,13 @@
  *   - manual ：使用设置页保存的 proxy_url
  *
  * 用途（purpose）：
- *   - subscription：订阅抓取
+ *   - subscription：订阅抓取（v2.44.2 起**默认不代理**，保留单条订阅强制代理的逃生口）
  *   - github      ：升级检测 + 规则目录同步
  *   - geo         ：DoH 域名解析 + ip-api 归属查询
  *
- * 节点测活/测速永远直连（net.connect / tls.connect），不经过本模块。
+ * v2.44.2：订阅 URL 与订阅里的节点地址在无代理客户端里必须可达，
+ * 代理只用于 GitHub 规则库/升级检测与国家码测定；节点测活/测速永远直连
+ * （net.connect / tls.connect），不经过本模块。
  */
 
 export type ProxyMode = 'off' | 'env' | 'manual';
@@ -35,6 +37,14 @@ export interface EffectiveProxyConfig {
 }
 
 export const PROXY_PURPOSES: readonly ProxyPurpose[] = ['subscription', 'github', 'geo'];
+
+/**
+ * 从未保存过 proxy_scope 时的默认用途。
+ * 订阅抓取默认直连：订阅 URL 必须能在没有代理的手机 / App 里直接拉取，
+ * 用代理抓取会掩盖其真实可达性，且代理超时会被记成「Fetch timeout」。
+ * 用户仍可对单条订阅显式选择「强制走代理」作为逃生口。
+ */
+export const DEFAULT_PROXY_SCOPE: readonly ProxyPurpose[] = ['github', 'geo'];
 
 export const DEFAULT_PROXY_BYPASS =
   'localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.local';
@@ -177,11 +187,11 @@ export async function readEffectiveProxyConfig(
   const envUrl = envProxyUrlFor('https://example.invalid', env);
   const proxyUrl = mode === 'manual' ? storedUrl : mode === 'env' ? envUrl : null;
 
-  // env 模式无法按用途区分（环境变量没有「只代理某类请求」的语义）→ 固定全部用途。
-  // manual 模式：未设置过 = 全部用途；显式保存为空 = 全部直连。
+  // v2.44.2：用途由设置项决定，与代理地址来源（manual / 环境变量）解耦。
+  // 未设置过 = 默认 github + geo（订阅直连）；显式保存为空字符串 = 全部直连。
   const rawScope = await settings.get(PROXY_SETTING_KEYS.scope);
-  const scope = mode === 'env' || rawScope === null
-    ? [...PROXY_PURPOSES]
+  const scope = rawScope === null
+    ? [...DEFAULT_PROXY_SCOPE]
     : parseProxyScope(rawScope) ?? [];
 
   const fallbackRaw = await settings.get(PROXY_SETTING_KEYS.fallback);
@@ -192,6 +202,37 @@ export async function readEffectiveProxyConfig(
     scope,
     bypass: mergeBypassList(await settings.get(PROXY_SETTING_KEYS.bypass), env),
     fallback: fallbackRaw === null ? true : fallbackRaw === '1',
+  };
+}
+
+/** 设置页表单用：原始存储值（null = 从未保存），不含任何推断 / 合并 */
+export interface RawProxyConfig {
+  mode: ProxyMode | null;
+  url: string | null;
+  scope: ProxyPurpose[] | null;
+  bypass: string | null;
+  fallback: boolean | null;
+}
+
+/**
+ * 与 readEffectiveProxyConfig 区分开：那里返回的是「生效值」（推断 mode、env 地址、
+ * 合并 bypass），适合运行时使用；这里返回的是「用户配置值」，适合回显到表单。
+ * 把生效值直接回存会把推断结果固化，v2.44.2 前设置页因此产生过 400 与配置漂移。
+ */
+export async function readRawProxyConfig(settings: SettingsReader): Promise<RawProxyConfig> {
+  const [modeRaw, urlRaw, scopeRaw, bypassRaw, fallbackRaw] = await Promise.all([
+    settings.get(PROXY_SETTING_KEYS.mode),
+    settings.get(PROXY_SETTING_KEYS.url),
+    settings.get(PROXY_SETTING_KEYS.scope),
+    settings.get(PROXY_SETTING_KEYS.bypass),
+    settings.get(PROXY_SETTING_KEYS.fallback),
+  ]);
+  return {
+    mode: isProxyMode(modeRaw) ? modeRaw : null,
+    url: urlRaw?.trim() || null,
+    scope: scopeRaw === null ? null : parseProxyScope(scopeRaw) ?? [],
+    bypass: bypassRaw ?? null,
+    fallback: fallbackRaw === null ? null : fallbackRaw === '1',
   };
 }
 

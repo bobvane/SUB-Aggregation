@@ -34,6 +34,7 @@ import {
   mergeMaskedProxyUrl,
   parseProxyScope,
   readEffectiveProxyConfig,
+  readRawProxyConfig,
   serializeProxyScope,
   splitList,
   type ProxyPurpose,
@@ -120,6 +121,9 @@ export function createApp(deps: AppDeps): Hono {
   // app_name：用户自定义站点名（设置页保存），登录前也需显示，故放公开接口
   app.get('/api/meta', async (c) => {
     const appName = await repos.settings.get('app_name');
+    // v2.44.2：侧栏/登录页版本号来自这里的 APP_META.version。
+    // 禁止缓存，避免升级镜像后浏览器仍渲染旧版本号。
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate');
     return c.json({
       success: true,
       data: { meta: APP_META, app_name: appName ?? APP_META.name },
@@ -1006,19 +1010,40 @@ export function createApp(deps: AppDeps): Hono {
     const intervalRaw = await repos.settings.get('sub_update_interval');
     const dropLatRaw = await repos.settings.get('node_drop_latency_ms');
     const proxy = await readEffectiveProxyConfig(repos.settings);
+    const raw = await readRawProxyConfig(repos.settings);
+    const effectiveUrl = maskProxyUrl(proxy.proxyUrl) ?? '';
+    const envDetected = !!(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY
+      || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy);
     return c.json({
       success: true,
       data: {
         app_name: appName ?? 'SUB-Aggregation',
         sub_update_interval: intervalRaw !== null ? parseInt(intervalRaw, 10) : 24,
         node_drop_latency_ms: dropLatRaw !== null ? parseInt(dropLatRaw, 10) : 2000,
+        // 兼容字段：均为「生效值」（推断/合并后的结果），不应被表单原样回存
         proxy_mode: proxy.mode,
-        proxy_url: maskProxyUrl(proxy.proxyUrl) ?? '',
+        proxy_url: effectiveUrl,
         proxy_scope: proxy.scope,
         proxy_bypass: proxy.bypass.join(','),
         proxy_fallback: proxy.fallback,
-        proxy_env_detected: !!(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY
-          || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy),
+        proxy_env_detected: envDetected,
+        // v2.44.2：表单只回显用户真正保存过的原始值，避免把推断值固化
+        proxy_raw: {
+          mode: raw.mode,
+          url: maskProxyUrl(raw.url) ?? '',
+          scope: raw.scope,
+          bypass: raw.bypass ?? '',
+          fallback: raw.fallback,
+        },
+        // 诊断用：当前实际生效的配置（地址来自哪、bypass 合并结果）
+        proxy_effective: {
+          mode: proxy.mode,
+          url: effectiveUrl,
+          scope: proxy.scope,
+          bypass: proxy.bypass.join(','),
+          fallback: proxy.fallback,
+          env_detected: envDetected,
+        },
       },
     });
   });

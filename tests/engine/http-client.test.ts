@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Agent, ProxyAgent } from 'undici';
-import { createHttpClient, resetHttpAgents } from '@/engine/http-client';
+import { createHttpClient, resetHttpAgents, DEFAULT_TIMEOUT_MS } from '@/engine/http-client';
+import { SUBSCRIPTION_FETCH_TIMEOUT_MS } from '@/engine/fetcher';
 import type { SettingsReader } from '@/engine/proxy-config';
 
 const settings = (entries: Record<string, string>): SettingsReader => ({
@@ -204,6 +205,92 @@ describe('http-client 测试代理', () => {
     const result = await client.testProxy();
     expect(result.ok).toBe(false);
     expect(result.error).toContain('ECONNREFUSED');
+  });
+});
+
+describe('v2.44.2 订阅默认直连与回退边界', () => {
+  const capture = () => {
+    const calls: Captured[] = [];
+    const rawFetch = async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
+      return new Response('ok');
+    };
+    return { calls, rawFetch };
+  };
+
+  it('从未保存 proxy_scope 时订阅抓取直连（默认只代理 github + geo）', async () => {
+    const { calls, rawFetch } = capture();
+    const client = createHttpClient(settings({
+      proxy_mode: 'manual',
+      proxy_url: 'http://127.0.0.1:7890',
+      proxy_fallback: '1',
+    }), { env: {}, rawFetch });
+
+    await client.fetch('subscription', 'https://example.com/sub');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
+    expect(calls[0].init.dispatcher).not.toBeInstanceOf(ProxyAgent);
+
+    // 同一配置下 GitHub 用途仍应走代理
+    await client.fetch('github', 'https://api.github.com/');
+    expect(calls[1].init.dispatcher).toBeInstanceOf(ProxyAgent);
+  });
+
+  it('env 模式默认用途也不含订阅抓取', async () => {
+    const { calls, rawFetch } = capture();
+    const client = createHttpClient(settings({ proxy_mode: 'env' }), {
+      env: { HTTPS_PROXY: 'http://env-proxy:8080' },
+      rawFetch,
+    });
+
+    await client.fetch('subscription', 'https://example.com/sub');
+    expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
+    await client.fetch('github', 'https://api.github.com/');
+    expect(calls[1].init.dispatcher).toBeInstanceOf(ProxyAgent);
+  });
+
+  it('scope 未命中且直连失败时不再回退代理', async () => {
+    const calls: Captured[] = [];
+    const client = createHttpClient(settings({
+      proxy_mode: 'manual',
+      proxy_url: 'http://127.0.0.1:7890',
+      proxy_scope: 'github,geo',
+      proxy_fallback: '1',
+    }), {
+      env: {},
+      rawFetch: async (url, init) => {
+        calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
+        throw new TypeError('fetch failed', { cause: new Error('ECONNREFUSED') });
+      },
+    });
+
+    await expect(client.fetch('subscription', 'https://example.com/sub'))
+      .rejects.toThrow(/ECONNREFUSED/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
+  });
+
+  it('命中 bypass 且直连失败时不再回退代理', async () => {
+    const calls: Captured[] = [];
+    const client = createHttpClient(manualSettings, {
+      env: {},
+      rawFetch: async (url, init) => {
+        calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
+        throw new TypeError('fetch failed', { cause: new Error('ECONNREFUSED') });
+      },
+    });
+
+    await expect(client.fetch('subscription', 'http://127.0.0.1:9000/sub'))
+      .rejects.toThrow(/ECONNREFUSED/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
+  });
+
+  it('订阅超时 30 秒，fetcher 与 http-client 常量一致', () => {
+    expect(SUBSCRIPTION_FETCH_TIMEOUT_MS).toBe(30_000);
+    expect(DEFAULT_TIMEOUT_MS.subscription).toBe(SUBSCRIPTION_FETCH_TIMEOUT_MS);
+    expect(DEFAULT_TIMEOUT_MS.github).toBe(15_000);
+    expect(DEFAULT_TIMEOUT_MS.geo).toBe(10_000);
   });
 });
 

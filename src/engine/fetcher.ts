@@ -9,7 +9,9 @@ import type { ProxyChoice, ProxyPurpose } from './proxy-config';
 
 const ALLOWED_PROTOCOLS = ['https:', 'http:'];
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
-const FETCH_TIMEOUT_MS = 10_000; // 10 秒
+// v2.44.2：10s 对境外大订阅偏短，放宽到 30s；与 http-client 的 subscription 超时一致。
+// 导出供回归测试核对两处常量，避免只改一处造成实际超时不一致。
+export const SUBSCRIPTION_FETCH_TIMEOUT_MS = 30_000; // 30 秒
 const MAX_REDIRECTS = 3;
 
 /** 底层抓取函数：生产由 http-client 注入（按用途决定代理），测试可传 mock */
@@ -162,7 +164,7 @@ export function validateUrl(url: string): { ok: true; parsed: URL } | { ok: fals
  */
 async function fetchWithTimeout(input: string | URL | Request, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), SUBSCRIPTION_FETCH_TIMEOUT_MS);
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } finally {
@@ -201,7 +203,7 @@ export async function fetchSubscription(
           Accept: 'text/plain,text/html,application/json,*/*',
         },
         redirect: 'manual', // 手动处理重定向以计数
-        timeoutMs: FETCH_TIMEOUT_MS,
+        timeoutMs: SUBSCRIPTION_FETCH_TIMEOUT_MS,
         choice: options.choice,
       });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_PROXY_BYPASS,
+  DEFAULT_PROXY_SCOPE,
   PROXY_PURPOSES,
   isProxyChoice,
   isProxyMode,
@@ -12,6 +13,7 @@ import {
   parseProxyScope,
   proxyUrlForTarget,
   readEffectiveProxyConfig,
+  readRawProxyConfig,
   serializeProxyScope,
   shouldBypass,
   splitList,
@@ -42,25 +44,70 @@ describe('proxy-config 模式与用途', () => {
     expect(manual.proxyUrl).toBe('http://10.0.0.2:8080');
   });
 
-  it('scope 缺省为全部用途，并按固定顺序序列化', async () => {
-    expect((await readEffectiveProxyConfig(emptyReader, {})).scope).toEqual([...PROXY_PURPOSES]);
+  it('scope 缺省只含 github + geo（订阅默认直连），并按固定顺序序列化', async () => {
+    expect((await readEffectiveProxyConfig(emptyReader, {})).scope).toEqual([...DEFAULT_PROXY_SCOPE]);
+    expect(DEFAULT_PROXY_SCOPE).not.toContain('subscription');
+    expect(PROXY_PURPOSES).toContain('subscription'); // 仍可显式勾选 / 单订阅强制走代理
     expect(parseProxyScope('geo,subscription,geo,unknown')).toEqual(['geo', 'subscription']);
     expect(parseProxyScope('')).toBeNull();
     expect(serializeProxyScope(['geo', 'subscription'])).toBe('subscription,geo');
   });
 
-  it('env 模式固定全部用途；manual 模式保存为空 = 全部直连', async () => {
-    const envClient = await readEffectiveProxyConfig(
+  it('env 模式也按用途收窄；显式保存为空 = 全部直连', async () => {
+    const envDefault = await readEffectiveProxyConfig(
+      reader({ proxy_mode: 'env' }),
+      { HTTPS_PROXY: 'http://127.0.0.1:7890' }
+    );
+    expect(envDefault.mode).toBe('env');
+    expect(envDefault.scope).toEqual([...DEFAULT_PROXY_SCOPE]);
+
+    const envNarrow = await readEffectiveProxyConfig(
+      reader({ proxy_mode: 'env', proxy_scope: 'github' }),
+      { HTTPS_PROXY: 'http://127.0.0.1:7890' }
+    );
+    expect(envNarrow.scope).toEqual(['github']);
+
+    const envEmpty = await readEffectiveProxyConfig(
       reader({ proxy_mode: 'env', proxy_scope: '' }),
       { HTTPS_PROXY: 'http://127.0.0.1:7890' }
     );
-    expect(envClient.scope).toEqual([...PROXY_PURPOSES]);
+    expect(envEmpty.scope).toEqual([]);
 
-    const emptyScope = await readEffectiveProxyConfig(
+    const manualEmpty = await readEffectiveProxyConfig(
       reader({ proxy_mode: 'manual', proxy_url: 'http://127.0.0.1:7890', proxy_scope: '' }),
       {}
     );
-    expect(emptyScope.scope).toEqual([]);
+    expect(manualEmpty.scope).toEqual([]);
+  });
+
+  it('readRawProxyConfig 只返回存储值，不推断 mode / 不合并 bypass', async () => {
+    expect(await readRawProxyConfig(emptyReader)).toEqual({
+      mode: null, url: null, scope: null, bypass: null, fallback: null,
+    });
+
+    const raw = await readRawProxyConfig(reader({
+      proxy_mode: 'manual',
+      proxy_url: 'http://user:secret@127.0.0.1:7890',
+      proxy_scope: 'github,geo',
+      proxy_bypass: 'corp.example.com',
+      proxy_fallback: '0',
+    }));
+    expect(raw).toEqual({
+      mode: 'manual',
+      url: 'http://user:secret@127.0.0.1:7890',
+      scope: ['github', 'geo'],
+      bypass: 'corp.example.com',
+      fallback: false,
+    });
+
+    // 生效值会补默认 bypass 与 NO_PROXY，原始值不应包含这些
+    const effective = await readEffectiveProxyConfig(reader({ proxy_bypass: 'corp.example.com' }), {
+      NO_PROXY: 'foo.test',
+    });
+    expect(effective.bypass).toContain('foo.test');
+    expect(effective.bypass.length).toBeGreaterThan(1);
+    expect((await readRawProxyConfig(reader({ proxy_bypass: 'corp.example.com' }))).bypass)
+      .toBe('corp.example.com');
   });
 
   it('fallback 默认开启，存 0 时关闭', async () => {

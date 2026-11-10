@@ -8,6 +8,7 @@ import { createApp } from '@/api/routes';
 import { createAuthService, createPasswordHash } from '@/services/auth.service';
 import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
+import pkg from '../../package.json';
 
 interface ResData {
   success: boolean;
@@ -48,6 +49,15 @@ describe('Meta API', () => {
     expect(meta.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(meta.repo).toContain('github.com');
     expect(typeof meta.author).toBe('string');
+  });
+
+  it('侧栏版本号唯一来源：/api/meta 返回 package.json 版本且禁止缓存（v2.44.2）', async () => {
+    const res = await app.request('/api/meta');
+    const json = (await res.json()) as ResData;
+    const meta = json.data!.meta as { version: string };
+    // 发版只改 package.json，左下角 / 登录页版本号即随之变化，无需再改前端
+    expect(meta.version).toBe(pkg.version);
+    expect(res.headers.get('cache-control')).toContain('no-store');
   });
 
   it('GET /api/meta/check-upgrade 能从 releases Atom 订阅解析出最新版本', async () => {

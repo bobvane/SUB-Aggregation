@@ -16,6 +16,18 @@
 | 自动回退（超时不回退） | `src/engine/http-client.ts` |
 | 节点测活保持直连并加隔离守卫 | `src/services/node-probe.service.ts`、`tests/security/proxy-isolation.test.ts` |
 
+## 交付状态（v2.44.2 修正）
+
+| 问题 | 修正 |
+|---|---|
+| `proxy_scope` 未保存、env 模式默认把订阅抓取也纳入代理 | 默认用途改为 `github + geo`；env 模式同样按用途收窄，订阅 URL 默认直连 |
+| 直连失败回退代理时未检查用途与 bypass | 移除「直连 → 代理」回退，只保留「代理失败 → 回退直连」；未勾选的用途始终直连 |
+| 订阅抓取 10s 超时偏短，慢源被误判成 `Fetch timeout` | 放宽到 30s（`fetcher.ts` 与 `http-client.ts` 同步） |
+| `GET /api/settings` 返回生效值，被设置页全量原样回存 | 新增 `proxy_raw` / `proxy_effective`；表单只回显原始存储值，只提交改动过的字段 |
+| 「测试代理」不反映用途配置、`proxy_env_detected` 未使用 | UI 明示按钮只验证代理地址可达性，并显示环境变量代理提示 |
+
+> 下文 §2 表格里的「10s」等数字是 v2.43.1 基线描述，保留用于对照，不代表当前值。
+
 ---
 
 ## 0. 先澄清：项目里有三种完全不同的「代理」

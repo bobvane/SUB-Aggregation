@@ -3,7 +3,7 @@
  * - 设置项校验与脱敏
  * - 单条订阅 useProxy 校验与持久化
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createApp } from '@/api/routes';
 import { createAuthService, createPasswordHash } from '@/services/auth.service';
@@ -32,6 +32,7 @@ describe('代理设置 API', () => {
     }, {}, executionCtx);
 
   beforeEach(async () => {
+    vi.unstubAllEnvs();
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
     const { hash, salt } = await createPasswordHash('test-pass');
@@ -85,6 +86,61 @@ describe('代理设置 API', () => {
     });
     expect(putAgain.status).toBe(200);
     expect(await repos.settings.get('proxy_url')).toBe('http://user:secret@127.0.0.1:7890');
+  });
+
+  it('GET 拆分原始值与生效值；只提交改动字段不会固化推断配置（v2.44.2）', async () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://user:secret@env-proxy:8080');
+    vi.stubEnv('NO_PROXY', 'corp.example.com');
+
+    const get = await request('/api/settings');
+    const d = (await get.json()) as { data: Record<string, unknown> };
+    expect(d.data.proxy_mode).toBe('env');                 // 生效值：由环境变量推断
+    expect(String(d.data.proxy_url)).toContain('***');     // 生效地址脱敏
+    const effective = d.data.proxy_effective as Record<string, unknown>;
+    expect(effective.scope).toEqual(['github', 'geo']);
+    expect(effective.bypass).toContain('corp.example.com');
+    expect(d.data.proxy_env_detected).toBe(true);
+    // 表单用的原始值：全部为「从未保存」，不能拿生效值去回存
+    expect(d.data.proxy_raw).toMatchObject({
+      mode: null, url: '', scope: null, bypass: '', fallback: null,
+    });
+
+    // 模拟设置页：用户只改了应用名，代理字段一个都不提交
+    const put = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ app_name: '我的聚合' }),
+    });
+    expect(put.status).toBe(200);
+    for (const key of ['proxy_mode', 'proxy_url', 'proxy_scope', 'proxy_bypass', 'proxy_fallback']) {
+      expect(await repos.settings.get(key)).toBeNull();
+    }
+
+    // 显式改动用途才写入对应存储键
+    const putScope = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_scope: ['github'] }),
+    });
+    expect(putScope.status).toBe(200);
+    expect(await repos.settings.get('proxy_scope')).toBe('github');
+    expect(await repos.settings.get('proxy_url')).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it('直连模式下不提交代理地址时，已保存的手动地址不会被清空', async () => {
+    await repos.settings.set('proxy_mode', 'off');
+    await repos.settings.set('proxy_url', 'http://127.0.0.1:7890');
+
+    const get = await request('/api/settings');
+    const d = (await get.json()) as { data: { proxy_url?: string; proxy_raw?: { url?: string } } };
+    expect(d.data.proxy_url).toBe('');                              // 生效值为空
+    expect(String(d.data.proxy_raw?.url)).toContain('127.0.0.1:7890'); // 但原始配置仍在
+
+    const put = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ app_name: 'X' }),
+    });
+    expect(put.status).toBe(200);
+    expect(await repos.settings.get('proxy_url')).toBe('http://127.0.0.1:7890');
   });
 
   it('拒绝非法代理模式、地址与用途', async () => {

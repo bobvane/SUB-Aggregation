@@ -4,7 +4,8 @@
  * 设计要点：
  *   - 每次调用按「设置项 > 环境变量 > 直连」解析代理策略，不污染全局 dispatcher；
  *   - 只有明确允许的用途才走代理（subscription / github / geo）；
- *   - auto 模式下首选通道失败可回退另一条通道（默认开启），
+ *     订阅抓取默认不代理，v2.44.2 起「未勾选的用途」连失败回退也不会走代理；
+ *   - auto 模式下代理失败才回退直连（默认开启，超时不回退），
  *     避免「代理 407 → 所有订阅全灭」再次发生；
  *   - 节点测活/测速不接入本模块，必须保持裸 TCP/TLS。
  */
@@ -45,8 +46,10 @@ export interface HttpClient {
   testProxy(): Promise<ProxyTestResult>;
 }
 
-const DEFAULT_TIMEOUT_MS: Record<ProxyPurpose, number> = {
-  subscription: 10_000,
+export const DEFAULT_TIMEOUT_MS: Record<ProxyPurpose, number> = {
+  // v2.44.2：订阅源常在境外且内容较大，10s 容易把「慢」误判成「失败」；
+  // 与 fetcher.ts 的 FETCH_TIMEOUT_MS 保持一致。
+  subscription: 30_000,
   github: 15_000,
   geo: 10_000,
 };
@@ -167,15 +170,11 @@ export function createHttpClient(
         }
       }
 
-      if (config.mode !== 'off' && targetProxy) {
-        try {
-          console.warn(`[Proxy] 直连失败，回退代理: ${hostname || url}`);
-          return await request(url, init, purpose, targetProxy);
-        } catch (fallbackErr) {
-          throw combineErrors(err, fallbackErr, '代理回退');
-        }
-      }
-
+      // v2.44.2：移除「直连失败 → 回退代理」。
+      // auto 模式首选直连只会因为「用途未勾选 / 命中 bypass / 没有代理地址」而发生，
+      // 这三种情况都不允许再走代理；旧实现只看有没有代理地址，导致只勾 github/geo
+      // 时订阅直连失败仍被代理接管，使「未勾选的用途始终直连」变成假话。
+      // 保留的救援方向是上面的「代理失败 → 回退直连」。
       throw describeFetchError(err);
     }
   }

@@ -779,38 +779,41 @@ th, td { font-size: 13px; }
           <option value="manual">手动指定代理地址</option>
         </select>
         <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">节点测活与测速始终直连（裸 TCP/TLS），不经过这里的代理。</div>
+        <div class="hint" style="margin-top:4px;color:var(--muted-foreground);font-size:12px" id="proxyEnvHint"></div>
       </div>
       <div class="form-group" id="proxyUrlGroup">
         <label>代理地址</label>
         <input id="settingProxyUrl" placeholder="http://127.0.0.1:7890" autocomplete="off">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">支持 http:// 与 https://，可带用户名密码；保存后界面以 *** 显示密码。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">支持 http:// 与 https://，可带用户名密码；保存后界面以 *** 显示密码。这里只保存手动地址，环境变量模式由容器提供地址。</div>
       </div>
       <div class="form-group" id="proxyScopeGroup">
         <label>使用代理的用途</label>
         <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:8px;font-size:14px">
-          <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeSubscription" value="subscription"> 订阅抓取</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:400" title="订阅 URL 需能被无代理的手机 / App 直接拉取，默认不走代理"><input type="checkbox" id="proxyScopeSubscription" value="subscription"> 订阅抓取</label>
           <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeGithub" value="github"> 升级检测 / 规则目录</label>
           <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="proxyScopeGeo" value="geo"> 地理归属查询</label>
         </div>
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px" id="proxyScopeHint">仅手动模式可配置：环境变量模式固定作用于以上全部用途。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px" id="proxyScopeHint">勾选需要走代理的用途；未勾选的用途始终直连。</div>
+        <div class="hint" style="margin-top:4px;color:var(--muted-foreground);font-size:12px">默认只代理「升级检测 / 规则目录」与「地理归属查询」；订阅抓取默认直连，单条订阅可单独设为「强制走代理」。</div>
       </div>
       <div class="form-group">
         <label>失败回退</label>
         <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin-top:6px;font-size:14px">
-          <input type="checkbox" id="settingProxyFallback"> 首选通道失败时自动尝试另一条通道（超时不回退）
+          <input type="checkbox" id="settingProxyFallback"> 代理请求失败时自动回退直连（超时不回退）
         </label>
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">仅对「自动」策略生效；单条订阅显式选择「强制走代理 / 强制直连」时不会回退。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">仅对「自动」策略生效；单条订阅显式选择「强制走代理 / 强制直连」时不会回退。直连失败不会再改用代理。</div>
       </div>
       <div class="form-group">
         <label>绕过代理的地址</label>
         <input id="settingProxyBypass" placeholder="localhost,127.0.0.1,192.168.0.0/16">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">逗号分隔，支持主机名、域名后缀、IPv4 CIDR；默认已包含本机与内网段。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">逗号分隔，支持主机名、域名后缀、IPv4 CIDR；这里只填附加项，会与内置默认列表及容器 NO_PROXY 自动合并。</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" onclick="saveSettings()">💾 保存</button>
         <button class="btn" id="proxyTestBtn" onclick="testProxy()">🔌 测试代理</button>
         <span id="proxyTestResult" style="font-size:13px;color:var(--text2)"></span>
       </div>
+      <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">「测试代理」只验证代理地址本身是否可达，不代表用途勾选、绕过列表或失败回退的实际结果。</div>
     </div>
     <div class="card" style="margin-top:16px">
       <h3 style="margin:0 0 12px">👤 账号安全</h3>
@@ -901,7 +904,7 @@ th, td { font-size: 13px; }
       <div class="form-group">
         <label>代理策略</label>
         <select id="subUseProxy">
-          <option value="auto">自动（跟随全局网络代理设置）</option>
+          <option value="auto">自动（默认直连，跟随全局用途勾选）</option>
           <option value="on">强制走代理</option>
           <option value="off">强制直连</option>
         </select>
@@ -921,7 +924,7 @@ th, td { font-size: 13px; }
       <div class="form-group">
         <label>代理策略</label>
         <select id="editSubUseProxy">
-          <option value="auto">自动（跟随全局网络代理设置）</option>
+          <option value="auto">自动（默认直连，跟随全局用途勾选）</option>
           <option value="on">强制走代理</option>
           <option value="off">强制直连</option>
         </select>
@@ -2795,49 +2798,79 @@ function onOutputFormatChange() {
 }
 
 // ============ Settings ============
+/** v2.44.2：记录表单加载时的原始配置，保存时只提交用户改动过的字段 */
+let proxyFormSnapshot = null;
+const PROXY_SCOPE_IDS = {
+  subscription: 'proxyScopeSubscription',
+  github: 'proxyScopeGithub',
+  geo: 'proxyScopeGeo',
+};
+
+function proxyFormValues() {
+  return {
+    mode: document.getElementById('settingProxyMode').value,
+    url: document.getElementById('settingProxyUrl').value.trim(),
+    scope: ['subscription', 'github', 'geo'].filter((p) => document.getElementById(PROXY_SCOPE_IDS[p]).checked),
+    bypass: document.getElementById('settingProxyBypass').value.trim(),
+    fallback: document.getElementById('settingProxyFallback').checked,
+  };
+}
+
 async function loadSettings() {
   try {
     const data = await api('/settings');
     const d = data.data || {};
     document.getElementById('settingAppName').value = d.app_name || '';
-    document.getElementById('settingSubUpdateInterval').value = d.sub_update_interval ?? 24;
-    document.getElementById('settingNodeDropLatency').value = d.node_drop_latency_ms ?? 2000;
+    document.getElementById('settingSubUpdateInterval').value = String(d.sub_update_interval ?? 24);
+    document.getElementById('settingNodeDropLatency').value = String(d.node_drop_latency_ms ?? 2000);
 
+    // 模式显示「生效值」（含环境变量推断）；其余字段只回显「原始存储值」。
+    // GET 返回的是推断/合并后的生效值，原样回存会固化 scope、bypass 和 mode。
+    const raw = d.proxy_raw || null;
     document.getElementById('settingProxyMode').value = d.proxy_mode || 'off';
-    document.getElementById('settingProxyUrl').value = d.proxy_url || '';
-    document.getElementById('settingProxyBypass').value = d.proxy_bypass || '';
-    document.getElementById('settingProxyFallback').checked = d.proxy_fallback !== false;
-    const scopeRaw = d.proxy_scope;
-    const scope = Array.isArray(scopeRaw)
-      ? scopeRaw
-      : String(scopeRaw || '').split(',').map((item) => item.trim()).filter(Boolean);
-    const effectiveScope = scope.length > 0 ? scope : ['subscription', 'github', 'geo'];
-    document.getElementById('proxyScopeSubscription').checked = effectiveScope.includes('subscription');
-    document.getElementById('proxyScopeGithub').checked = effectiveScope.includes('github');
-    document.getElementById('proxyScopeGeo').checked = effectiveScope.includes('geo');
+    document.getElementById('settingProxyUrl').value = raw ? (raw.url || '') : (d.proxy_url || '');
+    document.getElementById('settingProxyBypass').value = raw ? (raw.bypass || '') : (d.proxy_bypass || '');
+    document.getElementById('settingProxyFallback').checked = raw
+      ? (raw.fallback === null ? true : raw.fallback)
+      : (d.proxy_fallback !== false);
+    const scope = raw
+      ? (Array.isArray(raw.scope) ? raw.scope : ['github', 'geo'])
+      : (Array.isArray(d.proxy_scope) ? d.proxy_scope : ['github', 'geo']);
+    for (const purpose of ['subscription', 'github', 'geo']) {
+      document.getElementById(PROXY_SCOPE_IDS[purpose]).checked = scope.includes(purpose);
+    }
+    const envHint = document.getElementById('proxyEnvHint');
+    if (envHint) {
+      const effectiveUrl = d.proxy_effective && d.proxy_effective.url;
+      envHint.textContent = d.proxy_env_detected
+        ? `检测到容器环境变量代理${effectiveUrl ? '（当前生效地址：' + effectiveUrl + '）' : ''}；环境变量只提供地址，用途仍由下方勾选决定。`
+        : '';
+    }
+    proxyFormSnapshot = proxyFormValues();
     onProxyModeChange();
   } catch {}
   loadCatalogStatus();
   searchCatalog(); // 默认显示前 100 个分类
 }
 
-/** 代理模式联动：仅手动模式可编辑地址与用途 */
+/** 代理模式联动：地址仅手动模式可编辑；用途在 env / manual 下都可配置 */
 function onProxyModeChange() {
   const mode = document.getElementById('settingProxyMode')?.value || 'off';
   const manual = mode === 'manual';
+  const scopeEditable = mode !== 'off';
   const urlInput = document.getElementById('settingProxyUrl');
   const urlGroup = document.getElementById('proxyUrlGroup');
   urlInput.disabled = !manual;
   urlGroup.style.opacity = manual ? '1' : '.55';
   for (const id of ['proxyScopeSubscription', 'proxyScopeGithub', 'proxyScopeGeo']) {
-    document.getElementById(id).disabled = !manual;
+    document.getElementById(id).disabled = !scopeEditable;
   }
   const group = document.getElementById('proxyScopeGroup');
-  group.style.opacity = manual ? '1' : '.55';
+  group.style.opacity = scopeEditable ? '1' : '.55';
   document.getElementById('proxyScopeHint').textContent = manual
-    ? '勾选需要走代理的用途；未勾选的用途始终直连。'
+    ? '勾选需要走代理的用途；未勾选的用途始终直连（包括失败回退）。'
     : mode === 'env'
-      ? '环境变量模式固定作用于以上全部用途（由 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 决定）。'
+      ? '环境变量只提供代理地址；用途仍可单独勾选，未勾选的用途始终直连。'
       : '直连模式下不会使用代理，本项不生效。';
 }
 
@@ -2878,31 +2911,29 @@ async function saveSettings() {
   const dropLat = dropRaw === '' ? 2000 : parseInt(dropRaw, 10);
   if (Number.isNaN(dropLat) || dropLat < 100 || dropLat > 2000) { toast('慢节点抛弃阈值须为 100-2000 的整数（毫秒）', 'error'); return; }
 
-  const proxyMode = document.getElementById('settingProxyMode').value;
-  const proxyUrl = document.getElementById('settingProxyUrl').value.trim();
-  if (proxyMode === 'manual' && !proxyUrl) { toast('手动代理模式需要填写代理地址', 'error'); return; }
-  const proxyScope = ['subscription', 'github', 'geo'].filter((purpose) => {
-    const map = { subscription: 'proxyScopeSubscription', github: 'proxyScopeGithub', geo: 'proxyScopeGeo' };
-    return document.getElementById(map[purpose]).checked;
-  });
-  if (proxyMode === 'manual' && proxyScope.length === 0) { toast('手动代理模式请至少勾选一个使用代理的用途', 'error'); return; }
-  const proxyBypass = document.getElementById('settingProxyBypass').value.trim();
-  const proxyFallback = document.getElementById('settingProxyFallback').checked;
+  const proxy = proxyFormValues();
+  if (proxy.mode === 'manual' && !proxy.url) { toast('手动代理模式需要填写代理地址', 'error'); return; }
+  if (proxy.mode === 'manual' && proxy.scope.length === 0) { toast('手动代理模式请至少勾选一个使用代理的用途', 'error'); return; }
 
   try {
-    await api('/settings', {
-      method: 'PUT',
-      body: JSON.stringify({
-        app_name: appName,
-        sub_update_interval: subInterval,
-        node_drop_latency_ms: dropLat,
-        proxy_mode: proxyMode,
-        proxy_url: proxyUrl,
-        proxy_scope: proxyScope,
-        proxy_bypass: proxyBypass,
-        proxy_fallback: proxyFallback,
-      }),
-    });
+    // v2.44.2：只提交真正改动过的代理字段。
+    // 全量回存会把推断出的 mode、脱敏后的 env 地址、合并后的 bypass 固化成用户配置，
+    // 并在 env 代理带密码时触发「密码占位符无法还原」400。
+    const body = {
+      app_name: appName,
+      sub_update_interval: subInterval,
+      node_drop_latency_ms: dropLat,
+    };
+    const prev = proxyFormSnapshot;
+    if (prev) {
+      if (proxy.mode !== prev.mode) body.proxy_mode = proxy.mode;
+      if (proxy.url !== prev.url) body.proxy_url = proxy.url;
+      if (proxy.scope.join(',') !== prev.scope.join(',')) body.proxy_scope = proxy.scope;
+      if (proxy.bypass !== prev.bypass) body.proxy_bypass = proxy.bypass;
+      if (proxy.fallback !== prev.fallback) body.proxy_fallback = proxy.fallback;
+    }
+    await api('/settings', { method: 'PUT', body: JSON.stringify(body) });
+    proxyFormSnapshot = proxy;
     toast('设置已保存');
     // 立即刷新页面标题
     document.getElementById('sidebarLogo').textContent = appName;
@@ -3164,7 +3195,8 @@ async function loadMeta() {
   if (metaLoaded) return;
   metaLoaded = true;
   try {
-    const metaRes = await api('/meta');
+    // v2.44.2：版本号来自运行时 /api/meta（即 package.json），显式禁缓存确保升级后立即刷新
+    const metaRes = await api('/meta', { cache: 'no-store' });
     const meta = metaRes.data?.meta || {};
     const appName = metaRes.data?.app_name || meta.name || 'SUB-Aggregation';
     const ver = meta.version || '-';
