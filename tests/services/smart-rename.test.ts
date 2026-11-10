@@ -54,8 +54,8 @@ describe('smartRename 每个国家独立编号', () => {
     const service = createConfigService(repos, kv);
     const first = await service.autoNamed(base.map((n) => ({ ...n })));
     const usFirst = first.find((n) => n.server === 'us-1.example.com')!;
-    expect(usFirst.name).toBe('🇺🇸 US VLESS-01');
-    expect(first.find((n) => n.server === 'hk-1.example.com')!.name).toBe('🇭🇰 HK VLESS-01');
+    expect(usFirst.name).toBe('🇺🇸 美国VLESS-01');
+    expect(first.find((n) => n.server === 'hk-1.example.com')!.name).toBe('🇭🇰 香港VLESS-01');
 
     // 再增加更多 CA/HK 节点（不含新的美国节点）→ 美国仍为 01
     const moreCa = Array.from({ length: 20 }, (_, i) => `new-ca-${i}.example.com`);
@@ -67,7 +67,7 @@ describe('smartRename 每个国家独立编号', () => {
       makeNode('hk-3', 'hk-3.example.com'),
     ];
     const second = await service.autoNamed(expanded.map((n) => ({ ...n })));
-    expect(second.find((n) => n.server === 'us-1.example.com')!.name).toBe('🇺🇸 US VLESS-01');
+    expect(second.find((n) => n.server === 'us-1.example.com')!.name).toBe('🇺🇸 美国VLESS-01');
   });
 
   it('同一国家内按 server:port:protocol 排序编号，与数组顺序无关', async () => {
@@ -79,8 +79,8 @@ describe('smartRename 每个国家独立编号', () => {
       makeNode('a', 'hk-a.example.com'),
     ];
     const named = await service.autoNamed(nodes);
-    expect(named[0].name).toBe('🇭🇰 HK VLESS-02'); // z 排序在后，但输出顺序不变
-    expect(named[1].name).toBe('🇭🇰 HK VLESS-01'); // a 排序在前
+    expect(named[0].name).toBe('🇭🇰 香港VLESS-02'); // z 排序在后，但输出顺序不变
+    expect(named[1].name).toBe('🇭🇰 香港VLESS-01'); // a 排序在前
   });
 
   it('锁定节点在本国组内优先拿小号', async () => {
@@ -97,7 +97,28 @@ describe('smartRename 每个国家独立编号', () => {
     ];
     const named = await service.autoNamed(nodes);
     // z 锁定 → 01；未锁定的 a 顺延为 02（输出顺序仍保持入参数组顺序）
-    expect(named[0].name).toBe('🇭🇰 HK VLESS-02');
-    expect(named[1].name).toBe('🇭🇰 HK VLESS-01');
+    expect(named[0].name).toBe('🇭🇰 香港VLESS-02');
+    expect(named[1].name).toBe('🇭🇰 香港VLESS-01');
+  });
+
+  it('2026-11-10 中文国家名格式：🇨🇦 加拿大VLESS-01，metadata.country 仍是二字码', async () => {
+    await seedGeo(['ca-1.example.com', 'ca-2.example.com'], 'CA');
+    const service = createConfigService(repos, kv);
+    const named = await service.autoNamed([
+      makeNode('ca-1', 'ca-1.example.com'),
+      makeNode('ca-2', 'ca-2.example.com'),
+    ]);
+    // 用户确认的口径：旗帜 + 空格 + 中文国家名 + 协议（中文与协议之间无空格）+ -序号
+    expect(named.map((n) => n.name).sort()).toEqual([
+      '🇨🇦 加拿大VLESS-01',
+      '🇨🇦 加拿大VLESS-02',
+    ]);
+    for (const n of named) {
+      // 名字里不再出现二字码（旧格式是 🇨🇦 CA VLESS-01）
+      expect(n.name).not.toContain('CA');
+      expect(n.name).not.toContain('加拿大 VLESS');
+      // 列表页排序、Mihomo 地理分组与 ip-geo 反查仍依赖二字码，不能被中文名替换
+      expect(n.metadata?.country).toBe('CA');
+    }
   });
 });

@@ -505,6 +505,9 @@ export function createApp(deps: AppDeps): Hono {
         link: nodeToLink(n),
         fingerprint: fp,
         enabled: !disabled.has(fp),
+        // 2026-11-10：节点列表「移出配置」按钮的正向状态；与 enabled 互为反义，
+        // 保留 enabled 兼容既有调用方，前端新按钮使用 excluded。
+        excluded: disabled.has(fp),
         locked: locked.has(fp),
         dropped: dropped.has(fp),
         probeApplicable,
@@ -667,7 +670,52 @@ export function createApp(deps: AppDeps): Hono {
       ? [...new Set([...current, body.fingerprint])]
       : current.filter((fp) => fp !== body.fingerprint);
     await config.setLockedNodes(next);
-    return c.json({ success: true, data: { fingerprint: body.fingerprint, locked: body.locked, lockedCount: next.length } });
+
+    // 2026-11-10：与「移出配置」互斥。锁定 = 强制进配置，若该节点此前被手工排除，
+    // 锁定时自动恢复，避免两个按钮状态自相矛盾（前端也会同步清掉 excluded）。
+    let restored = false;
+    if (body.locked) {
+      const disabled = await config.getDisabledNodes();
+      if (disabled.includes(body.fingerprint)) {
+        await config.setDisabledNodes(disabled.filter((fp) => fp !== body.fingerprint));
+        restored = true;
+      }
+    }
+    return c.json({
+      success: true,
+      data: { fingerprint: body.fingerprint, locked: body.locked, lockedCount: next.length, restored },
+    });
+  });
+
+  // 2026-11-10：单节点「移出配置」/「恢复」（手工排除，不进入配置表）
+  // 复用 setting:disabled_nodes；相比 PUT /api/nodes/enabled 无需传全量启用列表，
+  // 避免多标签/并发操作互相覆盖。
+  // 与锁定互斥：getNodes() 的优先级是 locked > disabled，若已锁定节点只写 disabled，
+  // 按钮点了却仍会强制进配置。因此移出配置时一并解锁；「恢复」不自动重新锁定。
+  app.post('/api/nodes/excluded', async (c) => {
+    const body = await readBody<{ fingerprint?: string; excluded?: boolean }>(c);
+    if (!body.fingerprint || typeof body.excluded !== 'boolean') {
+      throw ERRORS.INVALID_PARAMETER('fingerprint and excluded are required');
+    }
+    const fp = body.fingerprint;
+    const current = await config.getDisabledNodes();
+    const next = body.excluded
+      ? [...new Set([...current, fp])]
+      : current.filter((x) => x !== fp);
+    await config.setDisabledNodes(next);
+
+    let unlocked = false;
+    if (body.excluded) {
+      const locked = await config.getLockedNodes();
+      if (locked.includes(fp)) {
+        await config.setLockedNodes(locked.filter((x) => x !== fp));
+        unlocked = true;
+      }
+    }
+    return c.json({
+      success: true,
+      data: { fingerprint: fp, excluded: body.excluded, unlocked, excludedCount: next.length },
+    });
   });
 
   // ============ Rule API ============

@@ -75,8 +75,8 @@ describe('subscription pipeline integration', () => {
     }));
     const yaml = await configService.generate('mihomo');
     // 智能重命名（v2.34）：[旗帜][国家代码] [协议] [延迟ms]-NN
-    expect(yaml).toContain('🇯🇵 JP Shadowsocks');
-    expect(yaml).toContain('🇺🇸 US VLESS');
+    expect(yaml).toContain('🇯🇵 日本Shadowsocks');
+    expect(yaml).toContain('🇺🇸 美国VLESS');
     expect(validateMihomo(yaml)).toBe(true);
   }, 10000);
 
@@ -85,7 +85,7 @@ describe('subscription pipeline integration', () => {
     await service.update(sub.id, async () => TEST_SUBSCRIPTION);
     const json = await configService.generate('singbox');
     // 智能重命名（v2.34）：所有输出格式统一新命名
-    expect(json).toContain('🇯🇵 JP Shadowsocks');
+    expect(json).toContain('🇯🇵 日本Shadowsocks');
     expect(validateSingbox(json)).toBe(true);
   });
 
@@ -252,8 +252,8 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     await svcB.update(b.id, async () => 'ss://aes-256-gcm:p2@node-b.example.com:8388#NODE-B');
 
     const withBoth = await configService.generate('mihomo');
-    expect(withBoth).toContain('🇺🇸 US Shadowsocks');
-    expect(withBoth).toContain('🇭🇰 HK Shadowsocks');
+    expect(withBoth).toContain('🇺🇸 美国Shadowsocks');
+    expect(withBoth).toContain('🇭🇰 香港Shadowsocks');
 
     // 停用 B
     const disabled = await svcB.setEnabled(b.id, false);
@@ -268,14 +268,14 @@ describe('disabled subscription exclusion from output (v2.28.9)', () => {
     // 显式重置缓存以确保 freshConfigService 不命中旧缓存
     await configService.resetCache();
     const onlyA = await configService.generate('mihomo');
-    expect(onlyA).toContain('🇺🇸 US Shadowsocks');
-    expect(onlyA).not.toContain('🇭🇰 HK Shadowsocks');
+    expect(onlyA).toContain('🇺🇸 美国Shadowsocks');
+    expect(onlyA).not.toContain('🇭🇰 香港Shadowsocks');
 
     // 重新启用 B
     await svcB.setEnabled(b.id, true);
     // 再次重置缓存
     await configService.resetCache();
     const bothBack = await configService.generate('mihomo');
-    expect(bothBack).toContain('🇭🇰 HK Shadowsocks');
+    expect(bothBack).toContain('🇭🇰 香港Shadowsocks');
   });
 });

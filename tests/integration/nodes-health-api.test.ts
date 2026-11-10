@@ -112,7 +112,7 @@ describe('Nodes Health API', () => {
     }>;
     // 旧行为：库里存什么显示什么（'香港01-中转'）；v2.35.1 起与配置输出同款自动命名
     // v2.36：延迟不再写进名字（否则每次生成名字都变，客户端会当新节点）
-    expect(list[0].name).toBe('🇭🇰 HK VLESS-01');
+    expect(list[0].name).toBe('🇭🇰 香港VLESS-01');
     // 列表页排序/状态列需要的数据由接口一次给全
     expect(list[0].country).toBe('HK');
     expect(list[0].latency).toBe(45); // TLS RTT 优先（tcp 30 / http 80 都不该被选中）

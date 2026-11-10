@@ -36,9 +36,12 @@ for (const code of Object.keys(COUNTRIES)) {
 
 /**
  * 自动命名（v2.36 起不含延迟：延迟每次都变，写进名字会让客户端把节点当新节点）
- * - 格式：🇭🇰 HK VLESS-01（无国家信息时降级为 VLESS-01）
- * - 旗帜+国家码：来自 ip-geo 缓存（复用地理分组同一数据源）
- * - 同时把国家码写回 metadata.country，供列表页按国家分组排序
+ * - 格式：🇭🇰 香港VLESS-01（无国家信息时降级为 VLESS-01）
+ * - 旗帜+中文国家名：来自 ip-geo 缓存（复用地理分组同一数据源）
+ * - 2026-11-10：名字里的二字码改成中文国家名，中文名与协议之间不留空格
+ *   （🇨🇦 CA VLESS-09 → 🇨🇦 加拿大VLESS-09），只为客户端可读性
+ * - metadata.country 仍写二字码，供列表页排序、Mihomo 地理分组与 ip-geo 反查使用；
+ *   groupNodesByGeo() 走纯 IP 定位，不解析节点名，因此改名不影响地区分组
  */
 async function smartRename(
   nodes: Node[],
@@ -98,7 +101,10 @@ async function smartRename(
     const country = countries[i];
     const flag = country ? countryFlag(country) : '';
     const proto = PROTOCOL_LABELS[n.protocol] || n.protocol;
-    const head = country ? `${flag} ${country} ${proto}` : proto;
+    // 2026-11-10：二字码 → 中文国家名（CA → 加拿大），中文名后直接接协议，不加空格。
+    // 未知国家码（理论上 ip-geo 只会回已知码）降级回原二字码，避免名字里出现空段。
+    const countryName = country ? (COUNTRIES[country]?.name ?? country) : '';
+    const head = country ? `${flag} ${countryName}${proto}` : proto;
     n.name = `${head}-${String(numbers[i]).padStart(2, '0')}`;
   }
 }

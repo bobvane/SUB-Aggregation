@@ -175,6 +175,9 @@ export const RULE_GROUPS: RuleGroup[] = [
   {
     key: 'social', name: '社交', icon: '📱',
     items: [
+      // 2026-11-10 用户要求：geosite:TWITTER / geosite:META 点名固定规则，排在聚合分类之前
+      { id: 'twitter', label: 'Twitter / X', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
+      { id: 'meta', label: 'Meta', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
       // 原生 GEOSITE 输出，聚合分类灰色固定
       { id: 'category-communication', label: '社交通讯聚合', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
       { id: 'category-social-media-!cn', label: '海外社交(非中国)', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
@@ -199,7 +202,10 @@ export const RULE_GROUPS: RuleGroup[] = [
   {
     key: 'crypto', name: '加密货币', icon: '💰',
     items: [
-      // 原生 GEOSITE 输出；category-cryptocurrency 灰色固定；点名的 11 条已移除
+      // 2026-11-10 用户要求：geosite:BINANCE / geosite:OKX 点名固定规则，排在聚合分类之前
+      { id: 'binance', label: 'Binance', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
+      { id: 'okx', label: 'OKX', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
+      // 原生 GEOSITE 输出；category-cryptocurrency 灰色固定；其余点名规则已移除
       { id: 'category-cryptocurrency', label: '加密货币通用合集', tag: 'geosite', target: 'PROXY', native: true, fixed: true },
     ],
   },

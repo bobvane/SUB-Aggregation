@@ -85,4 +85,40 @@ describe('rule order', () => {
       expect(idx(t)).toBeLessThan(match);
     }
   });
+
+  it('2026-11-10 新增 4 条点名规则：组内锁死、原生输出、归入正确策略组', () => {
+    const expected: Array<[string, string, string]> = [
+      ['social', 'twitter', 'GEOSITE,twitter,社交'],
+      ['social', 'meta', 'GEOSITE,meta,社交'],
+      ['crypto', 'binance', 'GEOSITE,binance,加密货币'],
+      ['crypto', 'okx', 'GEOSITE,okx,加密货币'],
+    ];
+    const all = RULE_GROUPS.flatMap(g => g.items.filter(i => !i.custom));
+    const lines = buildRules(all, RULE_GROUPS);
+    for (const [groupKey, id, line] of expected) {
+      const group = RULE_GROUPS.find(g => g.key === groupKey)!;
+      const item = group.items.find(i => i.id === id);
+      expect(item, `${groupKey}/${id} 应在分组内`).toBeDefined();
+      expect(item!.fixed, `${id} 应为固定不可取消`).toBe(true);
+      expect(item!.native, `${id} 应为原生 GEOSITE 规则`).toBe(true);
+      expect(item!.target).toBe('PROXY');
+      expect(lines, `${id} 应输出到配置`).toContain(line);
+    }
+    // geosite:META 归社交组，不应残留在 AI 平台组
+    expect(RULE_GROUPS.find(g => g.key === 'ai')!.items.some(i => i.id === 'meta')).toBe(false);
+    expect(lines.some(l => l === 'GEOSITE,meta,AI 平台')).toBe(false);
+    // muse.ai 同时存在于 category-ai-!cn 与 meta 两个分类；AI 平台组排在社交组之前，
+    // 自上而下先命中，故 Muse AI 仍走 AI 平台策略组，Meta 社交系域名才走社交组
+    expect(lines.indexOf('GEOSITE,category-ai-!cn,AI 平台'))
+      .toBeLessThan(lines.indexOf('GEOSITE,meta,社交'));
+    // 点名规则排在各自聚合分类之前（与 AI 组既有约定一致）
+    for (const id of ['twitter', 'meta']) {
+      expect(lines.indexOf(`GEOSITE,${id},社交`))
+        .toBeLessThan(lines.indexOf('GEOSITE,category-communication,社交'));
+    }
+    for (const id of ['binance', 'okx']) {
+      expect(lines.indexOf(`GEOSITE,${id},加密货币`))
+        .toBeLessThan(lines.indexOf('GEOSITE,category-cryptocurrency,加密货币'));
+    }
+  });
 });

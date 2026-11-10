@@ -83,8 +83,11 @@ a:hover { text-decoration: underline; }
 .btn-danger { color: var(--red); border-color: rgba(234,34,97,0.3); }
 .btn-danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
 .btn-sm { padding: 4px 11px; font-size: 14px; }
-.node-lock-btn { padding: 3px 7px; line-height: 1; background: transparent; border: 1px solid var(--border); color: var(--text2); }
+/* 节点列表操作列：2026-11-10 起锁定/移出配置均为文字按钮，不再使用图标开关 */
+.node-lock-btn, .node-action-btn { padding: 3px 7px; line-height: 1; background: transparent; border: 1px solid var(--border); color: var(--text2); }
+.node-action-wrap { display: flex; gap: 4px; flex-wrap: wrap; }
 .node-lock-on { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 700; }
+.node-excluded-on { background: var(--red); color: #fff; border-color: var(--red); font-weight: 700; }
 /* ===== Page ===== */
 .page { display: none; padding: 28px 32px; max-width: 1060px; width: 100%; margin: 0 auto; }
 .page.active { display: block; animation: fadeUp .3s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -626,7 +629,7 @@ th, td { font-size: 13px; }
       </div>
     </div>
     <div class="card" style="padding:12px 16px;font-size:14px;color:var(--text2)">
-      💡 勾选 = 该节点会进入输出配置；取消勾选 = 从输出的订阅中排除。连通性延迟（TCP/TLS 握手 RTT）仅供基础参考，真实代理端到端延迟由客户端 Mihomo 自动选择组负责。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。
+      💡 锁定 = 无视连通性探测/延迟，强制进配置；移出配置 = 手工排除，不进入输出订阅；恢复 = 重新参与系统筛选。锁定与移出配置互斥，操作一个会自动取消另一个。连通性延迟（TCP/TLS 握手 RTT）仅供基础参考，真实代理端到端延迟由客户端 Mihomo 自动选择组负责。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。
     </div>
     <div class="card" id="nodeStats" style="margin:12px 0;padding:10px 16px;display:flex;gap:24px;font-size:14px;flex-wrap:wrap;align-items:center">
       <span>📥 总节点 <b id="statsOriginal">0</b></span>
@@ -646,11 +649,11 @@ th, td { font-size: 13px; }
     <div id="geoPendingBanner" class="card" style="display:none;margin:0 0 12px;padding:10px 16px;font-size:14px;border-left:4px solid var(--danger);box-shadow:var(--shadow-sm)"></div>
     <div class="card" style="margin:0 0 12px;padding:10px 16px;font-size:14px;display:flex;gap:8px;align-items:center">
       <span>🏷 节点名自动生成</span>
-      <span style="color:var(--text2)">格式：旗帜 国家码 协议-序号（如 🇭🇰 HK VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
+      <span style="color:var(--text2)">格式：旗帜 中文国家名+协议-序号（如 🇭🇰 香港VLESS-01），无需手工清洗；延迟见「延迟」列，不写进名字</span>
     </div>
     <div class="list-toolbar node-list-toolbar"><span id="nodeListCount" class="list-count"></span></div>
     <div class="table-scroll node-table-scroll"><table id="nodesTable">
-      <thead><tr><th style="width:40px" title="锁定后无视连通性探测/延迟，强制进配置">锁定</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换连通性延迟排序（TCP/TLS 握手 RTT，非真实代理延迟）">连通性延迟 <span id="latencySortMark"></span></th><th>状态</th><th>操作</th></tr></thead>
+      <thead><tr><th>名称</th><th>协议</th><th>地址</th><th>端口</th><th>TLS</th><th style="cursor:pointer;user-select:none" onclick="sortNodesByLatency()" title="点击切换连通性延迟排序（TCP/TLS 握手 RTT，非真实代理延迟）">连通性延迟 <span id="latencySortMark"></span></th><th>状态</th><th style="width:230px" title="锁定：强制进配置；移出配置：手工排除，不进入输出订阅">操作</th></tr></thead>
       <tbody id="nodesTableBody"></tbody>
     </table></div>
     <p class="text-center" id="nodesEmpty" style="color:var(--text2);padding:24px">暂无节点数据</p>
@@ -2333,17 +2336,22 @@ function renderNodes() {
       : (n.healthStatus ? `得分 ${n.score}${n.error ? ' · ' + n.error : ''} · 点击看趋势` : '尚未探测 · 点击看趋势');
     const dropped = n.dropped ? '<span title="系统健康状态判定失效（连续失败被状态机确认），已从生成的配置中剔除（记录保留，恢复后自动回来）。TCP/TLS 握手延迟不再作为剔除依据。" style="color:var(--danger)">🚫 已剔除</span>' : '';
     const suspect = n.statusMachine === 'suspect' ? '<span title="连续失败，观察中" style="color:var(--orange)">⚠️</span> ' : '';
-    const rowStyle = (n.dropped && !n.locked) ? ' style="opacity:0.55"' : '';
+    // 2026-11-10：手工移出配置的节点在状态列显式标注，并和「已剔除」一样淡化整行
+    const excludedTag = n.excluded ? '<span title="已手工移出配置，不会进入输出订阅；点击「恢复」重新参与系统筛选" style="color:var(--danger)">⏸ 已移出</span>' : '';
+    const rowStyle = ((n.dropped && !n.locked) || n.excluded) ? ' style="opacity:0.55"' : '';
     return `<tr${rowStyle}>
-      <td><button class="btn btn-sm node-lock-btn${n.locked ? ' node-lock-on' : ''}" title="${n.locked ? '已锁定：无视健康状态，强制进配置（点击解锁）' : '未锁定：跟随系统健康状态判定进出配置（点击锁定）'}" onclick="toggleNodeLock('${escHtml(n.fingerprint)}', ${!n.locked})">${n.locked ? '🔒' : '🔓'}</button></td>
       <td>${escHtml(n.name)}</td>
       <td><span class="tag ${tagClass}">${displayProtocol(n)}</span></td>
       <td style="font-size:14px">${escHtml(n.server)}</td>
       <td>${n.port}</td>
       <td>${n.tls ? '✅' : '❌'}</td>
       <td style="font-size:14px;${n.probeApplicable === false ? 'color:var(--text2)' : latency != null && latency > state.nodeDropLatency ? 'color:var(--red)' : ''}" title="${n.probeApplicable === false ? 'UDP 协议，基础连通性探测不适用' : 'TCP/TLS 握手 RTT（非真实代理延迟）'}">${n.probeApplicable === false ? '不适用' : latencyStr}</td>
-      <td style="font-size:14px;cursor:pointer" title="${escHtml(tip)}" onclick="showNodeHistory('${escHtml(n.fingerprint)}')">${suspect}${icon}${scoreStr} ${dropped}</td>
-      <td><button class="btn btn-sm" onclick="copyNodeLink('${escHtml(n.fingerprint)}')">📋 复制</button></td>
+      <td style="font-size:14px;cursor:pointer" title="${escHtml(tip)}" onclick="showNodeHistory('${escHtml(n.fingerprint)}')">${suspect}${icon}${scoreStr} ${dropped} ${excludedTag}</td>
+      <td><div class="node-action-wrap">
+        <button class="btn btn-sm node-lock-btn${n.locked ? ' node-lock-on' : ''}" title="${n.locked ? '已锁定：无视健康状态，强制进配置（点击解锁）' : '未锁定：跟随系统健康状态判定进出配置（点击锁定）'}" onclick="toggleNodeLock('${escHtml(n.fingerprint)}', ${!n.locked})">${n.locked ? '解锁' : '锁定'}</button>
+        <button class="btn btn-sm node-action-btn${n.excluded ? ' node-excluded-on' : ''}" title="${n.excluded ? '已手工移出配置（点击恢复，重新参与系统筛选）' : '手工移出配置：不进入输出订阅；若已锁定会同时解锁'}" onclick="toggleNodeExcluded('${escHtml(n.fingerprint)}', ${!n.excluded})">${n.excluded ? '恢复' : '移出配置'}</button>
+        <button class="btn btn-sm" onclick="copyNodeLink('${escHtml(n.fingerprint)}')">📋 复制</button>
+      </div></td>
     </tr>`;
   }).join('');
 }
@@ -2447,18 +2455,56 @@ function copyNodeLink(fingerprint) {
   copyText(node.link, '已复制单节点链接');
 }
 
-// v2.36.9：节点锁定（替换原勾选框）—— 锁定 = 无视测活/延迟，强制进配置
+// v2.36.9 起：节点锁定（替换原勾选框）—— 锁定 = 无视测活/延迟，强制进配置
+// 2026-11-10：改为操作列文字按钮；与「移出配置」互斥，锁定时后端会自动恢复被排除的节点
 async function toggleNodeLock(fp, locked) {
   const node = state.nodes.find(n => n.fingerprint === fp);
   if (!node) return;
+  const prevLocked = !!node.locked;
+  const prevExcluded = !!node.excluded;
+  const prevEnabled = node.enabled;
   node.locked = locked;
+  if (locked) { node.excluded = false; node.enabled = true; }
   renderNodes();
   // 输出页会在进入时重新拉取状态，这里不需要额外刷新计数
   try {
-    await api('/nodes/locked', { method: 'POST', body: JSON.stringify({ fingerprint: fp, locked }) });
-    toast(locked ? '🔒 已锁定：该节点将强制进配置' : '🔓 已解锁：跟随连通性探测/延迟判定');
+    const r = await api('/nodes/locked', { method: 'POST', body: JSON.stringify({ fingerprint: fp, locked }) });
+    const d = (r && r.data) || {};
+    toast(locked
+      ? (d.restored ? '已锁定：强制进配置（同时取消移出配置）' : '已锁定：该节点将强制进配置')
+      : '已解锁：跟随连通性探测/延迟判定');
   } catch (e) {
-    node.locked = !locked;
+    node.locked = prevLocked;
+    node.excluded = prevExcluded;
+    node.enabled = prevEnabled;
+    renderNodes();
+    toast('保存失败: ' + e.message, 'error');
+  }
+}
+
+// 2026-11-10：手工移出配置 / 恢复（单节点接口，避免全量列表覆盖）
+// getNodes() 的优先级是 locked > disabled，已锁定节点若只写 disabled 仍会强制进配置，
+// 所以后端在「移出配置」时会自动解锁；前端同步把 locked 置 false，保持一致。
+async function toggleNodeExcluded(fp, excluded) {
+  const node = state.nodes.find(n => n.fingerprint === fp);
+  if (!node) return;
+  const prevExcluded = !!node.excluded;
+  const prevLocked = !!node.locked;
+  const prevEnabled = node.enabled;
+  node.excluded = excluded;
+  node.enabled = !excluded;
+  if (excluded) node.locked = false;
+  renderNodes();
+  try {
+    const r = await api('/nodes/excluded', { method: 'POST', body: JSON.stringify({ fingerprint: fp, excluded }) });
+    const d = (r && r.data) || {};
+    toast(d.unlocked
+      ? '已移出配置（同时解除锁定）'
+      : (excluded ? '已移出配置，不进入输出订阅' : '已恢复，重新参与系统筛选'));
+  } catch (e) {
+    node.excluded = prevExcluded;
+    node.locked = prevLocked;
+    node.enabled = prevEnabled;
     renderNodes();
     toast('保存失败: ' + e.message, 'error');
   }
