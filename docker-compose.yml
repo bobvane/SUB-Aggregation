@@ -14,6 +14,7 @@
 #     但 fnOS 检测不到它的更新。
 #
 # 数据落在同目录的 ./data/app.db（SQLite 单文件），备份就是复制这个文件。
+# 出网代理不在这里配置：启动后在面板「设置 → 网络代理」里填写。
 services:
   sub-aggregation:
     # ← 换成 docker.io/<你的DockerHub用户名>/sub-aggregation:latest
@@ -29,11 +30,6 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      # 代理默认留空：优先在「设置 → 网络代理」里配置（可选直连 / 环境变量 / 手动地址）。
-      # 下面三项仅用于「跟随环境变量」模式，或在迁移前沿用旧部署。
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,.local}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:20130/"]
       interval: 60s

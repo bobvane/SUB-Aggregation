@@ -1,22 +1,23 @@
 /**
- * 代理设置模型（v2.44.0）
+ * 代理设置模型（v2.44.0，v2.44.3 收敛为「直连 / 手动」两态）
  *
- * 目标：把「进程级、全量接管」的环境变量代理，改成「可配置、按用途区分」：
+ * 目标：代理只有一个配置来源 —— 设置页。
  *   - off    ：全部直连
- *   - env    ：沿用 HTTP_PROXY / HTTPS_PROXY / NO_PROXY（兼容旧部署）
  *   - manual ：使用设置页保存的 proxy_url
  *
+ * v2.44.3：移除 `env` 模式。Docker Compose 只把 `environment:` 里声明的变量
+ * 传进容器，保留「跟随环境变量」必然要求 compose 继续传递 HTTP_PROXY/HTTPS_PROXY，
+ * 等于保留第二个配置入口。老部署的环境变量代理在启动时一次性导入为 manual。
+ *
  * 用途（purpose）：
- *   - subscription：订阅抓取（v2.44.2 起**默认不代理**，保留单条订阅强制代理的逃生口）
+ *   - subscription：订阅抓取（默认不代理，保留单条订阅强制代理的逃生口）
  *   - github      ：升级检测 + 规则目录同步
  *   - geo         ：DoH 域名解析 + ip-api 归属查询
  *
- * v2.44.2：订阅 URL 与订阅里的节点地址在无代理客户端里必须可达，
- * 代理只用于 GitHub 规则库/升级检测与国家码测定；节点测活/测速永远直连
- * （net.connect / tls.connect），不经过本模块。
+ * 节点测活/测速永远直连（net.connect / tls.connect），不经过本模块。
  */
 
-export type ProxyMode = 'off' | 'env' | 'manual';
+export type ProxyMode = 'off' | 'manual';
 export type ProxyPurpose = 'subscription' | 'github' | 'geo';
 export type ProxyChoice = 'auto' | 'on' | 'off';
 
@@ -24,11 +25,16 @@ export interface SettingsReader {
   get(key: string): Promise<string | null>;
 }
 
+/** 迁移旧配置时需要写回设置，故比 SettingsReader 多一个 set */
+export interface SettingsStore extends SettingsReader {
+  set(key: string, value: string): Promise<void>;
+}
+
 export type EnvLike = Record<string, string | undefined>;
 
 export interface EffectiveProxyConfig {
   mode: ProxyMode;
-  /** 供界面展示的代理地址（env 模式为 HTTPS_PROXY 优先） */
+  /** 供界面展示的代理地址（仅 manual 模式有值） */
   proxyUrl: string | null;
   scope: ProxyPurpose[];
   bypass: string[];
@@ -65,7 +71,7 @@ function envValue(env: EnvLike, key: string): string | null {
 }
 
 export function isProxyMode(value: unknown): value is ProxyMode {
-  return value === 'off' || value === 'env' || value === 'manual';
+  return value === 'off' || value === 'manual';
 }
 
 export function isProxyPurpose(value: unknown): value is ProxyPurpose {
@@ -76,7 +82,7 @@ export function isProxyChoice(value: unknown): value is ProxyChoice {
   return value === 'auto' || value === 'on' || value === 'off';
 }
 
-/** 拆分逗号/空白分隔的列表（bypass、NO_PROXY、scope 共用） */
+/** 拆分逗号/空白分隔的列表（bypass、scope 共用） */
 export function splitList(raw: string | null | undefined): string[] {
   if (!raw) return [];
   return raw
@@ -130,64 +136,84 @@ export function mergeMaskedProxyUrl(existing: string | null, incoming: string): 
   throw new Error('代理地址中的密码占位符无法还原，请重新输入完整地址');
 }
 
-export function hasEnvProxy(env: EnvLike = process.env): boolean {
-  return !!(envValue(env, 'HTTPS_PROXY') || envValue(env, 'HTTP_PROXY') || envValue(env, 'ALL_PROXY')
-    || envValue(env, 'https_proxy') || envValue(env, 'http_proxy') || envValue(env, 'all_proxy'));
+/**
+ * 读取旧版部署遗留的代理环境变量。仅用于 v2.44.3 的一次性迁移，
+ * 运行时的代理选择不再读取任何环境变量。
+ */
+export function readLegacyEnvProxyUrl(env: EnvLike = process.env): string | null {
+  const candidates = [
+    envValue(env, 'HTTPS_PROXY'),
+    envValue(env, 'https_proxy'),
+    envValue(env, 'ALL_PROXY'),
+    envValue(env, 'all_proxy'),
+    envValue(env, 'HTTP_PROXY'),
+    envValue(env, 'http_proxy'),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && isValidProxyUrl(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
- * env 模式下按目标协议选择代理：
- *   https -> HTTPS_PROXY / ALL_PROXY
- *   http  -> HTTP_PROXY / ALL_PROXY
+ * v2.44.3 迁移：把旧的 env 模式 / 未保存模式但存在环境变量代理的部署，
+ * 一次性导入为 manual 模式，避免升级后代理静默失效。
+ *
+ * 返回值：
+ *   - imported：已把环境变量代理写入 manual
+ *   - disabled：旧 env 模式已停用（且没有可导入的地址），当前直连
+ *   - none    ：无需处理
  */
-export function envProxyUrlFor(targetUrl: string, env: EnvLike = process.env): string | null {
-  let protocol = 'https:';
-  try {
-    protocol = new URL(targetUrl).protocol;
-  } catch {
-    // 非法 URL 交给后续 fetch 报错
-  }
-  const https = envValue(env, 'HTTPS_PROXY') ?? envValue(env, 'https_proxy');
-  const http = envValue(env, 'HTTP_PROXY') ?? envValue(env, 'http_proxy');
-  const all = envValue(env, 'ALL_PROXY') ?? envValue(env, 'all_proxy');
-  return protocol === 'https:' ? (https ?? all ?? http) : (http ?? all ?? https);
-}
-
-/** 按当前配置解析目标 URL 应使用的代理（null = 直连） */
-export function proxyUrlForTarget(
-  config: EffectiveProxyConfig,
-  targetUrl: string,
+export async function migrateLegacyEnvProxy(
+  settings: SettingsStore,
   env: EnvLike = process.env
-): string | null {
-  if (config.mode === 'off') return null;
-  if (config.mode === 'manual') return config.proxyUrl;
-  return envProxyUrlFor(targetUrl, env);
+): Promise<'imported' | 'disabled' | 'none'> {
+  const rawMode = await settings.get(PROXY_SETTING_KEYS.mode);
+  if (rawMode === 'manual' || rawMode === 'off') return 'none';
+
+  const envUrl = readLegacyEnvProxyUrl(env);
+
+  // 显式保存过 env：能导入就导入，否则退回直连
+  if (rawMode === 'env') {
+    if (envUrl) {
+      await settings.set(PROXY_SETTING_KEYS.mode, 'manual');
+      await settings.set(PROXY_SETTING_KEYS.url, envUrl);
+      return 'imported';
+    }
+    await settings.set(PROXY_SETTING_KEYS.mode, 'off');
+    return 'disabled';
+  }
+
+  // 从未保存过模式：旧行为是「有环境变量代理就自动 env」，这里保持等价
+  if (!envUrl) return 'none';
+  await settings.set(PROXY_SETTING_KEYS.mode, 'manual');
+  await settings.set(PROXY_SETTING_KEYS.url, envUrl);
+  return 'imported';
 }
 
-/** 合并默认 bypass、设置项、env NO_PROXY，去重 */
-export function mergeBypassList(stored: string | null, env: EnvLike = process.env): string[] {
+/** 按当前配置解析目标应使用的代理（null = 直连） */
+export function proxyUrlForTarget(config: EffectiveProxyConfig): string | null {
+  return config.mode === 'manual' ? config.proxyUrl : null;
+}
+
+/** 合并内置默认 bypass 与设置项，去重（v2.44.3 起不再读 NO_PROXY） */
+export function mergeBypassList(stored: string | null): string[] {
   const items = [
     ...splitList(DEFAULT_PROXY_BYPASS),
     ...splitList(stored),
-    ...splitList(envValue(env, 'NO_PROXY') ?? envValue(env, 'no_proxy')),
   ];
   return [...new Set(items.map((item) => item.toLowerCase()))];
 }
 
 export async function readEffectiveProxyConfig(
-  settings: SettingsReader,
-  env: EnvLike = process.env
+  settings: SettingsReader
 ): Promise<EffectiveProxyConfig> {
   const rawMode = await settings.get(PROXY_SETTING_KEYS.mode);
-  const mode: ProxyMode = isProxyMode(rawMode)
-    ? rawMode
-    : hasEnvProxy(env) ? 'env' : 'off';
+  const mode: ProxyMode = isProxyMode(rawMode) ? rawMode : 'off';
 
   const storedUrl = (await settings.get(PROXY_SETTING_KEYS.url))?.trim() || null;
-  const envUrl = envProxyUrlFor('https://example.invalid', env);
-  const proxyUrl = mode === 'manual' ? storedUrl : mode === 'env' ? envUrl : null;
+  const proxyUrl = mode === 'manual' ? storedUrl : null;
 
-  // v2.44.2：用途由设置项决定，与代理地址来源（manual / 环境变量）解耦。
   // 未设置过 = 默认 github + geo（订阅直连）；显式保存为空字符串 = 全部直连。
   const rawScope = await settings.get(PROXY_SETTING_KEYS.scope);
   const scope = rawScope === null
@@ -200,7 +226,7 @@ export async function readEffectiveProxyConfig(
     mode,
     proxyUrl,
     scope,
-    bypass: mergeBypassList(await settings.get(PROXY_SETTING_KEYS.bypass), env),
+    bypass: mergeBypassList(await settings.get(PROXY_SETTING_KEYS.bypass)),
     fallback: fallbackRaw === null ? true : fallbackRaw === '1',
   };
 }
@@ -215,7 +241,7 @@ export interface RawProxyConfig {
 }
 
 /**
- * 与 readEffectiveProxyConfig 区分开：那里返回的是「生效值」（推断 mode、env 地址、
+ * 与 readEffectiveProxyConfig 区分开：那里返回的是「生效值」（推断 mode、
  * 合并 bypass），适合运行时使用；这里返回的是「用户配置值」，适合回显到表单。
  * 把生效值直接回存会把推断结果固化，v2.44.2 前设置页因此产生过 400 与配置漂移。
  */
@@ -270,7 +296,7 @@ function normalizeHost(hostname: string): string {
 /**
  * 判断主机是否应绕过代理。
  * 支持：`*`、精确主机、`.suffix` / `suffix` 后缀、IPv4 CIDR、IPv6 字面量。
- * 端口不参与匹配（NO_PROXY 常见写法也不带端口）。
+ * 端口不参与匹配。
  */
 export function shouldBypass(hostname: string, bypass: readonly string[]): boolean {
   const host = normalizeHost(hostname);

@@ -1012,8 +1012,6 @@ export function createApp(deps: AppDeps): Hono {
     const proxy = await readEffectiveProxyConfig(repos.settings);
     const raw = await readRawProxyConfig(repos.settings);
     const effectiveUrl = maskProxyUrl(proxy.proxyUrl) ?? '';
-    const envDetected = !!(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY
-      || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy);
     return c.json({
       success: true,
       data: {
@@ -1026,7 +1024,6 @@ export function createApp(deps: AppDeps): Hono {
         proxy_scope: proxy.scope,
         proxy_bypass: proxy.bypass.join(','),
         proxy_fallback: proxy.fallback,
-        proxy_env_detected: envDetected,
         // v2.44.2：表单只回显用户真正保存过的原始值，避免把推断值固化
         proxy_raw: {
           mode: raw.mode,
@@ -1042,7 +1039,6 @@ export function createApp(deps: AppDeps): Hono {
           scope: proxy.scope,
           bypass: proxy.bypass.join(','),
           fallback: proxy.fallback,
-          env_detected: envDetected,
         },
       },
     });
@@ -1080,7 +1076,7 @@ export function createApp(deps: AppDeps): Hono {
     // ============ 网络代理（v2.44.0） ============
     if (body.proxy_mode !== undefined) {
       if (!isProxyMode(body.proxy_mode)) {
-        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_mode 须为 off / env / manual' } }, 400);
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'proxy_mode 须为 off / manual' } }, 400);
       }
       await repos.settings.set(PROXY_SETTING_KEYS.mode, body.proxy_mode);
     }

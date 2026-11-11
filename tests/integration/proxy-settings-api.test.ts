@@ -88,18 +88,15 @@ describe('代理设置 API', () => {
     expect(await repos.settings.get('proxy_url')).toBe('http://user:secret@127.0.0.1:7890');
   });
 
-  it('GET 拆分原始值与生效值；只提交改动字段不会固化推断配置（v2.44.2）', async () => {
-    vi.stubEnv('HTTPS_PROXY', 'http://user:secret@env-proxy:8080');
-    vi.stubEnv('NO_PROXY', 'corp.example.com');
-
+  it('GET 拆分原始值与生效值；只提交改动字段不会固化推断配置', async () => {
     const get = await request('/api/settings');
     const d = (await get.json()) as { data: Record<string, unknown> };
-    expect(d.data.proxy_mode).toBe('env');                 // 生效值：由环境变量推断
-    expect(String(d.data.proxy_url)).toContain('***');     // 生效地址脱敏
+    expect(d.data.proxy_mode).toBe('off');                 // 未保存模式 = 直连
+    expect(d.data.proxy_url).toBe('');
     const effective = d.data.proxy_effective as Record<string, unknown>;
     expect(effective.scope).toEqual(['github', 'geo']);
-    expect(effective.bypass).toContain('corp.example.com');
-    expect(d.data.proxy_env_detected).toBe(true);
+    expect(effective.bypass).toContain('localhost');
+    expect(d.data.proxy_env_detected).toBeUndefined();      // v2.44.3 移除环境变量探测字段
     // 表单用的原始值：全部为「从未保存」，不能拿生效值去回存
     expect(d.data.proxy_raw).toMatchObject({
       mode: null, url: '', scope: null, bypass: '', fallback: null,
@@ -123,7 +120,6 @@ describe('代理设置 API', () => {
     expect(putScope.status).toBe(200);
     expect(await repos.settings.get('proxy_scope')).toBe('github');
     expect(await repos.settings.get('proxy_url')).toBeNull();
-    vi.unstubAllEnvs();
   });
 
   it('直连模式下不提交代理地址时，已保存的手动地址不会被清空', async () => {

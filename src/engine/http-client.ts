@@ -2,7 +2,7 @@
  * 按用途区分的出网 HTTP 客户端（v2.44.0）
  *
  * 设计要点：
- *   - 每次调用按「设置项 > 环境变量 > 直连」解析代理策略，不污染全局 dispatcher；
+ *   - 每次调用按设置项解析代理策略，不污染全局 dispatcher；
  *   - 只有明确允许的用途才走代理（subscription / github / geo）；
  *     订阅抓取默认不代理，v2.44.2 起「未勾选的用途」连失败回退也不会走代理；
  *   - auto 模式下代理失败才回退直连（默认开启，超时不回退），
@@ -16,7 +16,6 @@ import {
   proxyUrlForTarget,
   readEffectiveProxyConfig,
   shouldBypass,
-  type EnvLike,
   type ProxyChoice,
   type ProxyPurpose,
   type SettingsReader,
@@ -96,10 +95,9 @@ function combineErrors(primary: unknown, fallback: unknown, fallbackLabel: strin
 
 export function createHttpClient(
   settings: SettingsReader,
-  options: { rawFetch?: typeof fetch; env?: EnvLike } = {}
+  options: { rawFetch?: typeof fetch } = {}
 ): HttpClient {
   const injectedFetch = options.rawFetch;
-  const env = options.env ?? process.env;
 
   async function request(
     url: string,
@@ -129,9 +127,9 @@ export function createHttpClient(
     url: string,
     init?: HttpFetchInit
   ): Promise<Response> {
-    const config = await readEffectiveProxyConfig(settings, env);
+    const config = await readEffectiveProxyConfig(settings);
     const choice: ProxyChoice = init?.choice ?? 'auto';
-    const targetProxy = proxyUrlForTarget(config, url, env);
+    const targetProxy = proxyUrlForTarget(config);
 
     let hostname = '';
     try {
@@ -188,8 +186,8 @@ export function createHttpClient(
 
     async testProxy(): Promise<ProxyTestResult> {
       const started = Date.now();
-      const config = await readEffectiveProxyConfig(settings, env);
-      const targetProxy = proxyUrlForTarget(config, TEST_PROXY_TARGET, env);
+      const config = await readEffectiveProxyConfig(settings);
+      const targetProxy = proxyUrlForTarget(config);
       if (!targetProxy) {
         return { ok: false, via: 'none', ms: 0, error: '未配置代理地址（当前为直连）' };
       }
@@ -217,11 +215,10 @@ export function createHttpClient(
 export async function describeProxyDecision(
   settings: SettingsReader,
   purpose: ProxyPurpose,
-  url: string,
-  env: EnvLike = process.env
+  url: string
 ): Promise<{ useProxy: boolean; proxyUrl: string | null }> {
-  const config = await readEffectiveProxyConfig(settings, env);
-  const proxyUrl = proxyUrlForTarget(config, url, env);
+  const config = await readEffectiveProxyConfig(settings);
+  const proxyUrl = proxyUrlForTarget(config);
   let hostname = '';
   try {
     hostname = new URL(url).hostname;

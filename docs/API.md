@@ -24,9 +24,9 @@
 ## 代理相关字段
 
 - 订阅对象包含 `useProxy`：`auto`（跟随全局设置，默认）、`on`（强制走代理）、`off`（强制直连）。创建、编辑、列表和单条查询都会返回该字段。
-- `GET /api/settings` 返回 `proxy_mode`（`off` / `env` / `manual`）、脱敏后的 `proxy_url`、`proxy_scope`（`subscription` / `github` / `geo` 数组）、`proxy_bypass`、`proxy_fallback`、`proxy_env_detected`。这些顶层字段是**生效值**（含推断模式、env 地址、合并后的 bypass），不应被表单原样回存。
+- `GET /api/settings` 返回 `proxy_mode`（`off` / `manual`）、脱敏后的 `proxy_url`、`proxy_scope`（`subscription` / `github` / `geo` 数组）、`proxy_bypass`、`proxy_fallback`。这些顶层字段是**生效值**（含合并后的 bypass），不应被表单原样回存。
 - `GET /api/settings` 另返回 `proxy_raw`（用户保存过的原始值，`null` 表示从未保存，地址已脱敏）与 `proxy_effective`（诊断用的生效值）。设置页表单应回显 `proxy_raw`，并只提交用户实际改动过的字段。
-- `proxy_scope` 从未保存时默认为 `['github', 'geo']`（订阅抓取默认直连）；`env` 模式同样按用途收窄，不再固定全部用途；显式保存为空数组表示全部直连（只有显式 `on` 的订阅走代理）。
+- `proxy_scope` 从未保存时默认为 `['github', 'geo']`（订阅抓取默认直连）；显式保存为空数组表示全部直连（只有显式 `on` 的订阅走代理）。
 - `PUT /api/settings` 接受上述代理字段，字段均可省略（只写传入的项）；`proxy_url` 只接受 `http://` / `https://`，已保存地址的密码占位符 `***` 可原样回存。
 - `POST /api/proxy/test` 使用已保存配置请求固定目标（`https://www.gstatic.com/generate_204`），返回 `ok`、`via`、`status`、`ms` 或 `error`；不接受任意 URL，避免 SSRF。
 

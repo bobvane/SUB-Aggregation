@@ -41,7 +41,7 @@ function createHarness(payload: SettingsPayload) {
     'settingAppName', 'settingSubUpdateInterval', 'settingNodeDropLatency',
     'settingProxyMode', 'settingProxyUrl', 'settingProxyBypass', 'settingProxyFallback',
     'proxyScopeSubscription', 'proxyScopeGithub', 'proxyScopeGeo',
-    'proxyUrlGroup', 'proxyScopeGroup', 'proxyScopeHint', 'proxyEnvHint',
+    'proxyUrlGroup', 'proxyScopeGroup', 'proxyScopeHint',
     'sidebarLogo', 'loginTitle',
   ];
   const elements: Record<string, ElementStub> = {};
@@ -80,17 +80,16 @@ const payload = (raw: Record<string, unknown>, overrides: SettingsPayload = {}):
   app_name: 'SUB-Aggregation',
   sub_update_interval: 24,
   node_drop_latency_ms: 2000,
-  proxy_mode: 'env',
-  proxy_url: 'http://user:***@env-proxy:8080/',
+  proxy_mode: 'manual',
+  proxy_url: 'http://user:***@proxy.example:8080/',
   proxy_scope: ['subscription', 'github', 'geo'],
   proxy_bypass: 'localhost,127.0.0.1,corp.example.com',
   proxy_fallback: true,
-  proxy_env_detected: true,
   proxy_raw: raw,
   proxy_effective: {
-    mode: 'env', url: 'http://user:***@env-proxy:8080/',
+    mode: 'manual', url: 'http://user:***@proxy.example:8080/',
     scope: ['github', 'geo'], bypass: 'localhost,127.0.0.1,corp.example.com',
-    fallback: true, env_detected: true,
+    fallback: true,
   },
   ...overrides,
 });
@@ -101,12 +100,12 @@ beforeAll(() => {
 });
 
 describe('设置页代理配置回环', () => {
-  it('env 模式 + 带密码环境变量：不改代理字段直接保存不会 400', async () => {
+  it('未保存代理配置时：表单显示空地址，保存不会提交代理字段', async () => {
     const h = createHarness(payload({
       mode: null, url: '', scope: null, bypass: '', fallback: null,
-    }));
+    }, { proxy_mode: 'off' }));
     await (h.sandbox.loadSettings as () => Promise<void>)();
-    // 表单回显的是原始值（空地址），不是 env 的脱敏地址
+    // 表单回显的是原始值（空地址），不是生效值
     expect(h.elements.settingProxyUrl.value).toBe('');
     expect(h.elements.settingProxyBypass.value).toBe('');
 
@@ -154,11 +153,11 @@ describe('设置页代理配置回环', () => {
     expect(h.puts[0].proxy_url).toBeUndefined();
   });
 
-  it('env 模式可编辑用途，直连模式禁用用途', async () => {
-    const envHarness = createHarness(payload({ mode: null, url: '', scope: null, bypass: '', fallback: null }));
-    await (envHarness.sandbox.loadSettings as () => Promise<void>)();
-    expect(envHarness.elements.proxyScopeGithub.disabled).toBe(false);
-    expect(String(envHarness.elements.proxyScopeHint.textContent)).toContain('用途仍可单独勾选');
+  it('manual 模式可编辑用途，直连模式禁用用途', async () => {
+    const manualHarness = createHarness(payload({ mode: null, url: '', scope: null, bypass: '', fallback: null }));
+    await (manualHarness.sandbox.loadSettings as () => Promise<void>)();
+    expect(manualHarness.elements.proxyScopeGithub.disabled).toBe(false);
+    expect(String(manualHarness.elements.proxyScopeHint.textContent)).toContain('未勾选的用途始终直连');
 
     const offHarness = createHarness(payload({
       mode: 'off', url: '', scope: null, bypass: '', fallback: null,

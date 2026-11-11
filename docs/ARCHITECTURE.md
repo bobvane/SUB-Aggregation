@@ -40,4 +40,4 @@
 
 订阅常规更新按用户设置的小时数执行。失败订阅会在 1、2、4 小时后有限重试，且每轮只请求到期的失败订阅；达到重试上限后等待下一次常规更新或用户手动重试。失败原因、最近失败时间和下次重试时间保存在订阅记录中，成功更新时清除。
 
-出网请求统一经过 `src/engine/http-client.ts`：按用途（订阅 / GitHub / 地理查询）读取 `src/engine/proxy-config.ts` 的代理策略，每次请求显式选择 `ProxyAgent` 或直连 `Agent`，不依赖进程级 `NODE_USE_ENV_PROXY`。默认策略为「未配置即直连」；存在代理环境变量且未保存设置时回退到环境变量模式。订阅抓取在 `src/engine/fetcher.ts` 中支持单条订阅的 `auto/on/off` 覆盖，并在自动模式下支持失败回退（超时不回退）。节点 TCP/TLS 探测位于 `src/services/node-probe.service.ts`，始终使用裸 `net.connect` / `tls.connect`，不经过 `http-client` 或全局 `fetch`。
+出网请求统一经过 `src/engine/http-client.ts`：按用途（订阅 / GitHub / 地理查询）读取 `src/engine/proxy-config.ts` 的代理策略，每次请求显式选择 `ProxyAgent` 或直连 `Agent`。默认策略为「未配置即直连」，代理地址只来自设置页保存的 `proxy_url`（v2.44.3 起不再读取代理环境变量）。订阅抓取在 `src/engine/fetcher.ts` 中支持单条订阅的 `auto/on/off` 覆盖，并在自动模式下支持失败回退（超时不回退）。节点 TCP/TLS 探测位于 `src/services/node-probe.service.ts`，始终使用裸 `net.connect` / `tls.connect`，不经过 `http-client` 或全局 `fetch`。

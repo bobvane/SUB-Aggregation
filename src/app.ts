@@ -13,6 +13,7 @@ import { createCatalogSyncService } from '@/services/catalog-sync.service';
 import { deduplicateNodes } from '@/parser';
 import { fetchSubscription, type RawFetch } from '@/engine/fetcher';
 import { createHttpClient, type HttpClient } from '@/engine/http-client';
+import { migrateLegacyEnvProxy } from '@/engine/proxy-config';
 import type { SubscriptionFetchOptions } from '@/engine/fetcher';
 import HTML from '@/html';
 
@@ -22,7 +23,7 @@ export interface Env {
   SESSION_SECRET?: string;
   /** GitHub Personal Access Token（提升 API 限流至 5000/h，用于规则目录同步） */
   GITHUB_TOKEN?: string;
-  /** 代理环境变量（HTTP_PROXY / HTTPS_PROXY / NO_PROXY 等）由 index signature 透传 */
+  /** 运行时附加字段（兼容测试与将来扩展） */
   [key: string]: string | undefined;
 }
 
@@ -60,6 +61,18 @@ function createSubscriptionFetcher(http: HttpClient): SubscriptionFetcher {
 export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
   const repos = createRepositories(kv);
 
+  // v2.44.3：一次性把旧部署的环境变量代理导入为手动代理，避免升级后静默失效。
+  try {
+    const migrated = await migrateLegacyEnvProxy(repos.settings);
+    if (migrated === 'imported') {
+      console.warn('[proxy] 检测到旧的 HTTP_PROXY/HTTPS_PROXY，已导入为「手动指定代理」。');
+    } else if (migrated === 'disabled') {
+      console.warn('[proxy] 旧的环境变量代理模式已停用，当前为直连。');
+    }
+  } catch (err) {
+    console.warn('[proxy] 旧代理配置迁移失败：', (err as Error).message);
+  }
+
   // 首次部署初始化
   try {
     const existing = await kv.get('admin:hash');
@@ -89,7 +102,7 @@ export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
     return null;
   }, { get: (key) => kv.get(key), put: (key, value) => kv.put(key, value) });
 
-  const http = createHttpClient(repos.settings, { env });
+  const http = createHttpClient(repos.settings);
   const subscriptionFetcher = createSubscriptionFetcher(http);
 
   const subscriptions = createSubscriptionService(
@@ -204,7 +217,7 @@ export async function runScheduled(
   subscriptionFetcher?: SubscriptionFetcher
 ): Promise<void> {
   const repos = createRepositories(kv);
-  const http = createHttpClient(repos.settings, { env });
+  const http = createHttpClient(repos.settings);
   const fetchSub = subscriptionFetcher ?? createSubscriptionFetcher(http);
   const geoFetch = http.asFetch('geo');
 

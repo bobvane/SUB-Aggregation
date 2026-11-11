@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Agent, ProxyAgent } from 'undici';
 import { createHttpClient, resetHttpAgents, DEFAULT_TIMEOUT_MS } from '@/engine/http-client';
 import { SUBSCRIPTION_FETCH_TIMEOUT_MS } from '@/engine/fetcher';
@@ -21,11 +21,14 @@ beforeEach(() => {
   resetHttpAgents();
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('http-client 代理选择', () => {
   it('manual + scope 命中时使用 ProxyAgent', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response('ok');
@@ -44,7 +47,6 @@ describe('http-client 代理选择', () => {
       proxy_url: 'http://127.0.0.1:7890',
       proxy_scope: 'github',
     }), {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response('ok');
@@ -59,7 +61,6 @@ describe('http-client 代理选择', () => {
   it('bypass 命中时直连', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response('ok');
@@ -70,10 +71,10 @@ describe('http-client 代理选择', () => {
     expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
   });
 
-  it('env 模式使用环境变量代理', async () => {
+  it('v2.44.3 起环境变量不再影响代理选择', async () => {
+    vi.stubEnv('HTTPS_PROXY', 'http://env-proxy:8080');
     const calls: Captured[] = [];
-    const client = createHttpClient(settings({ proxy_mode: 'env' }), {
-      env: { HTTPS_PROXY: 'http://env-proxy:8080' },
+    const client = createHttpClient(settings({ proxy_mode: 'off' }), {
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response('ok');
@@ -81,7 +82,8 @@ describe('http-client 代理选择', () => {
     });
 
     await client.fetch('github', 'https://api.github.com/');
-    expect(calls[0].init.dispatcher).toBeInstanceOf(ProxyAgent);
+    expect(calls[0].init.dispatcher).toBeInstanceOf(Agent);
+    expect(calls[0].init.dispatcher).not.toBeInstanceOf(ProxyAgent);
   });
 });
 
@@ -89,7 +91,6 @@ describe('http-client 失败回退', () => {
   it('auto 策略下代理失败会回退直连', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         if (calls.length === 1) {
@@ -109,7 +110,6 @@ describe('http-client 失败回退', () => {
   it('显式 on 不回退，错误包含完整 cause 链', async () => {
     let calls = 0;
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async () => {
         calls++;
         throw new TypeError('fetch failed', {
@@ -128,7 +128,6 @@ describe('http-client 失败回退', () => {
   it('显式 off 即使配置了代理也只直连', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response('ok');
@@ -143,7 +142,6 @@ describe('http-client 失败回退', () => {
   it('超时不回退（避免等待时间翻倍）', async () => {
     let calls = 0;
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async () => {
         calls++;
         const err = new Error('The operation was aborted due to timeout');
@@ -158,7 +156,6 @@ describe('http-client 失败回退', () => {
 
   it('强制 on 但未配置代理时直接报错', async () => {
     const client = createHttpClient(settings({ proxy_mode: 'off' }), {
-      env: {},
       rawFetch: async () => new Response('ok'),
     });
 
@@ -170,7 +167,6 @@ describe('http-client 失败回退', () => {
 describe('http-client 测试代理', () => {
   it('未配置代理时返回 via=none', async () => {
     const client = createHttpClient(settings({ proxy_mode: 'off' }), {
-      env: {},
       rawFetch: async () => new Response('ok'),
     });
     const result = await client.testProxy();
@@ -181,7 +177,6 @@ describe('http-client 测试代理', () => {
   it('代理请求成功时返回 ok 与状态码', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         return new Response(null, { status: 204 });
@@ -197,7 +192,6 @@ describe('http-client 测试代理', () => {
 
   it('代理失败时返回错误信息而不是抛出', async () => {
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async () => {
         throw new TypeError('fetch failed', { cause: new Error('ECONNREFUSED') });
       },
@@ -224,7 +218,7 @@ describe('v2.44.2 订阅默认直连与回退边界', () => {
       proxy_mode: 'manual',
       proxy_url: 'http://127.0.0.1:7890',
       proxy_fallback: '1',
-    }), { env: {}, rawFetch });
+    }), { rawFetch });
 
     await client.fetch('subscription', 'https://example.com/sub');
     expect(calls).toHaveLength(1);
@@ -236,10 +230,12 @@ describe('v2.44.2 订阅默认直连与回退边界', () => {
     expect(calls[1].init.dispatcher).toBeInstanceOf(ProxyAgent);
   });
 
-  it('env 模式默认用途也不含订阅抓取', async () => {
+  it('manual 模式默认用途也不含订阅抓取', async () => {
     const { calls, rawFetch } = capture();
-    const client = createHttpClient(settings({ proxy_mode: 'env' }), {
-      env: { HTTPS_PROXY: 'http://env-proxy:8080' },
+    const client = createHttpClient(settings({
+      proxy_mode: 'manual',
+      proxy_url: 'http://127.0.0.1:7890',
+    }), {
       rawFetch,
     });
 
@@ -257,7 +253,6 @@ describe('v2.44.2 订阅默认直连与回退边界', () => {
       proxy_scope: 'github,geo',
       proxy_fallback: '1',
     }), {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         throw new TypeError('fetch failed', { cause: new Error('ECONNREFUSED') });
@@ -273,7 +268,6 @@ describe('v2.44.2 订阅默认直连与回退边界', () => {
   it('命中 bypass 且直连失败时不再回退代理', async () => {
     const calls: Captured[] = [];
     const client = createHttpClient(manualSettings, {
-      env: {},
       rawFetch: async (url, init) => {
         calls.push({ url: String(url), init: (init ?? {}) as Captured['init'] });
         throw new TypeError('fetch failed', { cause: new Error('ECONNREFUSED') });
@@ -298,7 +292,6 @@ describe('http-client 超时注入', () => {
   it('注入的 signal 会在超时后中止', async () => {
     let signal: AbortSignal | undefined;
     const client = createHttpClient(settings({ proxy_mode: 'off' }), {
-      env: {},
       rawFetch: async (_url, init) => {
         signal = (init as RequestInit)?.signal ?? undefined;
         return new Response('ok');

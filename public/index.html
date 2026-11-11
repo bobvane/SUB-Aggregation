@@ -775,16 +775,14 @@ th, td { font-size: 13px; }
         <label>代理模式</label>
         <select id="settingProxyMode" onchange="onProxyModeChange()">
           <option value="off">直连（不使用代理）</option>
-          <option value="env">跟随环境变量（HTTP_PROXY / HTTPS_PROXY / NO_PROXY）</option>
           <option value="manual">手动指定代理地址</option>
         </select>
         <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">节点测活与测速始终直连（裸 TCP/TLS），不经过这里的代理。</div>
-        <div class="hint" style="margin-top:4px;color:var(--muted-foreground);font-size:12px" id="proxyEnvHint"></div>
       </div>
       <div class="form-group" id="proxyUrlGroup">
         <label>代理地址</label>
         <input id="settingProxyUrl" placeholder="http://127.0.0.1:7890" autocomplete="off">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">支持 http:// 与 https://，可带用户名密码；保存后界面以 *** 显示密码。这里只保存手动地址，环境变量模式由容器提供地址。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">支持 http:// 与 https://，可带用户名密码；保存后界面以 *** 显示密码。代理地址只保存在这里。</div>
       </div>
       <div class="form-group" id="proxyScopeGroup">
         <label>使用代理的用途</label>
@@ -806,7 +804,7 @@ th, td { font-size: 13px; }
       <div class="form-group">
         <label>绕过代理的地址</label>
         <input id="settingProxyBypass" placeholder="localhost,127.0.0.1,192.168.0.0/16">
-        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">逗号分隔，支持主机名、域名后缀、IPv4 CIDR；这里只填附加项，会与内置默认列表及容器 NO_PROXY 自动合并。</div>
+        <div class="hint" style="margin-top:6px;color:var(--muted-foreground);font-size:12px">逗号分隔，支持主机名、域名后缀、IPv4 CIDR；这里只填附加项，会与内置默认列表自动合并。</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" onclick="saveSettings()">💾 保存</button>
@@ -2839,13 +2837,6 @@ async function loadSettings() {
     for (const purpose of ['subscription', 'github', 'geo']) {
       document.getElementById(PROXY_SCOPE_IDS[purpose]).checked = scope.includes(purpose);
     }
-    const envHint = document.getElementById('proxyEnvHint');
-    if (envHint) {
-      const effectiveUrl = d.proxy_effective && d.proxy_effective.url;
-      envHint.textContent = d.proxy_env_detected
-        ? `检测到容器环境变量代理${effectiveUrl ? '（当前生效地址：' + effectiveUrl + '）' : ''}；环境变量只提供地址，用途仍由下方勾选决定。`
-        : '';
-    }
     proxyFormSnapshot = proxyFormValues();
     onProxyModeChange();
   } catch {}
@@ -2853,7 +2844,7 @@ async function loadSettings() {
   searchCatalog(); // 默认显示前 100 个分类
 }
 
-/** 代理模式联动：地址仅手动模式可编辑；用途在 env / manual 下都可配置 */
+/** 代理模式联动：地址仅手动模式可编辑；用途在手动模式下可配置 */
 function onProxyModeChange() {
   const mode = document.getElementById('settingProxyMode')?.value || 'off';
   const manual = mode === 'manual';
@@ -2869,9 +2860,7 @@ function onProxyModeChange() {
   group.style.opacity = scopeEditable ? '1' : '.55';
   document.getElementById('proxyScopeHint').textContent = manual
     ? '勾选需要走代理的用途；未勾选的用途始终直连（包括失败回退）。'
-    : mode === 'env'
-      ? '环境变量只提供代理地址；用途仍可单独勾选，未勾选的用途始终直连。'
-      : '直连模式下不会使用代理，本项不生效。';
+    : '直连模式下不会使用代理，本项不生效。';
 }
 
 async function testProxy() {
