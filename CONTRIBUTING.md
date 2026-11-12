@@ -62,8 +62,8 @@ chore: root directory cleanup
 
 ### 当前版本
 
-- 当前正式版本：`2.46.2`
-- 下一次正式发布：`2.46.3`
+- 当前正式版本：`2.47.0`
+- 下一次正式发布：`2.47.1`
 
 ### 发布前必须核对的所有版本承载位置
 
@@ -85,8 +85,8 @@ chore: root directory cleanup
 - 正式发布只由**推送版本 tag** 触发：
 
   ```bash
-  git tag -a v2.46.2 -m "Release v2.46.2"
-  git push origin v2.46.2
+  git tag -a v2.47.0 -m "Release v2.47.0"
+  git push origin v2.47.0
   ```
 
 - 工作流会逐项校验：tag 形如 `vX.Y.Z`、等于 `package.json` 版本、提交在 `main` 上、版本严格递增、同版本镜像若已存在则其 OCI revision 必须等于该提交。**任一不满足即拒绝发布**（宁可不发，也不覆盖已发布版本）。

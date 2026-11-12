@@ -65,14 +65,15 @@ describe('节点列表静态结构（源码 + 生成物）', () => {
   it('锁定不再是图标按钮，表头也没有独立的「锁定」列', () => {
     expect(source).not.toContain('>🔒</button>');
     expect(source).not.toContain('>🔓</button>');
-    expect(source).toContain('<thead><tr><th>名称</th>');
+    expect(source).toMatch(/<thead><tr>\s*<th[^>]*>名称<\/th>/);
     expect(source).not.toContain('>锁定</th>');
   });
 
   it('操作列含锁定/解锁、移出配置/恢复、复制三个文字按钮', () => {
     expect(source).toContain("'解锁' : '锁定'");
     expect(source).toContain("'恢复' : '移出配置'");
-    expect(source).toContain('📋 复制');
+    // 复制改成纯图标按钮（线性图标 + title 提示），文字不再带 emoji
+    expect(source).toContain('title="复制节点链接"');
     expect(source).toContain('toggleNodeExcluded(');
     expect(source).toContain('node-action-wrap');
   });
@@ -87,7 +88,8 @@ describe('节点列表静态结构（源码 + 生成物）', () => {
   });
 
   it('说明文案解释互斥语义，不再有勾选框残留', () => {
-    expect(source).toContain('锁定与移出配置互斥');
+    // v2.47 提示条改写成三段式说明，互斥语义仍然写明
+    expect(source).toContain('锁定与移出互斥');
     expect(source).not.toContain('💡 勾选 = 该节点会进入输出配置');
   });
 });

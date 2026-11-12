@@ -225,6 +225,10 @@ export interface OutputStatus {
     ingested: number;
     /** 真正进入输出配置的节点数 */
     inOutput: number;
+    /** 进配置的节点里被「锁定」豁免的节点数 */
+    locked: number;
+    /** 进配置的节点覆盖的地区（国家码）数量 */
+    regions: number;
     /** 被排除的节点数，按互斥原因分类 */
     excluded: {
       subscriptionDisabled: number;
@@ -663,14 +667,29 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
         dropped: 0,
       };
       let inOutput = 0;
+      // v2.47.0：输出页统计卡需要「锁定节点」「覆盖地区」，与 inOutput 同口径一次算出
+      let lockedInOutput = 0;
+      const regions = new Set<string>();
       for (const n of dedupEnabled) {
         const fp = nodeFingerprint(n);
         // 与 getNodes() 完全一致的优先级：锁定豁免 → removed → 禁用 → 抛弃
-        if (locked.has(fp)) { inOutput++; continue; }
-        if (n.removed_at) { excluded.removed++; continue; }
-        if (disabled.has(fp)) { excluded.disabled++; continue; }
-        if (dropped.has(fp)) { excluded.dropped++; continue; }
-        inOutput++;
+        if (locked.has(fp)) {
+          inOutput++;
+          lockedInOutput++;
+        } else if (n.removed_at) {
+          excluded.removed++;
+          continue;
+        } else if (disabled.has(fp)) {
+          excluded.disabled++;
+          continue;
+        } else if (dropped.has(fp)) {
+          excluded.dropped++;
+          continue;
+        } else {
+          inOutput++;
+        }
+        const country = n.metadata?.country;
+        if (country) regions.add(country);
       }
 
       return {
@@ -678,7 +697,7 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
         snapshot,
         stale: !snapshot || snapshot.version !== dataVersion,
         lastGeneratedAt,
-        nodes: { ingested: dedupAll.length, inOutput, excluded },
+        nodes: { ingested: dedupAll.length, inOutput, locked: lockedInOutput, regions: regions.size, excluded },
       };
     },
   };

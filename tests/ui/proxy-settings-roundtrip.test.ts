@@ -16,9 +16,20 @@ type ElementStub = {
   value: string;
   checked: boolean;
   disabled: boolean;
+  hidden: boolean;
   textContent: string;
   innerHTML: string;
-  style: Record<string, string>;
+  title: string;
+  /** 滑杆填充用 el.style.setProperty('--pct', ...)，纯对象不够用 */
+  style: Record<string, string> & {
+    setProperty: (k: string, v: string) => void;
+    removeProperty: (k: string) => void;
+    getPropertyValue: (k: string) => string;
+  };
+  /** bindSettingsControls 会写 dataset.bound，并挂 input 监听 */
+  dataset: Record<string, string>;
+  classList: { add: () => void; remove: () => void; toggle: () => void; contains: () => boolean };
+  addEventListener: () => void;
 };
 
 type SettingsPayload = Record<string, unknown>;
@@ -49,30 +60,52 @@ const ELEMENT_IDS = [
 function createHarness(payload: SettingsPayload) {
   const elements: Record<string, ElementStub> = {};
   for (const id of ELEMENT_IDS) {
-    elements[id] = { value: '', checked: false, disabled: false, textContent: '', innerHTML: '', style: {} };
+    const style = {
+      setProperty(k: string, v: string) { (style as Record<string, string>)[k] = v; },
+      removeProperty(k: string) { delete (style as Record<string, string>)[k]; },
+      getPropertyValue(k: string) { return (style as Record<string, string>)[k] ?? ''; },
+    } as ElementStub['style'];
+    elements[id] = {
+      value: '', checked: false, disabled: false, hidden: false,
+      textContent: '', innerHTML: '', title: '', style, dataset: {},
+      classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+      addEventListener: () => {},
+    };
   }
   elements.settingAppName.value = 'SUB-Aggregation';
   elements.settingSubUpdateInterval.value = '24';
   elements.settingNodeDropLatency.value = '2000';
 
-  /** 从 renderProxyTargets 生成的 HTML 里读出某个目标当前被选中的模式 */
+  /**
+   * v2.47 起代理目标改成三段按钮（`.segmented[data-key]` 内一组 `button[data-val]`，
+   * 选中项带 `class="active"`），不再是 radio。这里按新标记读出当前选中值。
+   */
   function checkedTarget(key: string): string | null {
-    const re = new RegExp(`name="proxyTarget-${key}" value="(\\w+)"( checked)?`, 'g');
     const html = elements.proxyTargetsList.innerHTML;
+    const seg = new RegExp(`data-key="${key}"[^>]*>([\\s\\S]*?)</div>`).exec(html);
+    if (!seg) return null;
+    const re = /<button[^>]*>/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) !== null) {
-      if (m[2]) return m[1];
+    while ((m = re.exec(seg[1])) !== null) {
+      const tag = m[0].replace(/\s+/g, ' ');
+      const val = /data-val="(\w+)"/.exec(tag);
+      if (val && /class="[^"]*active/.test(tag)) return val[1];
     }
     return null;
   }
 
-  /** 模拟用户点选某个目标的模式：改写渲染出来的 HTML */
+  /** 模拟用户点选某个目标的模式：把 active 类挪到目标按钮上 */
   function selectTarget(key: string, mode: string) {
-    const re = new RegExp(`(name="proxyTarget-${key}" value="(\\w+)")( checked)?`, 'g');
-    elements.proxyTargetsList.innerHTML = elements.proxyTargetsList.innerHTML.replace(
-      re,
-      (_all, head: string, val: string) => (val === mode ? `${head} checked` : head),
-    );
+    const html = elements.proxyTargetsList.innerHTML;
+    const re = new RegExp(`(data-key="${key}"[^>]*>)([\\s\\S]*?)(</div>)`);
+    elements.proxyTargetsList.innerHTML = html.replace(re, (_all, head: string, body: string, tail: string) => {
+      const next = body.replace(/<button([^>]*)>/g, (_tag, attrs: string) => {
+        const clean = attrs.replace(/\s*class="[^"]*active[^"]*"/, '');
+        const val = /data-val="(\w+)"/.exec(clean);
+        return val && val[1] === mode ? `<button${clean} class="active">` : `<button${clean}>`;
+      });
+      return head + next + tail;
+    });
   }
 
   const puts: Array<Record<string, unknown>> = [];
@@ -84,10 +117,14 @@ function createHarness(payload: SettingsPayload) {
       title: '',
       getElementById: (id: string) => elements[id] ?? null,
       querySelector: (selector: string) => {
-        const m = /^input\[name="proxyTarget-(\w+)"\]:checked$/.exec(selector);
+        // readProxyTargets 通过 `#proxyTargetsList .segmented[data-key="x"]` 找选中项
+        const m = /^#proxyTargetsList \.segmented\[data-key="(\w+)"\]$/.exec(selector);
         if (!m) return null;
         const mode = checkedTarget(m[1]);
-        return mode ? { value: mode } : null;
+        return {
+          querySelector: (sel: string) =>
+            sel === 'button[data-val].active' && mode ? { dataset: { val: mode } } : null,
+        };
       },
     },
     api: async (path: string, options?: { method?: string; body?: string }) => {

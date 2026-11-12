@@ -33,12 +33,13 @@ beforeAll(() => {
 
 describe('界面版本号显示', () => {
   it('侧栏与登录页版本号占位符不硬编码，生成物同步', () => {
-    expect(source).toContain('<span>SUB-Aggregation v<span id="appVersion">-</span></span>');
+    // v2.47 起侧栏是固定字标 SUB·Aggregation + 独立的版本行
+    expect(source).toContain('<div class="vc-ver">v<span id="appVersion">-</span></div>');
     expect(source).toContain('<span>v<span id="loginVersion">-</span></span>');
     // 占位符里不能出现写死的数字版本
     expect(source).not.toMatch(/<span id="appVersion">\d+\.\d+\.\d+<\/span>/);
     expect(source).not.toMatch(/<span id="loginVersion">\d+\.\d+\.\d+<\/span>/);
-    expect(generated).toContain('<span>SUB-Aggregation v<span id="appVersion">-</span></span>');
+    expect(generated).toContain('<div class="vc-ver">v<span id="appVersion">-</span></div>');
     expect(generated).toContain("api('/meta', { cache: 'no-store' })");
   });
 
