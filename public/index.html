@@ -1448,8 +1448,36 @@ tbody tr:hover { background: var(--surface2); }
 
 .list-toolbar .search-box input, .list-toolbar select.field-auto { height: 40px; }
 
-.nd-table-card { padding: 0; margin: 0; overflow: hidden; }
-.nd-table-scroll { border-radius: 0; }
+/* 节点表不分页：视窗固定为 12 个节点的高度（表头 + 12 行），滚轮滚动 + 右侧指示块拖拽。
+   行高与表头高由 JS 首次渲染后校准并写进这两个变量，避免字体加载、副标题
+   （已锁定 / 已移出配置）把基准撑高导致视窗高度跳动。 */
+.nd-table-card { position: relative; --nd-head-h: 46px; --nd-row-h: 83px; padding: 0; margin: 0; overflow: hidden; }
+.nd-table-scroll {
+  border-radius: 0;
+  height: calc(var(--nd-head-h) + var(--nd-rows, 12) * var(--nd-row-h));
+  overflow-y: auto; overflow-x: auto;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.nd-table-scroll::-webkit-scrollbar { width: 0; height: 0; }
+/* 右侧自绘滚动指示块：原生纵向滚动条已隐藏，滚轮与拖拽都作用于同一个 scrollTop */
+.nd-scroll-rail {
+  position: absolute; right: 4px; top: calc(var(--nd-head-h) + 2px); bottom: 2px;
+  width: 8px; border-radius: 999px; opacity: .55;
+  transition: opacity .18s ease; touch-action: none; z-index: 2;
+}
+.nd-scroll-rail[hidden] { display: none; }
+/* 常显淡色让用户知道右边可以拖，鼠标进入表格或拖动时加深 */
+.nd-table-card:hover .nd-scroll-rail, .nd-scroll-rail.is-drag { opacity: 1; }
+.nd-scroll-thumb {
+  position: absolute; top: 0; left: 0; right: 0; min-height: 28px; border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 20%, transparent);
+  cursor: grab; transition: background .16s ease;
+}
+.nd-scroll-thumb:hover { background: color-mix(in srgb, var(--fg) 34%, transparent); }
+.nd-scroll-thumb.is-drag { background: color-mix(in srgb, var(--fg) 44%, transparent); cursor: grabbing; }
+/* 无数据时不撑满 12 行高度，避免大片空白 */
+.nd-table-card.is-empty .nd-table-scroll { height: auto; }
+.nd-table-card.is-empty .nd-scroll-rail { display: none; }
 
 #nodesTable.nd-table { min-width: 960px; font-size: 14px; }
 #nodesTable.nd-table thead th {
@@ -1513,23 +1541,7 @@ tbody tr:hover { background: var(--surface2); }
 .nd-ibtn:hover { background: var(--surface2); color: var(--accent); }
 
 .nd-empty { padding: 64px 0; text-align: center; font-size: 14px; color: var(--muted); }
-.nd-pager {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 20px; border-top: 1px solid var(--line);
-  font-size: 12px; color: var(--muted);
-}
-.nd-pager-btns { display: flex; align-items: center; gap: 6px; }
-.nd-pg {
-  display: grid; place-items: center; height: 32px; min-width: 32px; padding: 0 8px;
-  border: 1px solid transparent; border-radius: 8px; background: transparent;
-  color: var(--muted); font: inherit; font-size: 12px; font-weight: 500;
-  cursor: pointer; transition: all .16s ease;
-}
-.nd-pg:hover { background: var(--surface2); color: var(--fg); }
-.nd-pg.is-nav { border-color: var(--line); }
-.nd-pg.is-cur { background: var(--brand); color: #fff; box-shadow: 0 4px 14px -6px rgba(99,102,241,.9); }
-.nd-pg:disabled { opacity: .3; cursor: default; }
-.nd-pg:disabled:hover { background: transparent; color: var(--muted); }
+/* 分页条已移除：节点表改为固定 12 行视窗 + 滚动（见 .nd-table-scroll / .nd-scroll-rail） */
 
 /* 健康历史弹层（对齐 Modal · Sparkline） */
 .nd-hist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -2316,7 +2328,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
     </div>
 
     <div class="card nd-table-card fade-up">
-      <div class="table-scroll nd-table-scroll"><table id="nodesTable" class="nd-table">
+      <div class="table-scroll nd-table-scroll" id="nodesScroll"><table id="nodesTable" class="nd-table">
         <thead><tr>
           <th class="nd-c1">名称</th>
           <th>协议</th>
@@ -2329,9 +2341,10 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
         <tbody id="nodesTableBody"></tbody>
       </table></div>
       <div class="nd-empty" id="nodesEmpty" style="display:none">暂无节点数据</div>
-      <div class="nd-pager">
-        <span id="nodePageInfo">第 1 / 1 页</span>
-        <div class="nd-pager-btns" id="nodePagerBtns"></div>
+      <!-- 自绘滚动指示块：可拖动，也可点击轨道跳转 -->
+      <div class="nd-scroll-rail" id="nodesScrollRail" role="scrollbar" aria-controls="nodesScroll"
+           aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+        <div class="nd-scroll-thumb" id="nodesScrollThumb"></div>
       </div>
     </div>
   </div>
@@ -2947,7 +2960,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
 <!-- @inline public/vendor/qrcode.min.js -->
 </script>
 <script>// ============ State ============
-let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodePage: 1, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
+let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
 
 const LIST_PREFS_KEY = 'sub-aggregation-list-view';
 function readListPrefs() {
@@ -4101,7 +4114,7 @@ function openNodeFilter(filter) {
   document.getElementById('nodeSearch').value = '';
   document.getElementById('nodeHealthFilter').value = filter;
   document.getElementById('nodeProtocolFilter').value = 'all';
-  state.nodePage = 1;
+  scrollNodesToTop();
   syncSeg('nodeHealthSeg', filter);
   saveListPrefs();
   switchPage('nodes');
@@ -4612,7 +4625,8 @@ function sortNodes() {
 }
 
 // ===== 节点列表（1:1 对齐皮肤 Nodes.tsx） =====
-const NODE_PAGE_SIZE = 10;
+// 不分页：表格视窗固定显示 12 个节点，其余靠鼠标滚轮或右侧指示块拖动查看。
+const NODE_VISIBLE_ROWS = 12;
 const NODE_TIP_KEY = 'sub-aggregation-node-tip';
 const ND_ICON_UP = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>';
 const ND_ICON_DOWN = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>';
@@ -4647,13 +4661,14 @@ function dismissNodeTip() {
 function setNodeFilter(v) {
   const sel = document.getElementById('nodeHealthFilter');
   if (sel) sel.value = v;
-  state.nodePage = 1;
+  scrollNodesToTop();
   filterNodes();
 }
 
-function gotoNodePage(p) {
-  state.nodePage = p;
-  renderNodes();
+// 筛选 / 排序后回到列表顶部（原来靠 state.nodePage = 1 重置，现在靠 scrollTop）
+function scrollNodesToTop() {
+  const sc = document.getElementById('nodesScroll');
+  if (sc) sc.scrollTop = 0;
 }
 
 // 节点名首个旗帜 emoji 拆出来放进方块，名字本身不带旗帜
@@ -4682,27 +4697,94 @@ function latencyCell(n) {
     + `<span class="nd-lat-num" style="color:${c}">${l}<i>ms</i></span></div>`;
 }
 
-function renderNodePager(cur, pages) {
-  const box = document.getElementById('nodePagerBtns');
-  if (!box) return;
-  let html = `<button type="button" class="nd-pg is-nav" onclick="gotoNodePage(${cur - 1})"${cur <= 1 ? ' disabled' : ''} aria-label="上一页">${ND_ICON_CHEV_L}</button>`;
-  const nums = [];
-  if (pages <= 7) {
-    for (let i = 1; i <= pages; i++) nums.push(i);
-  } else {
-    nums.push(1);
-    const from = Math.max(2, cur - 1), to = Math.min(pages - 1, cur + 1);
-    if (from > 2) nums.push('...');
-    for (let i = from; i <= to; i++) nums.push(i);
-    if (to < pages - 1) nums.push('...');
-    nums.push(pages);
+// 视窗校准：把表头高度与「标准行高」（没有副标题的行）写进 .nd-table-card 的
+// CSS 变量，表格高度 = 表头 + 12 行。只在数值变化超过 0.5px 时写入，避免反复重排。
+function syncNodeScrollMetrics() {
+  const card = document.querySelector('.nd-table-card');
+  const table = document.getElementById('nodesTable');
+  if (!card || !table) return;
+  card.style.setProperty('--nd-rows', String(NODE_VISIBLE_ROWS));
+  const thead = table.querySelector('thead');
+  if (thead) {
+    const h = +thead.getBoundingClientRect().height.toFixed(2);
+    if (h > 0 && Math.abs(h - (+card.dataset.headH || 0)) > 0.5) {
+      card.style.setProperty('--nd-head-h', h + 'px');
+      card.dataset.headH = String(h);
+    }
   }
-  nums.forEach((v) => {
-    if (v === '...') { html += '<span class="nd-pg" aria-hidden="true">…</span>'; return; }
-    html += `<button type="button" class="nd-pg${v === cur ? ' is-cur' : ''}" onclick="gotoNodePage(${v})">${v}</button>`;
+  const rows = [...table.querySelectorAll('tbody tr')];
+  const plain = rows.find((tr) => !tr.querySelector('.nd-nm-sub')) || rows[0];
+  if (plain) {
+    const h = +plain.getBoundingClientRect().height.toFixed(2);
+    if (h > 0 && Math.abs(h - (+card.dataset.rowH || 0)) > 0.5) {
+      card.style.setProperty('--nd-row-h', h + 'px');
+      card.dataset.rowH = String(h);
+    }
+  }
+}
+
+// 把滚动容器的 scrollTop 映射到右侧指示块的位置与长度
+function syncNodeScrollbar() {
+  const sc = document.getElementById('nodesScroll');
+  const rail = document.getElementById('nodesScrollRail');
+  const thumb = document.getElementById('nodesScrollThumb');
+  if (!sc || !rail || !thumb) return;
+  const max = sc.scrollHeight - sc.clientHeight;
+  if (max <= 1) { rail.hidden = true; return; }
+  rail.hidden = false;
+  const railH = rail.clientHeight;
+  if (railH <= 0) return;
+  const th = Math.max(28, Math.round(railH * (sc.clientHeight / sc.scrollHeight)));
+  const travel = Math.max(0, railH - th);
+  thumb.style.height = th + 'px';
+  thumb.style.transform = `translateY(${((sc.scrollTop / max) * travel).toFixed(1)}px)`;
+  rail.setAttribute('aria-valuenow', String(Math.round((sc.scrollTop / max) * 100)));
+}
+
+// 只绑定一次：滚轮走原生滚动，拖动指示块与点击轨道改写同一个 scrollTop
+function bindNodeScrollbar() {
+  const sc = document.getElementById('nodesScroll');
+  const rail = document.getElementById('nodesScrollRail');
+  const thumb = document.getElementById('nodesScrollThumb');
+  if (!sc || !rail || !thumb || rail.dataset.bound === '1') return;
+  rail.dataset.bound = '1';
+  sc.addEventListener('scroll', syncNodeScrollbar, { passive: true });
+
+  let drag = null;
+  thumb.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    drag = { y: e.clientY, top: sc.scrollTop };
+    thumb.classList.add('is-drag');
+    rail.classList.add('is-drag');
+    try { thumb.setPointerCapture(e.pointerId); } catch { /* 不支持指针捕获时退化为普通拖动 */ }
   });
-  html += `<button type="button" class="nd-pg is-nav" onclick="gotoNodePage(${cur + 1})"${cur >= pages ? ' disabled' : ''} aria-label="下一页">${ND_ICON_CHEV_R}</button>`;
-  box.innerHTML = html;
+  thumb.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const railH = rail.getBoundingClientRect().height;
+    const th = thumb.getBoundingClientRect().height || 28;
+    const travel = Math.max(1, railH - th);
+    const max = sc.scrollHeight - sc.clientHeight;
+    sc.scrollTop = drag.top + ((e.clientY - drag.y) / travel) * max;
+  });
+  const stop = (e) => {
+    if (!drag) return;
+    drag = null;
+    thumb.classList.remove('is-drag');
+    rail.classList.remove('is-drag');
+    try { thumb.releasePointerCapture(e.pointerId); } catch { /* 已释放 */ }
+  };
+  thumb.addEventListener('pointerup', stop);
+  thumb.addEventListener('pointercancel', stop);
+
+  // 点击轨道空白处：指示块中心对齐点击位置
+  rail.addEventListener('pointerdown', (e) => {
+    if (e.target === thumb) return;
+    const rect = rail.getBoundingClientRect();
+    const th = thumb.getBoundingClientRect().height || 28;
+    const travel = Math.max(1, rect.height - th);
+    const ratio = Math.min(1, Math.max(0, (e.clientY - rect.top - th / 2) / travel));
+    sc.scrollTop = ratio * (sc.scrollHeight - sc.clientHeight);
+  });
 }
 
 function renderNodes() {
@@ -4763,24 +4845,22 @@ function renderNodes() {
   const count = document.getElementById('nodeListCount');
   if (count) count.textContent = `显示 ${filtered.length} 个节点`;
 
-  // 分页（每页 10 条，与样本一致）
-  const pages = Math.max(1, Math.ceil(filtered.length / NODE_PAGE_SIZE));
-  const cur = Math.min(Math.max(1, state.nodePage || 1), pages);
-  state.nodePage = cur;
-  const pageInfo = document.getElementById('nodePageInfo');
-  if (pageInfo) pageInfo.textContent = `第 ${cur} / ${pages} 页`;
-  renderNodePager(cur, pages);
-
+  // 不分页：整份筛选结果一次性渲染，由视窗（12 行高）配合滚动查看
   if (filtered.length === 0) {
     tbody.innerHTML = '';
+    const card = document.querySelector('.nd-table-card');
+    if (card) card.classList.add('is-empty');
     if (empty) {
       empty.style.display = 'block';
       empty.textContent = state.nodes.length ? '没有符合条件的节点，请调整搜索或筛选条件' : '暂无节点数据';
     }
+    syncNodeScrollbar();
     return;
   }
   if (empty) empty.style.display = 'none';
-  const view = filtered.slice((cur - 1) * NODE_PAGE_SIZE, cur * NODE_PAGE_SIZE);
+  const cardEl = document.querySelector('.nd-table-card');
+  if (cardEl) cardEl.classList.remove('is-empty');
+  const view = filtered;
   tbody.innerHTML = view.map(n => {
     const tagClass = protocolTagClass(n.protocol);
     const latency = nodeLatency(n);
@@ -4825,6 +4905,10 @@ function renderNodes() {
       </td>
     </tr>`;
   }).join('');
+  // 渲染完再校准视窗高度与指示块（tbody 已重排，此时量到的是真实行高）
+  bindNodeScrollbar();
+  syncNodeScrollMetrics();
+  syncNodeScrollbar();
 }
 
 // ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待）
@@ -6050,6 +6134,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     new Promise(r => setTimeout(r, 5000)),
   ]);
   switchPage(state.currentPage);
+  // 字体（Inter / JetBrains Mono 内联 woff2）加载完成后行高可能微变，
+  // 重新校准一次节点表视窗高度，保证「12 行」是准的。
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { syncNodeScrollMetrics(); syncNodeScrollbar(); }).catch(() => {});
+  }
 });
 
 window.addEventListener('hashchange', () => {
