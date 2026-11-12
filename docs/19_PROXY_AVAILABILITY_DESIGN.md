@@ -1,5 +1,7 @@
 # 19 · 真实代理可用性检测方案设计（P1）
 
+> **当前状态（v2.46.1 登记）**：本文是 v2.37.3 期的设计方案，结论已落地——节点侧只做 TCP/TLS 握手探测，实际选优交给客户端 Mihomo 的 `url-test` 组；探测引擎现为 `PROBE_ENGINE_VERSION=4`，文档中出现的版本号与字段名仅作历史记录。**当前探测口径以 [`NODE_HEALTH.md`](./NODE_HEALTH.md) 与 `src/services/node-probe.service.ts` 为准。**
+>
 > 基线：v2.37.3 → P0 已落地（PROBE_ENGINE_VERSION=3、UDP unknown、状态机修复、
 > 顶层 url-test 扁平化、https 测速 URL、getNodes UDP 过滤、crypto default-selected 派生）。
 > 本文件为**只读设计方案**，不修改代码。待用户批准后才进入实施。

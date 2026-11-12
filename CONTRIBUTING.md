@@ -13,12 +13,15 @@
 
 ## 🚀 开发流程
 
-1. **Fork** 仓库并创建你的分支：`git checkout -b feature/xxx`
-2. **开发**：小步提交，每个功能一个 commit
-3. **测试**：确保新增代码有测试，`npm test` 全部通过
-4. **构建**：`npm run build` 类型检查通过
-5. **提交**：使用 Conventional Commit 格式
-6. **Push** 并创建 Pull Request
+本项目是单人维护的小项目，**只有 `main` 一条长期分支**，不设 `feature/*`、`fix/*` 等临时分支（已合并的会被删除）。标准流程：
+
+1. **本地开发**：直接在当前 `main` 上改，改完跑验证（见「测试要求」）。
+2. **提交**：小步提交，使用下面的 Conventional Commit 格式。
+3. **推送**：`git push origin main` —— 这一步只跑 lint / 类型检查 / 测试 / 构建，**不产出镜像**。
+4. **发版**：验证全绿后在同一个提交上打 tag 并推送（见「版本号与发布规则」），镜像与 Release 由 tag 触发。
+5. **部署**：NAS 上 `docker compose pull && docker compose up -d`。
+
+外部贡献者仍可 fork 后提 PR，但同样不会长期保留分支；PR 合并进 `main` 后源分支即删除。
 
 ## 📝 Commit 规范
 
@@ -82,8 +85,8 @@ chore: root directory cleanup
 - 正式发布只由**推送版本 tag** 触发：
 
   ```bash
-  git tag -a v2.38.4 -m "Release v2.38.4"
-  git push origin v2.38.4
+  git tag -a v2.46.2 -m "Release v2.46.2"
+  git push origin v2.46.2
   ```
 
 - 工作流会逐项校验：tag 形如 `vX.Y.Z`、等于 `package.json` 版本、提交在 `main` 上、版本严格递增、同版本镜像若已存在则其 OCI revision 必须等于该提交。**任一不满足即拒绝发布**（宁可不发，也不覆盖已发布版本）。
@@ -151,18 +154,24 @@ src/
 │   ├── config.service.ts          # 配置生成 / 输出缓存
 │   ├── config-cache.service.ts    # mihomo 输出缓存（App 版本变更即失效）
 │   ├── subscription.service.ts
-│   ├── node-probe.service.ts      # 节点测活 / 测速
+│   ├── node-probe.service.ts      # 节点测活 / 测速（始终裸 TCP/TLS 直连）
 │   ├── ip-geo.service.ts
 │   ├── catalog-sync.service.ts    # 规则目录同步
 │   └── operation-log.service.ts
-├── engine/        # 网络层（fetchSubscription 抓取）
+├── engine/        # 出网网络层
+│   ├── http-client.ts             # 统一出口：按用途选代理或直连
+│   ├── proxy-config.ts            # 5 目标 × 3 态策略解析与 bypass 判定
+│   ├── fetcher.ts                 # 订阅抓取
+│   └── net-errors.ts              # 网络错误归类
 ├── parser/        # 协议解析层
 ├── generator/     # 配置生成层（mihomo/singbox/shadowrocket/base64）
 ├── models/        # 数据模型
 ├── data/          # 静态规则数据
 ├── storage/       # 数据访问层（KV 契约 + SQLite 适配）
+├── utils/         # 通用工具
 ├── server/main.ts # Node 入口（HTTP + 定时器）
-└── meta.ts        # 项目元信息
+├── meta.ts        # 项目元信息
+└── html.js        # 由 public/index.html 内联生成，勿手改
 ```
 
 ## 🛡️ 安全 PR 检查清单

@@ -26,4 +26,8 @@ CURRENT_TASK.md
 PLAN.md
 
 # 评审报告（仅本地使用）
-review-report.json.dev.vars
+/review-report.json
+*.dev.vars
+
+# TypeScript 增量构建信息
+*.tsbuildinfo
