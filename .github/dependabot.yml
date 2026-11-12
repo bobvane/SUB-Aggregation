@@ -1,0 +1,38 @@
+# 依赖更新策略：每月一次，按生产/开发分组，避免重复 PR 噪音。
+# 项目只有一个长期分支 main，安全更新与常规更新都指向 main。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 2
+    target-branch: main
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development-dependencies:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: monthly
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    target-branch: main
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope

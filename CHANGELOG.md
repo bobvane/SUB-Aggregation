@@ -1,5 +1,15 @@
 # 更新日志
 
+## v2.46.1 — 2026-11-12
+
+依赖安全升级与仓库整理，无功能变更。
+
+- 生产依赖升级：`hono` 4.13.8 → **4.13.18**、`@hono/node-server` 2.1.1 → **2.1.3**，修复 `serveStatic` 路径二次解码问题（本项目未使用该 API，属预防性升级）。
+- 构建依赖升级：`vite` 7.3.6 → **7.3.8**；通过 `overrides` 强制 `source-map-js` 到 **1.2.2**。
+- 升级后 `npm audit --omit=dev` 为 **0 vulnerabilities**；剩余的 `npm audit` 告警全部落在构建期 `devDependencies`（`@vitest/mocker`、`minimatch` / `brace-expansion` 链条），不进运行镜像，运行容器内只有单个 `dist/server.mjs`。
+- 仓库整理：删除 19 个历史分支（`release/v2.38.4`~`v2.38.9`、`chore/*`、`fix/*`、`feat/*` 及 4 个 Dependabot 分支），关闭对应的自动化 Pull Request，工作流统一为「本地开发 → 推送 main → 打 tag 发版 → NAS 拉取镜像」。
+- 新增 `.github/dependabot.yml`：依赖更新改为每月一次、按生产/开发分组，减少重复 PR 噪音。
+
 ## v2.46.0 — 2026-11-12
 
 出网代理模型重写为「5 个目标 × 3 态」，目标是零配置无感可用。
