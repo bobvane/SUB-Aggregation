@@ -1,25 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_PROXY_BYPASS,
-  DEFAULT_PROXY_SCOPE,
-  PROXY_PURPOSES,
-  isProxyChoice,
-  isProxyMode,
-  isProxyPurpose,
+  PROXY_BYPASS_PRESETS,
+  PROXY_PROBE_TIMEOUT_MS,
+  PROXY_TARGETS,
+  PROXY_TARGET_HINTS,
+  PROXY_TARGET_LABELS,
+  buildProxyUrl,
+  isProxyTarget,
+  isProxyTargetMode,
   isValidProxyUrl,
   maskProxyUrl,
   mergeBypassList,
   mergeMaskedProxyUrl,
   migrateLegacyEnvProxy,
-  parseProxyScope,
-  proxyUrlForTarget,
+  migrateLegacyProxyConfig,
+  parseProxyTargets,
   readEffectiveProxyConfig,
   readLegacyEnvProxyUrl,
   readRawProxyConfig,
-  serializeProxyScope,
+  resolveProxyTargets,
+  serializeProxyTargets,
   shouldBypass,
   splitList,
-  type EffectiveProxyConfig,
+  splitProxyUrl,
   type SettingsReader,
   type SettingsStore,
 } from '@/engine/proxy-config';
@@ -41,88 +45,143 @@ const store = (entries: Record<string, string> = {}): SettingsStore & { map: Map
   };
 };
 
-describe('proxy-config 模式与用途', () => {
-  it('未保存模式时直连；manual 使用保存的地址', async () => {
-    expect((await readEffectiveProxyConfig(emptyReader)).mode).toBe('off');
-    expect((await readEffectiveProxyConfig(emptyReader)).proxyUrl).toBeNull();
-
-    const manual = await readEffectiveProxyConfig(
-      reader({ proxy_mode: 'manual', proxy_url: 'http://10.0.0.2:8080' })
-    );
-    expect(manual.mode).toBe('manual');
-    expect(manual.proxyUrl).toBe('http://10.0.0.2:8080');
+describe('5 个项目目标', () => {
+  it('目标清单与短名、提示一一对应', () => {
+    expect(PROXY_TARGETS).toEqual(['subscription', 'rules', 'version', 'dns', 'geo']);
+    for (const target of PROXY_TARGETS) {
+      expect(PROXY_TARGET_LABELS[target]).toBeTruthy();
+      expect(PROXY_TARGET_HINTS[target]).toBeTruthy();
+    }
+    expect(PROXY_TARGET_LABELS.subscription).toBe('订阅拉取');
   });
 
-  it('旧 env 模式不再被接受，退回直连', async () => {
-    const legacy = await readEffectiveProxyConfig(reader({ proxy_mode: 'env' }));
-    expect(legacy.mode).toBe('off');
-    expect(legacy.proxyUrl).toBeNull();
-    expect(isProxyMode('env')).toBe(false);
+  it('类型守卫只接受约定值', () => {
+    expect(isProxyTarget('dns')).toBe(true);
+    expect(isProxyTarget('github')).toBe(false);   // 旧的合并用途已拆成 rules / version
+    expect(isProxyTargetMode('auto')).toBe(true);
+    expect(isProxyTargetMode('on')).toBe(true);
+    expect(isProxyTargetMode('off')).toBe(true);
+    expect(isProxyTargetMode('yes')).toBe(false);
   });
 
-  it('scope 缺省只含 github + geo（订阅默认直连），并按固定顺序序列化', async () => {
-    expect((await readEffectiveProxyConfig(emptyReader)).scope).toEqual([...DEFAULT_PROXY_SCOPE]);
-    expect(DEFAULT_PROXY_SCOPE).not.toContain('subscription');
-    expect(PROXY_PURPOSES).toContain('subscription'); // 仍可显式勾选 / 单订阅强制走代理
-    expect(parseProxyScope('geo,subscription,geo,unknown')).toEqual(['geo', 'subscription']);
-    expect(parseProxyScope('')).toBeNull();
-    expect(serializeProxyScope(['geo', 'subscription'])).toBe('subscription,geo');
+  it('探测时限默认 3 秒', () => {
+    expect(PROXY_PROBE_TIMEOUT_MS).toBe(3_000);
+  });
+});
+
+describe('目标策略的解析与序列化', () => {
+  it('从未保存时返回 null，便于区分「没配过」与「显式保存」', () => {
+    expect(parseProxyTargets(null)).toBeNull();
+    expect(parseProxyTargets(undefined)).toBeNull();
+    expect(parseProxyTargets('')).toEqual({});
   });
 
-  it('显式保存为空 scope = 全部直连', async () => {
-    const empty = await readEffectiveProxyConfig(
-      reader({ proxy_mode: 'manual', proxy_url: 'http://127.0.0.1:7890', proxy_scope: '' })
-    );
-    expect(empty.scope).toEqual([]);
+  it('解析时忽略未知目标与非法取值', () => {
+    expect(parseProxyTargets('subscription=on,unknown=auto,geo=bad,rules=off'))
+      .toEqual({ subscription: 'on', rules: 'off' });
   });
 
-  it('readRawProxyConfig 只返回存储值，不推断 mode / 不合并 bypass', async () => {
-    expect(await readRawProxyConfig(emptyReader)).toEqual({
-      mode: null, url: null, scope: null, bypass: null, fallback: null,
+  it('序列化按固定顺序输出全部 5 项', () => {
+    expect(serializeProxyTargets({ geo: 'off', subscription: 'on' }))
+      .toBe('subscription=on,rules=auto,version=auto,dns=auto,geo=off');
+  });
+
+  it('补默认值时缺失项一律 auto', () => {
+    const resolved = resolveProxyTargets({ dns: 'off' });
+    expect(resolved).toEqual({
+      subscription: 'auto', rules: 'auto', version: 'auto', dns: 'off', geo: 'auto',
     });
+    expect(resolveProxyTargets(null).subscription).toBe('auto');
+  });
+});
+
+describe('读取配置', () => {
+  it('未保存任何值时：无代理地址 + 全部 auto', async () => {
+    const config = await readEffectiveProxyConfig(emptyReader);
+    expect(config.proxyUrl).toBeNull();
+    expect(Object.values(config.targets).every((mode) => mode === 'auto')).toBe(true);
+  });
+
+  it('地址即开关：存了地址就用，删掉就全部直连', async () => {
+    const withUrl = await readEffectiveProxyConfig(reader({ proxy_url: 'http://10.0.0.2:8080' }));
+    expect(withUrl.proxyUrl).toBe('http://10.0.0.2:8080');
+    expect((await readEffectiveProxyConfig(reader({ proxy_url: '   ' }))).proxyUrl).toBeNull();
+  });
+
+  it('readRawProxyConfig 只返回存储值，不合并 bypass', async () => {
+    expect(await readRawProxyConfig(emptyReader)).toEqual({ url: null, targets: null, bypass: null });
 
     const raw = await readRawProxyConfig(reader({
-      proxy_mode: 'manual',
       proxy_url: 'http://user:secret@127.0.0.1:7890',
-      proxy_scope: 'github,geo',
+      proxy_targets: 'subscription=on,geo=off',
       proxy_bypass: 'corp.example.com',
-      proxy_fallback: '0',
     }));
     expect(raw).toEqual({
-      mode: 'manual',
       url: 'http://user:secret@127.0.0.1:7890',
-      scope: ['github', 'geo'],
+      targets: { subscription: 'on', geo: 'off' },
       bypass: 'corp.example.com',
-      fallback: false,
     });
 
     // 生效值会补内置默认 bypass，原始值不应包含这些
     const effective = await readEffectiveProxyConfig(reader({ proxy_bypass: 'corp.example.com' }));
     expect(effective.bypass).toContain('localhost');
     expect(effective.bypass.length).toBeGreaterThan(1);
-    expect((await readRawProxyConfig(reader({ proxy_bypass: 'corp.example.com' }))).bypass)
-      .toBe('corp.example.com');
-  });
-
-  it('fallback 默认开启，存 0 时关闭', async () => {
-    expect((await readEffectiveProxyConfig(emptyReader)).fallback).toBe(true);
-    expect((await readEffectiveProxyConfig(reader({ proxy_fallback: '0' }))).fallback).toBe(false);
-  });
-
-  it('类型守卫只接受约定值', () => {
-    expect(isProxyMode('manual')).toBe(true);
-    expect(isProxyMode('off')).toBe(true);
-    expect(isProxyMode('env')).toBe(false);
-    expect(isProxyMode('auto')).toBe(false);
-    expect(isProxyPurpose('geo')).toBe(true);
-    expect(isProxyPurpose('other')).toBe(false);
-    expect(isProxyChoice('auto')).toBe(true);
-    expect(isProxyChoice('yes')).toBe(false);
   });
 });
 
-describe('v2.44.3 旧环境变量代理迁移', () => {
-  it('读取旧环境变量时优先 HTTPS_PROXY，拒绝非 http(s) 地址', () => {
+describe('v2.46.0 旧用途配置迁移', () => {
+  it('已存在 proxy_targets 时不动', async () => {
+    const s = store({ proxy_targets: 'subscription=off', proxy_mode: 'manual' });
+    expect(await migrateLegacyProxyConfig(s)).toBe('none');
+    expect(s.map.get('proxy_targets')).toBe('subscription=off');
+  });
+
+  it('全新安装（两个旧键都没有）不写入', async () => {
+    const s = store();
+    expect(await migrateLegacyProxyConfig(s)).toBe('none');
+    expect(s.map.get('proxy_targets')).toBeUndefined();
+  });
+
+  it('旧 proxy_mode=off → 5 项全部 off', async () => {
+    const s = store({ proxy_mode: 'off', proxy_url: 'http://10.0.0.2:8080' });
+    expect(await migrateLegacyProxyConfig(s)).toBe('migrated');
+    expect(parseProxyTargets(s.map.get('proxy_targets') ?? null)).toEqual({
+      subscription: 'off', rules: 'off', version: 'off', dns: 'off', geo: 'off',
+    });
+  });
+
+  it('保存过 proxy_scope：勾选的 on、未勾的 off（github 拆 rules+version，geo 拆 dns+geo）', async () => {
+    const s = store({ proxy_mode: 'manual', proxy_scope: 'github,geo' });
+    expect(await migrateLegacyProxyConfig(s)).toBe('migrated');
+    expect(parseProxyTargets(s.map.get('proxy_targets') ?? null)).toEqual({
+      subscription: 'off', rules: 'on', version: 'on', dns: 'on', geo: 'on',
+    });
+  });
+
+  it('proxy_scope 保存为空串（旧的「全部直连」）→ 全部 off', async () => {
+    const s = store({ proxy_mode: 'manual', proxy_scope: '' });
+    await migrateLegacyProxyConfig(s);
+    expect(Object.values(parseProxyTargets(s.map.get('proxy_targets') ?? null) ?? {}))
+      .toEqual(['off', 'off', 'off', 'off', 'off']);
+  });
+
+  it('只有 proxy_mode=manual 没有 scope → 全部 auto（新的零配置默认）', async () => {
+    const s = store({ proxy_mode: 'manual', proxy_url: 'http://10.0.0.2:8080' });
+    await migrateLegacyProxyConfig(s);
+    expect(Object.values(parseProxyTargets(s.map.get('proxy_targets') ?? null) ?? {}))
+      .toEqual(['auto', 'auto', 'auto', 'auto', 'auto']);
+  });
+
+  it('迁移后保留旧键，便于回滚', async () => {
+    const s = store({ proxy_mode: 'manual', proxy_scope: 'subscription' });
+    await migrateLegacyProxyConfig(s);
+    expect(s.map.get('proxy_mode')).toBe('manual');
+    expect(s.map.get('proxy_scope')).toBe('subscription');
+  });
+});
+
+describe('更早期环境变量代理的导入', () => {
+  it('读取环境变量时优先 HTTPS_PROXY，拒绝非 http(s) 地址', () => {
     expect(readLegacyEnvProxyUrl({
       HTTP_PROXY: 'http://http-proxy:8080',
       HTTPS_PROXY: 'http://https-proxy:8443',
@@ -133,42 +192,26 @@ describe('v2.44.3 旧环境变量代理迁移', () => {
     expect(readLegacyEnvProxyUrl({})).toBeNull();
   });
 
-  it('未保存模式但存在环境变量代理：导入为 manual', async () => {
+  it('地址为空且环境里有代理时导入', async () => {
     const s = store();
     expect(await migrateLegacyEnvProxy(s, { HTTPS_PROXY: 'http://env-proxy:8080' })).toBe('imported');
-    expect(s.map.get('proxy_mode')).toBe('manual');
     expect(s.map.get('proxy_url')).toBe('http://env-proxy:8080');
   });
 
-  it('未保存模式且没有环境变量代理：不写入任何值', async () => {
+  it('地址已有值时不再覆盖', async () => {
+    const s = store({ proxy_url: 'http://10.0.0.2:8080' });
+    expect(await migrateLegacyEnvProxy(s, { HTTPS_PROXY: 'http://env-proxy:8080' })).toBe('none');
+    expect(s.map.get('proxy_url')).toBe('http://10.0.0.2:8080');
+  });
+
+  it('环境里没有代理时不写入任何值', async () => {
     const s = store();
     expect(await migrateLegacyEnvProxy(s, {})).toBe('none');
-    expect(s.map.get('proxy_mode')).toBeUndefined();
     expect(s.map.get('proxy_url')).toBeUndefined();
-  });
-
-  it('已保存 env 模式：有地址则导入，无地址则退回直连', async () => {
-    const withUrl = store({ proxy_mode: 'env' });
-    expect(await migrateLegacyEnvProxy(withUrl, { HTTPS_PROXY: 'http://env-proxy:8080' })).toBe('imported');
-    expect(withUrl.map.get('proxy_mode')).toBe('manual');
-
-    const withoutUrl = store({ proxy_mode: 'env' });
-    expect(await migrateLegacyEnvProxy(withoutUrl, {})).toBe('disabled');
-    expect(withoutUrl.map.get('proxy_mode')).toBe('off');
-  });
-
-  it('已保存 manual / off 时不做迁移', async () => {
-    const manual = store({ proxy_mode: 'manual', proxy_url: 'http://10.0.0.2:8080' });
-    expect(await migrateLegacyEnvProxy(manual, { HTTPS_PROXY: 'http://env-proxy:8080' })).toBe('none');
-    expect(manual.map.get('proxy_url')).toBe('http://10.0.0.2:8080');
-
-    const off = store({ proxy_mode: 'off' });
-    expect(await migrateLegacyEnvProxy(off, { HTTPS_PROXY: 'http://env-proxy:8080' })).toBe('none');
-    expect(off.map.get('proxy_mode')).toBe('off');
   });
 });
 
-describe('proxy-config 地址校验与脱敏', () => {
+describe('地址校验、脱敏与三段式拼装', () => {
   it('只接受 http/https 且带主机名的地址', () => {
     expect(isValidProxyUrl('http://127.0.0.1:7890')).toBe(true);
     expect(isValidProxyUrl('https://proxy.example.com:8443')).toBe(true);
@@ -191,38 +234,55 @@ describe('proxy-config 地址校验与脱敏', () => {
       .toBe('http://user:newpass@127.0.0.1:7890');
     expect(() => mergeMaskedProxyUrl(existing, 'http://user:***@other:7890')).toThrow();
   });
-});
 
-describe('proxy-config 决定目标是否走代理', () => {
-  const config: EffectiveProxyConfig = {
-    mode: 'manual',
-    proxyUrl: 'http://127.0.0.1:7890',
-    scope: ['subscription', 'github'],
-    bypass: splitList(DEFAULT_PROXY_BYPASS),
-    fallback: true,
-  };
-
-  it('off 模式始终直连，manual 模式返回代理地址', () => {
-    expect(proxyUrlForTarget({ ...config, mode: 'off' })).toBeNull();
-    expect(proxyUrlForTarget(config)).toBe('http://127.0.0.1:7890');
+  it('三段式拼装：主机为空即不使用代理', () => {
+    expect(buildProxyUrl('http', '192.168.2.5', '7893')).toBe('http://192.168.2.5:7893');
+    expect(buildProxyUrl('https', 'proxy.example.com', '8443')).toBe('https://proxy.example.com:8443');
+    expect(buildProxyUrl('socks5', '1.2.3.4', '1080')).toBe('http://1.2.3.4:1080'); // 非 https 一律按 http
+    expect(buildProxyUrl('http', '', '7893')).toBe('');
+    expect(buildProxyUrl('http', '1.2.3.4', '')).toBe('http://1.2.3.4');
   });
 
-  it('bypass 支持精确主机、域名后缀、通配符与 IPv4 CIDR', () => {
-    expect(shouldBypass('localhost', config.bypass)).toBe(true);
-    expect(shouldBypass('127.0.0.1', config.bypass)).toBe(true);
-    expect(shouldBypass('192.168.2.5', config.bypass)).toBe(true);
-    expect(shouldBypass('printer.local', config.bypass)).toBe(true);
-    expect(shouldBypass('example.com', config.bypass)).toBe(false);
+  it('已存地址拆回三段；带账号密码或路径时标记 advanced', () => {
+    expect(splitProxyUrl('http://192.168.2.5:7893')).toEqual({
+      protocol: 'http', host: '192.168.2.5', port: '7893', advanced: false,
+    });
+    expect(splitProxyUrl('https://proxy.example.com:8443')).toEqual({
+      protocol: 'https', host: 'proxy.example.com', port: '8443', advanced: false,
+    });
+    expect(splitProxyUrl('http://user:pass@127.0.0.1:7890').advanced).toBe(true);
+    expect(splitProxyUrl('http://127.0.0.1:7890/proxy').advanced).toBe(true);
+    expect(splitProxyUrl(null)).toEqual({ protocol: 'http', host: '', port: '', advanced: false });
+  });
+});
+
+describe('bypass 匹配', () => {
+  const bypass = splitList(DEFAULT_PROXY_BYPASS);
+
+  it('支持精确主机、域名后缀、通配符与 IPv4 CIDR', () => {
+    expect(shouldBypass('localhost', bypass)).toBe(true);
+    expect(shouldBypass('127.0.0.1', bypass)).toBe(true);
+    expect(shouldBypass('192.168.2.5', bypass)).toBe(true);
+    expect(shouldBypass('printer.local', bypass)).toBe(true);
+    expect(shouldBypass('example.com', bypass)).toBe(false);
     expect(shouldBypass('sub.example.com', ['example.com'])).toBe(true);
     expect(shouldBypass('anything.test', ['*'])).toBe(true);
     expect(shouldBypass('10.1.2.3', ['10.0.0.0/8'])).toBe(true);
     expect(shouldBypass('11.1.2.3', ['10.0.0.0/8'])).toBe(false);
   });
 
-  it('bypass 合并内置默认值与设置值并去重', () => {
+  it('合并内置默认值与设置值并去重', () => {
     const merged = mergeBypassList('example.com, localhost');
     expect(merged).toContain('localhost');
     expect(merged).toContain('example.com');
     expect(merged.filter((item) => item === 'example.com')).toHaveLength(1);
+  });
+
+  it('界面预设标签都落在内置默认里，点了只是显式化', () => {
+    for (const preset of PROXY_BYPASS_PRESETS) {
+      const covered = preset === '192.168.2.0/24' // 该子网已被 192.168.0.0/16 覆盖
+        || DEFAULT_PROXY_BYPASS.includes(preset);
+      expect(covered, `预设 ${preset} 未被内置默认覆盖`).toBe(true);
+    }
   });
 });

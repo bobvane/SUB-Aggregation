@@ -20,10 +20,6 @@ import { MetaCubeXRule, RuleGroup } from '@/data/metacubex-rules';
 export const META_DAT_BASE =
   'https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/';
 
-/** 主源（GitHub raw，国内可能不通） */
-export const META_DAT_GITHUB =
-  'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/';
-
 /**
  * 生成单独的 rule-provider 定义（一个 geosite 分类 → 一个 http provider）
  * provider 名用 geosite-<小写id>，避免与内置 geosite 规则混淆

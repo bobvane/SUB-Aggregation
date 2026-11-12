@@ -26,7 +26,6 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { KV_KEYS } from '@/models/config';
 import { Node, NodeProtocol, nodeFingerprint as canonicalNodeFingerprint } from '@/models/node';
-import { KVStorage } from '@/storage/kv';
 
 const PROBE_TIMEOUT_MS = 3000;
 const PROBE_CONCURRENCY = 50;
@@ -93,15 +92,6 @@ export interface NodeHealthHistory {
   tlsApplicable: boolean;
   error: string | null;
   score: number;
-}
-
-export interface ScoreBreakdown {
-  availability: number;    // 35% - 可用率
-  latency: number;         // 30% - 延迟得分
-  tlsSuccess: number;      // 25% - TLS成功率（仅 tlsApplicable 协议计入，非 TLS 协议该权重重新归一）
-  httpSuccess: number;     // 0% - 恒 0：不实现代理协议则无法测穿节点 HTTP（v2.36 移除，字段保留兼容）
-  stability: number;       // 10% - 最近稳定性（均值）
-  total: number;
 }
 
 export interface StateMachineResult {
@@ -822,20 +812,4 @@ export async function getAllNodeHealth(
   }
   
   return health;
-}
-
-/** 便捷导出：供 routes 直接调用 */
-export async function getNodeHealth(
-  fingerprint: string,
-  kv: KVStorage
-): Promise<NodeHealthLatest | null> {
-  return getNodeHealthLatest(fingerprint, kv);
-}
-
-export async function getNodeHistory(
-  fingerprint: string,
-  kv: KVStorage,
-  limit: number = 100
-): Promise<NodeHealthHistory[]> {
-  return getNodeHealthHistory(fingerprint, kv, limit);
 }

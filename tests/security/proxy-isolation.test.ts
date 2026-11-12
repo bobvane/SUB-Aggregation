@@ -21,8 +21,13 @@ describe('节点测活不接入 HTTP 代理', () => {
     expect(source).not.toMatch(/\bfetch\s*\(/);
   });
 
-  it('http-client 不导出节点探测相关能力', () => {
+  it('http-client 不导出也不实现节点测活能力', () => {
     const source = read('src/engine/http-client.ts');
-    expect(source).not.toMatch(/probe|tls\.connect|net\.connect/i);
+    // 注意：http-client 里的 "probe" 指「自动模式下的直连可达性探测」
+    // （PROXY_PROBE_TIMEOUT_MS，只等 HTTP 握手 + 响应头），与节点测活无关。
+    // 这里守的是「不出现裸连接、不导出节点探测函数」这两条实质约束。
+    expect(source).not.toMatch(/from 'node:(net|tls)'/);
+    expect(source).not.toMatch(/\b(tls|net)\.connect\b/i);
+    expect(source).not.toMatch(/export[^\n]*\b(probeNode|probeAllNodes|getNodeHealth|nodeProbe)/);
   });
 });

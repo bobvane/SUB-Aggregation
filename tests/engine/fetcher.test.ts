@@ -143,20 +143,19 @@ describe('fetchSubscription', () => {
     })).rejects.toThrow('fetch failed: Request was cancelled.: Proxy response (407) !== 200 when HTTP Tunneling');
   });
 
-  it('把单条订阅的代理策略原样传给注入的抓取函数', async () => {
-    const calls: Array<{ choice?: string; redirect?: string }> = [];
+  it('重定向由 fetcher 手动处理，不再传代理策略参数', async () => {
+    const calls: Array<{ redirect?: string; timeoutMs?: number }> = [];
     const body = await fetchSubscription(
       'https://sub.example.com/sub',
-      async (_purpose, _url, init) => {
-        calls.push({ choice: init?.choice, redirect: init?.redirect as string | undefined });
+      async (_url, init) => {
+        calls.push({ redirect: init?.redirect as string | undefined, timeoutMs: init?.timeoutMs });
         return new Response('vmess://eyJhZGQiOiJleGFtcGxlLmNvbSJ9', { status: 200 });
-      },
-      { choice: 'on' }
+      }
     );
 
     expect(body).toContain('vmess://');
     expect(calls).toHaveLength(1);
-    expect(calls[0].choice).toBe('on');
     expect(calls[0].redirect).toBe('manual');
+    expect(calls[0].timeoutMs).toBe(30_000);
   });
 });

@@ -5,9 +5,6 @@
 
 export type SubscriptionStatus = 'active' | 'error' | 'disabled';
 
-/** 单条订阅的代理策略（v2.44.0） */
-export type SubscriptionProxyChoice = 'auto' | 'on' | 'off';
-
 export interface Subscription {
   id: string;
   name: string;
@@ -19,8 +16,6 @@ export interface Subscription {
   nodeCount?: number;
   status: SubscriptionStatus;
   errorMessage?: string;
-  /** auto：跟随全局「网络代理」设置；on：强制走代理；off：强制直连 */
-  useProxy?: SubscriptionProxyChoice;
   /** 连续抓取失败次数；达到自动重试上限后保留计数，等待下一次常规同步或手动操作。 */
   retryCount?: number;
   /** 下次自动重试时间戳（毫秒），undefined 表示当前没有排定的自动重试。 */
@@ -45,7 +40,6 @@ export function createSubscription(
     createdAt: partial.createdAt ?? now,
     updatedAt: now,
     status: partial.status ?? 'active',
-    useProxy: partial.useProxy ?? 'auto',
     nodeCount: partial.nodeCount,
     lastFetchAt: partial.lastFetchAt,
     retryCount: partial.retryCount,

@@ -218,21 +218,6 @@ export const RULE_GROUPS: RuleGroup[] = [
   },
 ];
 
-/** 将 RULE_GROUPS 转为前端所需的小写风格（保持 geosite id 大写） */
-export function getRuleIdSet(): Set<string> {
-  return new Set(RULE_GROUPS.flatMap(g => g.items.map(i => i.id)));
-}
-
-/** 从 catalog 查找分类 */
-export function findCatalogEntry(id: string): CatalogEntry | undefined {
-  return METACUBEX_CATALOG.catalog.find(e => e.id === id || e.id === id.toUpperCase());
-}
-
-/** 检查分类是否存在于真实 geosite 数据 */
-export function isValidCategory(id: string): boolean {
-  return METACUBEX_CATALOG.catalog.some(e => e.id === id.toUpperCase());
-}
-
 /**
  * 将自定义规则合并进 RULE_GROUPS（按 groupKey 插入对应分组）
  * 返回新的分组数组（不修改原常量）

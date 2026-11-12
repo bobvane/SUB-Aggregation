@@ -24,21 +24,6 @@ export function detectProtocol(line: string): DetectedProtocol {
 }
 
 /**
- * 从订阅内容中分段检测所有协议
- * 返回按协议分组统计
- */
-export function detectProtocolsFromContent(content: string): Map<DetectedProtocol, number> {
-  const counts = new Map<DetectedProtocol, number>();
-  const lines = content.split(/\r?\n/);
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const proto = detectProtocol(line);
-    counts.set(proto, (counts.get(proto) ?? 0) + 1);
-  }
-  return counts;
-}
-
-/**
  * 从订阅内容中提取所有节点链接行
  * 过滤空行和注释
  */

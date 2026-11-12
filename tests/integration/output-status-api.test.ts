@@ -45,7 +45,7 @@ describe('output status / refresh API（v2.38.6）', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => [], kv),
       config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',

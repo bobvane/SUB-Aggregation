@@ -1,7 +1,8 @@
 /**
- * 代理设置 API（v2.44.0）
- * - 设置项校验与脱敏
- * - 单条订阅 useProxy 校验与持久化
+ * 代理设置 API（v2.46.0）
+ * - 地址 / 5 项目标策略 / bypass 的读写与校验
+ * - 只提交改动字段不会固化推断配置
+ * - 订阅不再有独立的代理策略
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
@@ -9,6 +10,19 @@ import { createApp } from '@/api/routes';
 import { createAuthService, createPasswordHash } from '@/services/auth.service';
 import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
+
+interface SettingsData {
+  app_name: string;
+  proxy_url: string;
+  proxy_targets: Record<string, string>;
+  proxy_bypass: string;
+  proxy_meta: {
+    targets: Array<{ key: string; label: string; hint: string }>;
+    bypassPresets: string[];
+    bypassDefaults: string;
+    probeTimeoutMs: number;
+  };
+}
 
 describe('代理设置 API', () => {
   let app: ReturnType<typeof createApp>;
@@ -31,6 +45,11 @@ describe('代理设置 API', () => {
       },
     }, {}, executionCtx);
 
+  const getSettings = async (): Promise<SettingsData> => {
+    const res = await request('/api/settings');
+    return ((await res.json()) as { data: SettingsData }).data;
+  };
+
   beforeEach(async () => {
     vi.unstubAllEnvs();
     kv = new MemoryKvAdapter();
@@ -42,7 +61,7 @@ describe('代理设置 API', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => [], kv),
       config: createConfigService(repos, kv),
       adminPassword: 'test-pass',
       fetchRaw: async () => '',
@@ -57,139 +76,156 @@ describe('代理设置 API', () => {
     cookie = `sub_session=${data.token}`;
   });
 
-  it('保存手动代理后返回脱敏地址，密码占位符可原样回存', async () => {
+  it('全新部署：地址为空、5 项全自动，并下发渲染用的元数据', async () => {
+    const d = await getSettings();
+    expect(d.proxy_url).toBe('');
+    expect(d.proxy_targets).toEqual({
+      subscription: 'auto', rules: 'auto', version: 'auto', dns: 'auto', geo: 'auto',
+    });
+    expect(d.proxy_bypass).toBe('');
+    expect(d.proxy_meta.targets.map((t) => t.key)).toEqual([
+      'subscription', 'rules', 'version', 'dns', 'geo',
+    ]);
+    expect(d.proxy_meta.targets[0].label).toBe('订阅拉取');
+    expect(d.proxy_meta.bypassPresets).toContain('192.168.2.0/24');
+    expect(d.proxy_meta.bypassDefaults).toContain('localhost');
+    expect(d.proxy_meta.probeTimeoutMs).toBe(3_000);
+  });
+
+  it('保存地址后返回脱敏值，密码占位符可原样回存', async () => {
     const put = await request('/api/settings', {
       method: 'PUT',
       body: JSON.stringify({
-        proxy_mode: 'manual',
         proxy_url: 'http://user:secret@127.0.0.1:7890',
-        proxy_scope: ['subscription', 'github'],
+        proxy_targets: { subscription: 'on', geo: 'off' },
         proxy_bypass: 'example.com, 10.0.0.0/8',
-        proxy_fallback: false,
       }),
     });
     expect(put.status).toBe(200);
 
-    const get = await request('/api/settings');
-    const body = (await get.json()) as { data: Record<string, unknown> };
-    expect(body.data.proxy_mode).toBe('manual');
-    expect(String(body.data.proxy_url)).toContain('***');
-    expect(String(body.data.proxy_url)).not.toContain('secret');
-    expect(body.data.proxy_scope).toEqual(['subscription', 'github']);
-    expect(body.data.proxy_fallback).toBe(false);
+    const d = await getSettings();
+    expect(d.proxy_url).toContain('***');
+    expect(d.proxy_url).not.toContain('secret');
+    expect(d.proxy_targets.subscription).toBe('on');
+    expect(d.proxy_targets.geo).toBe('off');
+    expect(d.proxy_targets.rules).toBe('auto'); // 未提交的项保持默认
+    expect(d.proxy_bypass).toBe('example.com,10.0.0.0/8');
 
     // 用脱敏值再次保存：密码应沿用原值
-    const masked = String(body.data.proxy_url);
     const putAgain = await request('/api/settings', {
       method: 'PUT',
-      body: JSON.stringify({ proxy_url: masked }),
+      body: JSON.stringify({ proxy_url: d.proxy_url }),
     });
     expect(putAgain.status).toBe(200);
     expect(await repos.settings.get('proxy_url')).toBe('http://user:secret@127.0.0.1:7890');
   });
 
-  it('GET 拆分原始值与生效值；只提交改动字段不会固化推断配置', async () => {
-    const get = await request('/api/settings');
-    const d = (await get.json()) as { data: Record<string, unknown> };
-    expect(d.data.proxy_mode).toBe('off');                 // 未保存模式 = 直连
-    expect(d.data.proxy_url).toBe('');
-    const effective = d.data.proxy_effective as Record<string, unknown>;
-    expect(effective.scope).toEqual(['github', 'geo']);
-    expect(effective.bypass).toContain('localhost');
-    expect(d.data.proxy_env_detected).toBeUndefined();      // v2.44.3 移除环境变量探测字段
-    // 表单用的原始值：全部为「从未保存」，不能拿生效值去回存
-    expect(d.data.proxy_raw).toMatchObject({
-      mode: null, url: '', scope: null, bypass: '', fallback: null,
+  it('只提交改动字段：改应用名不会碰任何代理配置', async () => {
+    await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({
+        proxy_url: 'http://127.0.0.1:7893',
+        proxy_targets: { dns: 'on' },
+        proxy_bypass: 'corp.example.com',
+      }),
     });
 
-    // 模拟设置页：用户只改了应用名，代理字段一个都不提交
     const put = await request('/api/settings', {
       method: 'PUT',
       body: JSON.stringify({ app_name: '我的聚合' }),
     });
     expect(put.status).toBe(200);
-    for (const key of ['proxy_mode', 'proxy_url', 'proxy_scope', 'proxy_bypass', 'proxy_fallback']) {
-      expect(await repos.settings.get(key)).toBeNull();
-    }
 
-    // 显式改动用途才写入对应存储键
-    const putScope = await request('/api/settings', {
-      method: 'PUT',
-      body: JSON.stringify({ proxy_scope: ['github'] }),
-    });
-    expect(putScope.status).toBe(200);
-    expect(await repos.settings.get('proxy_scope')).toBe('github');
-    expect(await repos.settings.get('proxy_url')).toBeNull();
+    const d = await getSettings();
+    expect(d.app_name).toBe('我的聚合');
+    expect(d.proxy_url).toContain('127.0.0.1:7893');
+    expect(d.proxy_targets.dns).toBe('on');
+    expect(d.proxy_bypass).toBe('corp.example.com');
   });
 
-  it('直连模式下不提交代理地址时，已保存的手动地址不会被清空', async () => {
-    await repos.settings.set('proxy_mode', 'off');
-    await repos.settings.set('proxy_url', 'http://127.0.0.1:7890');
+  it('targets 支持部分更新：只改一项不影响其余', async () => {
+    await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_targets: { subscription: 'off', rules: 'on' } }),
+    });
+    await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_targets: { version: 'off' } }),
+    });
 
-    const get = await request('/api/settings');
-    const d = (await get.json()) as { data: { proxy_url?: string; proxy_raw?: { url?: string } } };
-    expect(d.data.proxy_url).toBe('');                              // 生效值为空
-    expect(String(d.data.proxy_raw?.url)).toContain('127.0.0.1:7890'); // 但原始配置仍在
+    const d = await getSettings();
+    expect(d.proxy_targets).toEqual({
+      subscription: 'off', rules: 'on', version: 'off', dns: 'auto', geo: 'auto',
+    });
+  });
+
+  it('清空地址即恢复全部直连（地址是唯一开关）', async () => {
+    await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_url: 'http://127.0.0.1:7893' }),
+    });
+    expect(await repos.settings.get('proxy_url')).toBe('http://127.0.0.1:7893');
 
     const put = await request('/api/settings', {
       method: 'PUT',
-      body: JSON.stringify({ app_name: 'X' }),
+      body: JSON.stringify({ proxy_url: '' }),
     });
     expect(put.status).toBe(200);
-    expect(await repos.settings.get('proxy_url')).toBe('http://127.0.0.1:7890');
+    expect(await repos.settings.get('proxy_url')).toBe('');
+    expect((await getSettings()).proxy_url).toBe('');
   });
 
-  it('拒绝非法代理模式、地址与用途', async () => {
-    const badMode = await request('/api/settings', {
-      method: 'PUT',
-      body: JSON.stringify({ proxy_mode: 'socks5' }),
-    });
-    expect(badMode.status).toBe(400);
-
+  it('拒绝非法地址、未知目标、非法策略值与非对象', async () => {
     const badUrl = await request('/api/settings', {
       method: 'PUT',
       body: JSON.stringify({ proxy_url: 'socks5://127.0.0.1:1080' }),
     });
     expect(badUrl.status).toBe(400);
 
-    const badScope = await request('/api/settings', {
+    const unknownTarget = await request('/api/settings', {
       method: 'PUT',
-      body: JSON.stringify({ proxy_scope: ['subscription', 'unknown'] }),
+      body: JSON.stringify({ proxy_targets: { github: 'on' } }),
     });
-    expect(badScope.status).toBe(400);
+    expect(unknownTarget.status).toBe(400);
 
-    const badFallback = await request('/api/settings', {
+    const badMode = await request('/api/settings', {
       method: 'PUT',
-      body: JSON.stringify({ proxy_fallback: 'yes' }),
+      body: JSON.stringify({ proxy_targets: { subscription: 'always' } }),
     });
-    expect(badFallback.status).toBe(400);
+    expect(badMode.status).toBe(400);
+
+    const notObject = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_targets: 'subscription=on' }),
+    });
+    expect(notObject.status).toBe(400);
+
+    // 校验失败的写入不应落盘
+    expect(await repos.settings.get('proxy_targets')).toBeNull();
   });
 
-  it('订阅创建/编辑会校验并保存 useProxy', async () => {
-    const bad = await request('/api/subscriptions', {
-      method: 'POST',
-      body: JSON.stringify({ name: 's', url: 'https://example.com/sub', useProxy: 'always' }),
+  it('旧的 proxy_mode / proxy_scope 字段被忽略，不再写入', async () => {
+    const put = await request('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ proxy_mode: 'manual', proxy_scope: ['github'] }),
     });
-    expect(bad.status).toBe(400);
+    expect(put.status).toBe(200);
+    expect(await repos.settings.get('proxy_mode')).toBeNull();
+    expect(await repos.settings.get('proxy_scope')).toBeNull();
+  });
 
+  it('订阅不再有独立代理策略：带旧字段也能创建，但响应不再返回 useProxy', async () => {
     const created = await request('/api/subscriptions', {
       method: 'POST',
       body: JSON.stringify({ name: 's', url: 'https://example.com/sub', useProxy: 'on' }),
     });
     expect(created.status).toBe(201);
-    const createdBody = (await created.json()) as { data: { id: string; useProxy: string } };
-    expect(createdBody.data.useProxy).toBe('on');
-
-    const patched = await request(`/api/subscriptions/${createdBody.data.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ useProxy: 'off' }),
-    });
-    expect(patched.status).toBe(200);
-    const patchedBody = (await patched.json()) as { data: { useProxy: string } };
-    expect(patchedBody.data.useProxy).toBe('off');
+    const createdBody = (await created.json()) as { data: { id: string; useProxy?: string } };
+    expect(createdBody.data.useProxy).toBeUndefined();
 
     const listed = await request('/api/subscriptions');
-    const listBody = (await listed.json()) as { data: Array<{ id: string; useProxy: string }> };
-    expect(listBody.data.find((item) => item.id === createdBody.data.id)?.useProxy).toBe('off');
+    const listBody = (await listed.json()) as { data: Array<{ id: string; useProxy?: string }> };
+    const found = listBody.data.find((item) => item.id === createdBody.data.id);
+    expect(found?.useProxy).toBeUndefined();
   });
 });

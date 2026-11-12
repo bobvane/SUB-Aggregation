@@ -23,12 +23,15 @@
 
 ## 代理相关字段
 
-- 订阅对象包含 `useProxy`：`auto`（跟随全局设置，默认）、`on`（强制走代理）、`off`（强制直连）。创建、编辑、列表和单条查询都会返回该字段。
-- `GET /api/settings` 返回 `proxy_mode`（`off` / `manual`）、脱敏后的 `proxy_url`、`proxy_scope`（`subscription` / `github` / `geo` 数组）、`proxy_bypass`、`proxy_fallback`。这些顶层字段是**生效值**（含合并后的 bypass），不应被表单原样回存。
-- `GET /api/settings` 另返回 `proxy_raw`（用户保存过的原始值，`null` 表示从未保存，地址已脱敏）与 `proxy_effective`（诊断用的生效值）。设置页表单应回显 `proxy_raw`，并只提交用户实际改动过的字段。
-- `proxy_scope` 从未保存时默认为 `['github', 'geo']`（订阅抓取默认直连）；显式保存为空数组表示全部直连（只有显式 `on` 的订阅走代理）。
-- `PUT /api/settings` 接受上述代理字段，字段均可省略（只写传入的项）；`proxy_url` 只接受 `http://` / `https://`，已保存地址的密码占位符 `***` 可原样回存。
-- `POST /api/proxy/test` 使用已保存配置请求固定目标（`https://www.gstatic.com/generate_204`），返回 `ok`、`via`、`status`、`ms` 或 `error`；不接受任意 URL，避免 SSRF。
+- 订阅对象**不再包含** `useProxy`（v2.46.0 移除）：订阅抓取策略统一由设置页的「订阅拉取」目标控制。请求里带旧字段会被忽略，响应中也不会返回。
+- `GET /api/settings` 返回的代理字段：
+  - `proxy_url`：用户保存过的地址（密码脱敏为 `***`），空串表示未配置 = 全部直连。
+  - `proxy_targets`：五项目标的策略对象，键为 `subscription` / `rules` / `version` / `dns` / `geo`，值为 `auto`（默认，先直连不通再走代理）/ `on`（直接走代理）/ `off`（只直连）。
+  - `proxy_bypass`：用户保存的绕过列表（逗号分隔字符串，不含内置默认）。
+  - `proxy_meta`：只读的渲染元数据，含 `targets`（`key` / `label` / `hint`）、`bypassPresets`、`bypassDefaults`（内置默认列表，始终生效）、`probeTimeoutMs`（自动模式的直连探测时限，3000）。
+- `PUT /api/settings` 接受 `proxy_url` / `proxy_targets` / `proxy_bypass`，字段均可省略（只写传入的项）；`proxy_targets` 支持部分更新（与已存值合并）。`proxy_url` 只接受 `http://` / `https://`，已保存地址的密码占位符 `***` 可原样回存。
+- 设置页只提交用户真正改动过的字段；把脱敏地址原样回存是允许的（服务端会还原成原密码），但前端已做脏字段判断，正常情况下不会提交未改动的项。
+- `POST /api/proxy/test` **固定走代理**（不受目标策略与 bypass 影响），请求固定目标 `https://www.gstatic.com/generate_204`，返回 `ok`、`via`、`status`、`ms` 或 `error`；不接受任意 URL，避免 SSRF。
 
 ## 认证与敏感信息
 

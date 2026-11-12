@@ -72,20 +72,6 @@ export function countryDisplayName(code: string): string | null {
   return `${info.emoji} ${info.name}`;
 }
 
-/** 常见中文别名 → 国家码（节点名里出现"香港/日本/美国"等中文词时识别） */
-export const CHINESE_ALIAS_TO_CODE: Record<string, string> = {
-  香港: 'HK', 澳门: 'MO', 台湾: 'TW', 日本: 'JP', 美国: 'US', 新加坡: 'SG',
-  韩国: 'KR', 英国: 'GB', 德国: 'DE', 法国: 'FR', 加拿大: 'CA', 澳大利亚: 'AU',
-  印度: 'IN', 俄罗斯: 'RU', 巴西: 'BR', 荷兰: 'NL', 瑞典: 'SE', 挪威: 'NO',
-  芬兰: 'FI', 丹麦: 'DK', 意大利: 'IT', 西班牙: 'ES', 瑞士: 'CH', 阿联酋: 'AE',
-  土耳其: 'TR', 泰国: 'TH', 越南: 'VN', 马来西亚: 'MY', 菲律宾: 'PH', 印尼: 'ID',
-  新西兰: 'NZ', 沙特: 'SA', 乌克兰: 'UA', 波兰: 'PL', 以色列: 'IL', 爱尔兰: 'IE',
-  比利时: 'BE', 奥地利: 'AT', 葡萄牙: 'PT', 希腊: 'GR', 匈牙利: 'HU', 捷克: 'CZ',
-  埃及: 'EG', 南非: 'ZA', 墨西哥: 'MX', 阿根廷: 'AR', 智利: 'CL', 巴基斯坦: 'PK',
-  孟加拉国: 'BD', 斯里兰卡: 'LK', 尼泊尔: 'NP', 蒙古: 'MN', 哈萨克斯坦: 'KZ',
-  乌兹别克斯坦: 'UZ', 阿塞拜疆: 'AZ', 格鲁吉亚: 'GE', 亚美尼亚: 'AM',
-};
-
 /** 地理组默认排序（按主流机场节点常见度） */
 export const GEO_ORDER: string[] = [
   '🇭🇰 香港', '🇯🇵 日本', '🇺🇸 美国', '🇸🇬 新加坡', '🇹🇼 台湾', '🇰🇷 韩国',

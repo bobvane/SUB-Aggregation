@@ -1,33 +1,34 @@
 /**
- * 按用途区分的出网 HTTP 客户端（v2.44.0）
+ * 按目标区分的出网 HTTP 客户端（v2.46.0）
  *
- * 设计要点：
- *   - 每次调用按设置项解析代理策略，不污染全局 dispatcher；
- *   - 只有明确允许的用途才走代理（subscription / github / geo）；
- *     订阅抓取默认不代理，v2.44.2 起「未勾选的用途」连失败回退也不会走代理；
- *   - auto 模式下代理失败才回退直连（默认开启，超时不回退），
- *     避免「代理 407 → 所有订阅全灭」再次发生；
- *   - 节点测活/测速不接入本模块，必须保持裸 TCP/TLS。
+ * 决策顺序（顺序即优先级）：
+ *   1. 命中 bypass          → 直连（一票否决，任何策略都改不了）
+ *   2. 未配置代理地址        → 直连
+ *   3. 目标策略 = off       → 直连
+ *   4. 目标策略 = on        → 代理
+ *   5. 目标策略 = auto      → 先直连（3 秒探测），失败再走代理
+ *
+ * 「3 秒探测」只约束「握手 + 收到响应头」：一旦拿到 headers 就清掉计时器，
+ * 让响应体按完整业务超时慢慢下载。否则 20MB 的大订阅会被误判成「直连不通」。
+ *
+ * 节点测活/测速不接入本模块，必须保持裸 TCP/TLS。
  */
 
 import { Agent, ProxyAgent } from 'undici';
 import { describeFetchError, isTimeoutError } from './net-errors';
 import {
-  proxyUrlForTarget,
+  PROXY_PROBE_TIMEOUT_MS,
   readEffectiveProxyConfig,
   shouldBypass,
-  type ProxyChoice,
-  type ProxyPurpose,
+  type ProxyTarget,
   type SettingsReader,
 } from './proxy-config';
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface HttpFetchInit extends RequestInit {
-  /** 单次请求超时（毫秒）；不传使用用途默认值 */
+  /** 单次请求超时（毫秒）；不传使用目标的默认值 */
   timeoutMs?: number;
-  /** auto（默认）：按用途策略；on：强制代理；off：强制直连 */
-  choice?: ProxyChoice;
 }
 
 export type ProxyTestResult = {
@@ -39,17 +40,18 @@ export type ProxyTestResult = {
 };
 
 export interface HttpClient {
-  fetch(purpose: ProxyPurpose, url: string, init?: HttpFetchInit): Promise<Response>;
-  asFetch(purpose: ProxyPurpose): FetchFn;
-  /** 设置页「测试代理」：固定目标，不允许任意 URL，避免 SSRF */
+  fetch(target: ProxyTarget, url: string, init?: HttpFetchInit): Promise<Response>;
+  asFetch(target: ProxyTarget): FetchFn;
+  /** 设置页「测试代理」：固定目标，不允许任意 URL，避免 SSRF；永远走代理 */
   testProxy(): Promise<ProxyTestResult>;
 }
 
-export const DEFAULT_TIMEOUT_MS: Record<ProxyPurpose, number> = {
-  // v2.44.2：订阅源常在境外且内容较大，10s 容易把「慢」误判成「失败」；
-  // 与 fetcher.ts 的 FETCH_TIMEOUT_MS 保持一致。
+export const DEFAULT_TIMEOUT_MS: Record<ProxyTarget, number> = {
+  // 订阅源常在境外且内容较大，10s 容易把「慢」误判成「失败」
   subscription: 30_000,
-  github: 15_000,
+  rules: 15_000,
+  version: 15_000,
+  dns: 5_000,
   geo: 10_000,
 };
 
@@ -87,112 +89,163 @@ export function resetHttpAgents(): void {
   }
 }
 
-function combineErrors(primary: unknown, fallback: unknown, fallbackLabel: string): Error {
-  const first = describeFetchError(primary).message;
-  const second = describeFetchError(fallback).message;
-  return new Error(`${first}；${fallbackLabel}也失败：${second}`);
+/** 合并两条通道的错误，让界面能看出「两边都试过了」以及各自原因 */
+function combineErrors(direct: unknown, proxy: unknown): Error {
+  const first = describeFetchError(direct).message;
+  const second = describeFetchError(proxy).message;
+  return new Error(`直连失败：${first}；代理也失败：${second}`);
 }
 
 export function createHttpClient(
   settings: SettingsReader,
-  options: { rawFetch?: typeof fetch } = {}
+  options: { rawFetch?: typeof fetch; probeTimeoutMs?: number } = {}
 ): HttpClient {
   const injectedFetch = options.rawFetch;
+  const probeTimeoutMs = options.probeTimeoutMs ?? PROXY_PROBE_TIMEOUT_MS;
 
-  async function request(
+  function parseHostname(url: string): string {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 单次尝试。proxyUrl 为 null 走直连。
+   * extraSignal 用于 auto 模式的短探测，与完整超时叠加。
+   */
+  async function attempt(
     url: string,
     init: HttpFetchInit | undefined,
-    purpose: ProxyPurpose,
+    target: ProxyTarget,
     proxyUrl: string | null
   ): Promise<Response> {
-    const timeout = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS[purpose];
+    const timeout = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS[target];
     const typeSignal = AbortSignal.timeout(timeout);
     const rest: HttpFetchInit = { ...(init ?? {}) };
     delete rest.timeoutMs;
-    delete rest.choice;
     const signal = rest.signal ? AbortSignal.any([rest.signal, typeSignal]) : typeSignal;
-    const dispatchOptions = {
+    const doFetch = injectedFetch ?? fetch;
+    return doFetch(url, {
       ...rest,
       signal,
       dispatcher: proxyUrl ? getProxyAgent(proxyUrl) : getDirectAgent(),
-    };
-    // Node 内置 fetch 的 RequestInit 类型未声明 dispatcher（undici 扩展）
-    // 注入函数优先；否则每次调用时解析全局 fetch，便于测试 stubGlobal 生效
-    const doFetch = injectedFetch ?? fetch;
-    return doFetch(url, dispatchOptions as unknown as RequestInit);
+    } as unknown as RequestInit);
+  }
+
+  /**
+   * auto 模式的直连探测。
+   *
+   * 用一个额外的 AbortController 做 3 秒计时，而不是直接把 timeout 设成 3 秒：
+   * 一旦 headers 到达就清掉计时器，响应体仍按完整业务超时下载。
+   */
+  async function attemptDirectWithProbe(
+    url: string,
+    init: HttpFetchInit | undefined,
+    target: ProxyTarget
+  ): Promise<Response> {
+    const timeout = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS[target];
+    const probeMs = Math.min(probeTimeoutMs, timeout);
+
+    const probeController = new AbortController();
+    const fullSignal = AbortSignal.timeout(timeout);
+    const signals = [fullSignal, probeController.signal];
+    if (init?.signal) signals.push(init.signal);
+    const signal = AbortSignal.any(signals);
+
+    const rest: HttpFetchInit = { ...(init ?? {}) };
+    delete rest.timeoutMs;
+
+    const timer = setTimeout(() => {
+      probeController.abort(new Error('直连探测超时'));
+    }, probeMs);
+
+    try {
+      const doFetch = injectedFetch ?? fetch;
+      return await doFetch(url, {
+        ...rest,
+        signal,
+        dispatcher: getDirectAgent(),
+      } as unknown as RequestInit);
+    } finally {
+      // headers 已到达：停掉探测计时器，让 body 继续按完整超时下载
+      clearTimeout(timer);
+    }
   }
 
   async function fetchWithPolicy(
-    purpose: ProxyPurpose,
+    target: ProxyTarget,
     url: string,
     init?: HttpFetchInit
   ): Promise<Response> {
     const config = await readEffectiveProxyConfig(settings);
-    const choice: ProxyChoice = init?.choice ?? 'auto';
-    const targetProxy = proxyUrlForTarget(config);
+    const hostname = parseHostname(url);
 
-    let hostname = '';
-    try {
-      hostname = new URL(url).hostname;
-    } catch {
-      // 交给 fetch 抛 URL 解析错误
-    }
-    const bypassed = hostname ? shouldBypass(hostname, config.bypass) : false;
-
-    let useProxy: boolean;
-    if (choice === 'on') {
-      if (!targetProxy) {
-        throw new Error('当前订阅设置为强制代理，但系统未配置代理地址');
-      }
-      useProxy = true;
-    } else if (choice === 'off') {
-      useProxy = false;
-    } else {
-      useProxy = config.mode !== 'off' && !!targetProxy && config.scope.includes(purpose) && !bypassed;
-    }
-
-    try {
-      return await request(url, init, purpose, useProxy ? targetProxy : null);
-    } catch (err) {
-      // 显式 on/off 不回退；超时不回退（否则等待时间翻倍）
-      if (choice !== 'auto' || !config.fallback || isTimeoutError(err)) {
+    // 所有失败都展开 cause 链，避免界面只看到一句 "fetch failed"
+    const direct = async () => {
+      try {
+        return await attempt(url, init, target, null);
+      } catch (err) {
         throw describeFetchError(err);
       }
-
-      if (useProxy) {
-        try {
-          console.warn(`[Proxy] 代理失败，回退直连: ${hostname || url}`);
-          return await request(url, init, purpose, null);
-        } catch (fallbackErr) {
-          throw combineErrors(err, fallbackErr, '直连回退');
-        }
+    };
+    const viaProxy = async (proxyUrl: string) => {
+      try {
+        return await attempt(url, init, target, proxyUrl);
+      } catch (err) {
+        throw describeFetchError(err);
       }
+    };
 
-      // v2.44.2：移除「直连失败 → 回退代理」。
-      // auto 模式首选直连只会因为「用途未勾选 / 命中 bypass / 没有代理地址」而发生，
-      // 这三种情况都不允许再走代理；旧实现只看有没有代理地址，导致只勾 github/geo
-      // 时订阅直连失败仍被代理接管，使「未勾选的用途始终直连」变成假话。
-      // 保留的救援方向是上面的「代理失败 → 回退直连」。
-      throw describeFetchError(err);
+    // 1. bypass 一票否决：内网地址永远直连，内网走代理既慢又多半不通
+    if (hostname && shouldBypass(hostname, config.bypass)) {
+      return direct();
+    }
+
+    const proxyUrl = config.proxyUrl;
+    const mode = config.targets[target];
+
+    // 2/3. 没配代理 或 显式要求直连
+    if (!proxyUrl || mode === 'off') {
+      return direct();
+    }
+
+    // 4. 显式要求代理
+    if (mode === 'on') {
+      return viaProxy(proxyUrl);
+    }
+
+    // 5. auto：先直连探测，失败再走代理
+    try {
+      return await attemptDirectWithProbe(url, init, target);
+    } catch (directErr) {
+      // 调用方主动取消：不应当成「直连不通」而去试代理
+      if (init?.signal?.aborted) throw describeFetchError(directErr);
+      console.warn(`[Proxy] 直连失败，改用代理: ${hostname || url}（${describeFetchError(directErr).message}）`);
+      try {
+        return await viaProxy(proxyUrl);
+      } catch (proxyErr) {
+        throw combineErrors(directErr, proxyErr);
+      }
     }
   }
 
   return {
     fetch: fetchWithPolicy,
 
-    asFetch(purpose: ProxyPurpose): FetchFn {
-      return (url, init) => fetchWithPolicy(purpose, url, init as HttpFetchInit);
+    asFetch(target: ProxyTarget): FetchFn {
+      return (url, init) => fetchWithPolicy(target, url, init as HttpFetchInit);
     },
 
     async testProxy(): Promise<ProxyTestResult> {
       const started = Date.now();
       const config = await readEffectiveProxyConfig(settings);
-      const targetProxy = proxyUrlForTarget(config);
-      if (!targetProxy) {
-        return { ok: false, via: 'none', ms: 0, error: '未配置代理地址（当前为直连）' };
+      if (!config.proxyUrl) {
+        return { ok: false, via: 'none', ms: 0, error: '未配置代理地址（留空表示不走代理）' };
       }
       try {
-        const res = await request(TEST_PROXY_TARGET, { timeoutMs: TEST_PROXY_TIMEOUT_MS }, 'github', targetProxy);
+        const res = await attempt(TEST_PROXY_TARGET, { timeoutMs: TEST_PROXY_TIMEOUT_MS }, 'version', config.proxyUrl);
         return {
           ok: res.ok || res.status === 204,
           via: 'proxy',
@@ -211,23 +264,40 @@ export function createHttpClient(
   };
 }
 
-/** 测试/诊断用：判断某个 URL 在当前设置下是否会走代理 */
+export interface ProxyDecision {
+  /** 该目标当前策略 */
+  mode: 'auto' | 'on' | 'off';
+  /** 是否命中 bypass（命中则永远直连） */
+  bypassed: boolean;
+  /** 是否会先做一次直连探测（仅 auto 且未 bypass 且配了代理） */
+  probeDirect: boolean;
+  /** 最终会用来发请求的代理地址（null = 直连） */
+  proxyUrl: string | null;
+}
+
+/** 测试/诊断用：判断某个 URL 在当前设置下会怎么走 */
 export async function describeProxyDecision(
   settings: SettingsReader,
-  purpose: ProxyPurpose,
+  target: ProxyTarget,
   url: string
-): Promise<{ useProxy: boolean; proxyUrl: string | null }> {
+): Promise<ProxyDecision> {
   const config = await readEffectiveProxyConfig(settings);
-  const proxyUrl = proxyUrlForTarget(config);
+  const mode = config.targets[target];
   let hostname = '';
   try {
     hostname = new URL(url).hostname;
   } catch {
     // ignore
   }
-  const useProxy = config.mode !== 'off'
-    && !!proxyUrl
-    && config.scope.includes(purpose)
-    && (!hostname || !shouldBypass(hostname, config.bypass));
-  return { useProxy, proxyUrl: useProxy ? proxyUrl : null };
+  const bypassed = !!hostname && shouldBypass(hostname, config.bypass);
+  const activeProxy = bypassed || !config.proxyUrl || mode === 'off' ? null : config.proxyUrl;
+  return {
+    mode,
+    bypassed,
+    probeDirect: !bypassed && !!config.proxyUrl && mode === 'auto',
+    proxyUrl: activeProxy,
+  };
 }
+
+/** 供测试断言：超时错误是否被识别为「直连不通」而非业务失败 */
+export { isTimeoutError };

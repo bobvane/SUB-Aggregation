@@ -96,7 +96,7 @@ describe('P0 闭环：引擎版本冷启动（engine 3→4）完整链路', () =
     const app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => [], kv),
       config,
       adminPassword: 'test-pass',
       fetchRaw: async () => '',

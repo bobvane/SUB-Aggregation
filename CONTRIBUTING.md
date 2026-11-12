@@ -59,8 +59,8 @@ chore: root directory cleanup
 
 ### 当前版本
 
-- 当前正式版本：`2.44.2`
-- 下一次正式发布：`2.44.3`
+- 当前正式版本：`2.46.0`
+- 下一次正式发布：`2.46.1`
 
 ### 发布前必须核对的所有版本承载位置
 
@@ -122,13 +122,13 @@ chore: root directory cleanup
 测试命令：
 
 ```bash
-npm test          # 运行 Vitest（505 项）
+npm test          # 运行 Vitest（902 项）
 npm run lint      # ESLint 检查
 npx tsc --noEmit  # TypeScript 类型检查
 npm run build     # 构建（含前端内嵌）
 ```
 
-**测试覆盖率**：当前测试基线 505 项，提交前必须保证全绿。
+**测试覆盖率**：当前测试基线 902 项，提交前必须保证全绿。本机跑全量时 `tests/services/node-health-state-semantics.test.ts` 与 `tests/integration/health-cleanup-call-site.test.ts` 可能因本地网络/DNS 把测试用的伪主机名解析成可达地址而偶发失败（单独跑该文件可复现通过），CI 干净网络下为全绿；判断是否回归请以 GitHub Actions 的 `Test & Build` 为准。
 
 ## 📐 代码规范
 

@@ -69,7 +69,7 @@ export class MemoryKvAdapter implements KVStorage {
 export interface SubscriptionRepository {
   list(): Promise<Subscription[]>;
   getById(id: string): Promise<Subscription | null>;
-  create(input: { name: string; url: string; useProxy?: Subscription['useProxy'] }): Promise<Subscription>;
+  create(input: { name: string; url: string }): Promise<Subscription>;
   update(id: string, patch: Partial<Subscription>): Promise<Subscription | null>;
   delete(id: string): Promise<boolean>;
 }
@@ -103,11 +103,10 @@ export class KvSubscriptionRepository implements SubscriptionRepository {
     }
   }
 
-  async create(input: { name: string; url: string; useProxy?: Subscription['useProxy'] }): Promise<Subscription> {
+  async create(input: { name: string; url: string }): Promise<Subscription> {
     const sub = createSubscription({
       name: input.name,
       url: input.url,
-      useProxy: input.useProxy,
       id: crypto.randomUUID(),
     });
     await this.kv.put(KV_KEYS.subscription(sub.id), JSON.stringify(sub));

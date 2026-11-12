@@ -60,7 +60,7 @@ describe('POST /api/nodes/excluded（手工移出配置）', () => {
     app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => [], kv),
       config,
       adminPassword: 'test-pass',
       fetchRaw: async () => '',

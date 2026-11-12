@@ -194,7 +194,7 @@ describe('createIpGeoResolver', () => {
       'ip_geo:5.6.7.8': `${now}|__NULL__`,
     });
     let posts = 0;
-    const fetchMock = (async (url: string, init?: RequestInit) => {
+    const fetchMock = (async (_url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
         posts++;
         const payload = JSON.parse(String(init.body)) as { query: string }[];
@@ -310,7 +310,7 @@ describe('prewarmIpGeo（域名节点缓存 key 一致性修复）', () => {
       'ip_geo:18.141.12.17': `${now}|__NULL__`,
     });
     // 纯 IP 不需要 DoH，mock 只响应 POST
-    const fetchMock = (async (url: string, init?: RequestInit) => {
+    const fetchMock = (async (_url: string, init?: RequestInit) => {
       if (init?.method === 'POST') {
         const payload = JSON.parse(String(init.body)) as { query: string }[];
         return {

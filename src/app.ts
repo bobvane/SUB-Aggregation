@@ -11,10 +11,9 @@ import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
 import { createCatalogSyncService } from '@/services/catalog-sync.service';
 import { deduplicateNodes } from '@/parser';
-import { fetchSubscription, type RawFetch } from '@/engine/fetcher';
+import { fetchSubscription } from '@/engine/fetcher';
 import { createHttpClient, type HttpClient } from '@/engine/http-client';
-import { migrateLegacyEnvProxy } from '@/engine/proxy-config';
-import type { SubscriptionFetchOptions } from '@/engine/fetcher';
+import { migrateLegacyEnvProxy, migrateLegacyProxyConfig } from '@/engine/proxy-config';
 import HTML from '@/html';
 
 /** 运行时配置：来自 process.env（容器环境变量） */
@@ -27,15 +26,6 @@ export interface Env {
   [key: string]: string | undefined;
 }
 
-/**
- * 执行上下文：应用层只需要 waitUntil。
- * 入口传入等价 shim —— Hono v4 的 c.executionCtx
- * getter 在缺第三参时是 throw 而非返回 undefined，`?.` 防不住，必须实打实传进来。
- */
-export interface ExecutionContextLike {
-  waitUntil(promise: Promise<unknown>): void;
-}
-
 /** 创建带 GitHub Token 的 fetcher（用于 rule-catalog 同步） */
 function createCatalogFetcher(token: string | undefined, http: HttpClient) {
   return (url: string) => {
@@ -45,32 +35,38 @@ function createCatalogFetcher(token: string | undefined, http: HttpClient) {
       headers['Authorization'] = `Bearer ${token}`;
       headers['User-Agent'] = 'sub-aggregation';
     }
-    return http.fetch('github', url, { headers, timeoutMs: 15_000 }).then((r) => {
+    return http.fetch('rules', url, { headers, timeoutMs: 15_000 }).then((r) => {
       if (!r.ok) throw new Error(`fetch ${url} failed: ${r.status}`);
       return r.text();
     });
   };
 }
 
-type SubscriptionFetcher = (url: string, options?: SubscriptionFetchOptions) => Promise<string>;
+type SubscriptionFetcher = (url: string) => Promise<string>;
 
 function createSubscriptionFetcher(http: HttpClient): SubscriptionFetcher {
-  return (url, options) => fetchSubscription(url, http.fetch as RawFetch, options);
+  return (url) => fetchSubscription(url, http.asFetch('subscription'));
 }
 
 export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
   const repos = createRepositories(kv);
 
-  // v2.44.3：一次性把旧部署的环境变量代理导入为手动代理，避免升级后静默失效。
+  // v2.46.0：把旧版的 proxy_mode / proxy_scope 一次性迁移为 5 项目标策略
   try {
-    const migrated = await migrateLegacyEnvProxy(repos.settings);
-    if (migrated === 'imported') {
-      console.warn('[proxy] 检测到旧的 HTTP_PROXY/HTTPS_PROXY，已导入为「手动指定代理」。');
-    } else if (migrated === 'disabled') {
-      console.warn('[proxy] 旧的环境变量代理模式已停用，当前为直连。');
+    if (await migrateLegacyProxyConfig(repos.settings) === 'migrated') {
+      console.warn('[proxy] 已把旧的代理用途配置迁移为「5 个项目 × 三态」策略。');
     }
   } catch (err) {
-    console.warn('[proxy] 旧代理配置迁移失败：', (err as Error).message);
+    console.warn('[proxy] 旧代理策略迁移失败：', (err as Error).message);
+  }
+
+  // 更早期版本：把环境变量代理一次性导入为手动地址，避免升级后静默失效
+  try {
+    if (await migrateLegacyEnvProxy(repos.settings) === 'imported') {
+      console.warn('[proxy] 检测到旧的 HTTP_PROXY/HTTPS_PROXY，已导入为代理地址。');
+    }
+  } catch (err) {
+    console.warn('[proxy] 环境变量代理导入失败：', (err as Error).message);
   }
 
   // 首次部署初始化
@@ -107,7 +103,6 @@ export async function buildApp(kv: KVStorage, env: Env): Promise<Hono> {
 
   const subscriptions = createSubscriptionService(
     repos,
-    subscriptionFetcher,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
     kv
   );
@@ -295,7 +290,6 @@ export async function runScheduled(
 
   const subs = createSubscriptionService(
     repos,
-    fetchSub,
     async () => (await repos.rules.list()).map((r) => ({ type: r.type, pattern: r.pattern, enabled: r.enabled })),
     kv
   );

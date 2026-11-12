@@ -29,7 +29,7 @@ describe('订阅更新 → 配置快照失效（v2.38.6）', () => {
   beforeEach(async () => {
     kv = new MemoryKvAdapter();
     repos = createRepositories(kv);
-    subs = createSubscriptionService(repos, async () => '', async () => [], kv);
+    subs = createSubscriptionService(repos, async () => [], kv);
     config = createConfigService(repos, kv);
     // 预填地理缓存：让配置生成不触发任何外部请求
     const ts = Date.now();
@@ -112,7 +112,7 @@ describe('HTTP 端点：订阅更新后 /api/output/mihomo 与 /sub/mihomo/<key>
 
     const kv2 = new MemoryKvAdapter();
     const repos2 = createRepositories(kv2);
-    const subs2 = createSubscriptionService(repos2, async () => '', async () => [], kv2);
+    const subs2 = createSubscriptionService(repos2, async () => [], kv2);
     const config2 = createConfigService(repos2, kv2);
     const { hash, salt } = await createPasswordHash('test-pass');
     await kv2.put('admin:hash', JSON.stringify({ hash, salt }));

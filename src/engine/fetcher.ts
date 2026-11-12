@@ -5,7 +5,6 @@
  */
 
 import { describeFetchError } from './net-errors';
-import type { ProxyChoice, ProxyPurpose } from './proxy-config';
 
 const ALLOWED_PROTOCOLS = ['https:', 'http:'];
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -14,17 +13,15 @@ const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
 export const SUBSCRIPTION_FETCH_TIMEOUT_MS = 30_000; // 30 秒
 const MAX_REDIRECTS = 3;
 
-/** 底层抓取函数：生产由 http-client 注入（按用途决定代理），测试可传 mock */
+/**
+ * 底层抓取函数：生产由 http-client 注入（`http.asFetch('subscription')`，
+ * 代理策略由设置页「订阅拉取」一项统一控制），测试可传 mock。
+ */
 export type RawFetch = (
-  purpose: ProxyPurpose,
   url: string,
-  init?: RequestInit & { timeoutMs?: number; choice?: ProxyChoice }
+  init?: RequestInit & { timeoutMs?: number }
 ) => Promise<Response>;
 
-export interface SubscriptionFetchOptions {
-  /** auto（默认）：跟随全局策略；on：强制代理；off：强制直连 */
-  choice?: ProxyChoice;
-}
 
 /**
  * 私有/保留 IP 判断（基于数值 CIDR，覆盖全部保留网段）
@@ -174,9 +171,9 @@ async function fetchWithTimeout(input: string | URL | Request, init: RequestInit
 
 /**
  * 兜底抓取：没有注入 http-client 时（测试/脚本）使用全局 fetch + 本地超时。
- * 生产路径由 createHttpClient('subscription') 注入，按设置决定直连/代理。
+ * 生产路径由 http-client 的 `asFetch('subscription')` 注入，按设置决定直连/代理。
  */
-const defaultRawFetch: RawFetch = (_purpose, input, init) =>
+const defaultRawFetch: RawFetch = (input, init) =>
   fetchWithTimeout(input, (init ?? {}) as RequestInit);
 
 /**
@@ -185,8 +182,7 @@ const defaultRawFetch: RawFetch = (_purpose, input, init) =>
  */
 export async function fetchSubscription(
   url: string,
-  rawFetch: RawFetch = defaultRawFetch,
-  options: SubscriptionFetchOptions = {}
+  rawFetch: RawFetch = defaultRawFetch
 ): Promise<string> {
   const validation = validateUrl(url);
   if (!validation.ok) {
@@ -197,14 +193,13 @@ export async function fetchSubscription(
 
   try {
     for (let i = 0; i <= MAX_REDIRECTS; i++) {
-      const res = await rawFetch('subscription', currentUrl, {
+      const res = await rawFetch(currentUrl, {
         headers: {
           'User-Agent': 'SUB-Aggregation/2.0',
           Accept: 'text/plain,text/html,application/json,*/*',
         },
         redirect: 'manual', // 手动处理重定向以计数
         timeoutMs: SUBSCRIPTION_FETCH_TIMEOUT_MS,
-        choice: options.choice,
       });
 
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {

@@ -14,7 +14,6 @@ import type { FetchFn } from '@/engine/http-client';
 
 const IP_GEO_KEY_PREFIX = 'ip_geo:';
 const IP_API_URL = 'http://ip-api.com/batch';
-const IP_API_JSON_URL = 'http://ip-api.com/json/';
 // GeoRetry 任务门闩状态 key（v2.25.0：active 门闩哨兵，正常态 0 KV 写）
 // 存 { ts, count, active }：active=true 时 cron 每分钟重试；false 时 cron 直接短路不写 KV
 export const GEO_PENDING_RETRY_KEY = 'geo_pending_retry';
@@ -246,25 +245,6 @@ export async function batchQuery(
   }
 
   return result;
-}
-
-/** 单个 IP 查询（备用） */
-export async function singleQuery(
-  ip: string,
-  fetchFn: FetchFn = fetch
-): Promise<string | null> {
-  try {
-    const res = await fetchFn(`${IP_API_JSON_URL}${encodeURIComponent(ip)}`, {
-      signal: AbortSignal.timeout(5000), // 5 秒超时
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { status: 'success' | 'fail'; countryCode?: string };
-    if (data.status !== 'success' || !data.countryCode) return null;
-    const display = countryDisplayName(data.countryCode);
-    return display || null;
-  } catch {
-    return null;
-  }
 }
 
 /** v2.38.6：一次预填充的外部请求计数（用于可观测性与额度评估，全部为真实计数） */

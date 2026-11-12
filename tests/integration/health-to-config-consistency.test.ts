@@ -238,7 +238,7 @@ describe('C3 闭环：/api/nodes 与后端筛选一致', () => {
     const app = createApp({
       repos,
       auth,
-      subscriptions: createSubscriptionService(repos, async () => '', async () => [], kv),
+      subscriptions: createSubscriptionService(repos, async () => [], kv),
       config: svc,
       adminPassword: 'test-pass',
       fetchRaw: async () => '',
