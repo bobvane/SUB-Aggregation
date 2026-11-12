@@ -36,3 +36,9 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       include: scope
+    ignore:
+      # 基础镜像的 Node 主版本由人决定：奇数号版本只维护 6 个月，
+      # 自动提到非 LTS 版本会让生产镜像跑在已停止安全更新的运行时上。
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
