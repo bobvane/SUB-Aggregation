@@ -690,8 +690,11 @@ tbody tr:hover { background: var(--surface2); }
 
 /* 左栏 */
 .login-hero {
-  position: relative; display: flex; flex-direction: column; justify-content: space-between;
-  gap: 28px; padding: 40px 44px 36px; min-width: 0;
+  position: relative; display: flex; flex-direction: column; justify-content: flex-start;
+  /* brand 与 pill 要贴在一起（16px），pill 与标题之间靠 .login-pill 的 margin-bottom 拉开。
+     原来用 space-between，但样板左栏是三块（brand / 中间文案 / 底部三特性）分担空隙；
+     我们只有两块，会把 152px 全堆在 brand 下面。 */
+  gap: 16px; padding: 48px 48px 36px; min-width: 0;
 }
 .login-brand { display: flex; align-items: center; gap: 11px; }
 .login-brand-text { font-size: 17px; font-weight: 700; letter-spacing: -.03em; color: var(--fg); }
@@ -703,7 +706,7 @@ tbody tr:hover { background: var(--surface2); }
 }
 .login-hero-main { max-width: 620px; }
 .login-pill {
-  display: inline-flex; align-items: center; gap: 7px; margin-bottom: 20px;
+  display: inline-flex; align-items: center; gap: 7px; margin-bottom: 36px;
   padding: 5px 12px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--surface);
   font-size: 12px; color: var(--muted);
