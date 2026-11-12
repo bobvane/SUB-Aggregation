@@ -1,5 +1,5 @@
 # ---------- 构建阶段：装依赖、生成内联 HTML、跑测试、打成单文件 ----------
-FROM node:24-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 
 # 先装依赖，利用层缓存
@@ -15,7 +15,7 @@ RUN npm run build:html && npm test
 RUN npm run build:server
 
 # ---------- 运行阶段：只有 node 和一个 server.mjs ----------
-FROM node:24-alpine
+FROM node:25-alpine
 WORKDIR /app
 
 COPY --from=build /app/dist/server.mjs ./server.mjs
