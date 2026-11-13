@@ -62,15 +62,15 @@ flowchart LR
 
 <table>
   <tr>
-    <td width="50%"><img src="此处填写订阅管理图片" alt="订阅管理" width="100%"><br><sub><b>订阅管理</b>　添加、更新、查看每个订阅的状态</sub></td>
-    <td width="50%"><img src="此处填写节点列表图片" alt="节点列表" width="100%"><br><sub><b>节点列表</b>　延迟、国家、锁定 / 移出一目了然</sub></td>
+    <td width="50%"><img src="docs/images/订阅管理.jpg" alt="订阅管理" width="100%"><br><sub><b>订阅管理</b>　添加、更新、查看每个订阅的状态</sub></td>
+    <td width="50%"><img src="docs/images/节点列表.jpg" alt="节点列表" width="100%"><br><sub><b>节点列表</b>　延迟、国家、锁定 / 移出一目了然</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="此处填写分流规则图片" alt="分流规则" width="100%"><br><sub><b>分流规则</b>　勾选即用的策略组与规则目录</sub></td>
-    <td width="50%"><img src="此处填写输出配置图片" alt="输出配置" width="100%"><br><sub><b>输出配置</b>　选择格式，复制订阅链接</sub></td>
+    <td width="50%"><img src="docs/images/分流规则.jpg" alt="分流规则" width="100%"><br><sub><b>分流规则</b>　勾选即用的策略组与规则目录</sub></td>
+    <td width="50%"><img src="docs/images/输出配置.jpg" alt="输出配置" width="100%"><br><sub><b>输出配置</b>　选择格式，复制订阅链接</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="此处填写系统设置图片" alt="系统设置" width="100%"><br><sub><b>系统设置</b>　更新间隔、慢节点阈值、网络代理</sub></td>
+    <td width="50%"><img src="docs/images/设置.jpg" alt="系统设置" width="100%"><br><sub><b>系统设置</b>　更新间隔、慢节点阈值、网络代理</sub></td>
     <td width="50%"><img src="此处填写客户端效果图片" alt="客户端效果" width="100%"><br><sub><b>客户端效果</b>　按国家自动分组，点一下就能切</sub></td>
   </tr>
 </table>
