@@ -15,7 +15,7 @@
 <br>
 
 <!-- 主图：把 src 的中文说明替换为面板整体截图的路径，例如 docs/images/xxx.png -->
-<img src="此处填写面板整体概览图片" alt="SUB-Aggregation 面板预览" width="860">
+<img src="docs/images/封面.jpg" alt="SUB-Aggregation 面板预览" width="860">
 
 </div>
 
