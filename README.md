@@ -71,7 +71,7 @@ flowchart LR
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/设置.jpg" alt="系统设置" width="100%"><br><sub><b>系统设置</b>　更新间隔、慢节点阈值、网络代理</sub></td>
-    <td width="50%"><img src="此处填写客户端效果图片" alt="客户端效果" width="100%"><br><sub><b>客户端效果</b>　按国家自动分组，点一下就能切</sub></td>
+    <td width="50%"><img src="docs/images/节点管理.jpg" alt="节点管理" width="100%"><br><sub><b>节点管理</b>　自动国家命名，响应低抛弃，手动锁定和抛弃</sub></td>
   </tr>
 </table>
 
