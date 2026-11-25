@@ -1953,6 +1953,24 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
   border-radius: 4px; accent-color: var(--accent); cursor: pointer;
 }
 
+/* —— 输出国家组弹窗 —— */
+.country-group-showall {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 0 10px; font-size: 13px; color: var(--muted); cursor: pointer; line-height: 1.5;
+}
+#countryGroupsModal input[type="checkbox"] {
+  width: 16px; height: 16px; flex: none; padding: 0; margin: 0;
+  border-radius: 4px; accent-color: var(--accent); cursor: pointer;
+}
+.country-group-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 2px;
+  border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.country-group-row:last-child { border-bottom: none; }
+.country-group-flag { font-size: 16px; line-height: 1; flex: none; }
+.country-group-name { flex: 1 1 auto; min-width: 0; font-size: 13px; }
+.country-group-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; flex: none; }
+
 /* —— 代理目标 —— */
 .st-targets { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
 .st-target-row {
@@ -2879,13 +2897,14 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
         勾选的国家会长期保留；未勾选的地区默认不进入输出配置（锁定节点除外）。<br>
         全部取消勾选 = 不过滤、保留全部；启用过滤时，未识别国家的节点默认排除。
       </p>
+      <label class="country-group-showall">
+        <span>显示全部已知国家（含当前无节点的）</span>
+        <input type="checkbox" id="countryGroupShowAll" onchange="renderCountryGroups()">
+      </label>
       <div class="search-box" style="margin-bottom:10px">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="countryGroupSearch" type="search" placeholder="搜索国家…" oninput="renderCountryGroups()" aria-label="搜索国家">
       </div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;color:var(--muted);cursor:pointer">
-        <input type="checkbox" id="countryGroupShowAll" onchange="renderCountryGroups()"> 显示全部已知国家（含当前无节点的）
-      </label>
       <div id="countryGroupList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:4px 10px"></div>
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
         <button type="button" class="btn btn-sm" onclick="countryGroupsSelectAll()">全选</button>
@@ -4630,12 +4649,21 @@ function nodeLatency(n) {
   return h ? (h.tlsLatency ?? h.tcpLatency) : null;
 }
 
-// 默认排序：同国家聚在一起，国家内健康得分高的在前（无分/无国家靠后）
+// 默认排序分组：0 锁定置顶 → 1 可进配置 → 2 地区未启用/手动移出 → 3 已抛弃
+function nodeSortRank(n) {
+  if (n.locked) return 0;
+  if (n.dropped) return 3;
+  if (n.countryExcluded || n.excluded) return 2;
+  return 1;
+}
+
+// 默认排序：先按分组（锁定 / 可进配置 / 地区未启用 / 已抛弃），组内同国家聚在一起，
+// 国家内健康得分高的在前（无分/无国家靠后）
 function defaultNodeOrder(a, b) {
   // v2.37.1：锁定节点恒排最前（显性，直到解锁）
-  if (!!a.locked !== !!b.locked) return a.locked ? -1 : 1;
-  // v2.36.6：被系统剔除的节点恒排末尾（连续失败被状态机确认失效的沉底，便于扫视）
-  if (!!a.dropped !== !!b.dropped) return a.dropped ? 1 : -1;
+  const ra = nodeSortRank(a);
+  const rb = nodeSortRank(b);
+  if (ra !== rb) return ra - rb;
   const ca = a.country || 'ZZ';
   const cb = b.country || 'ZZ';
   if (ca !== cb) return ca < cb ? -1 : 1;
@@ -4989,11 +5017,11 @@ function renderCountryGroups() {
   box.innerHTML = items.map(c => {
     const checked = draft.has(c.code) ? ' checked' : '';
     const count = Number(c.count) || 0;
-    return `<label style="display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--line);cursor:pointer">
+    return `<label class="country-group-row">
       <input type="checkbox" value="${escHtml(c.code)}"${checked} onchange="toggleCountryGroup('${escHtml(c.code)}', this.checked)">
-      <span style="font-size:16px;line-height:1">${escHtml(c.flag || '')}</span>
-      <span style="font-size:13px">${escHtml(c.name || c.code)}</span>
-      <span style="margin-left:auto;color:var(--muted);font-size:12px">${count} 个节点</span>
+      <span class="country-group-flag">${escHtml(c.flag || '')}</span>
+      <span class="country-group-name">${escHtml(c.name || c.code)}</span>
+      <span class="country-group-count">${count} 个节点</span>
     </label>`;
   }).join('');
 }
