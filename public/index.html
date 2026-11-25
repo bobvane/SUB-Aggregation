@@ -2317,7 +2317,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
           </button>
         </div>
       </div>
-      <div class="nd-stats-foot">🏷 节点名自动生成：<span>旗帜 中文国家名+协议-序号</span>（如 🇭🇰 香港VLESS-01），延迟见「延迟」列，不写进名字。</div>
+      <div class="nd-stats-foot">🏷 节点名自动生成：<span>旗帜 国家码-序号</span>（如 🇭🇰 HK-01），延迟见「延迟」列，不写进名字。</div>
     </div>
 
     <div id="geoPendingBanner" class="card nd-geo-banner" style="display:none"></div>
@@ -4683,20 +4683,27 @@ function nodeSortRank(n) {
   return 1;
 }
 
-// 默认排序：先按分组（锁定 / 可进配置 / 地区未启用 / 已抛弃），组内同国家聚在一起，
-// 国家内健康得分高的在前（无分/无国家靠后）
+// 默认排序：先按分组（锁定 / 可进配置 / 地区未启用 / 已抛弃），
+// 组内按核心延迟从低到高（未探测/超时排最后），延迟相同再按国家、得分、名称稳定排序
 function defaultNodeOrder(a, b) {
   // v2.37.1：锁定节点恒排最前（显性，直到解锁）
   const ra = nodeSortRank(a);
   const rb = nodeSortRank(b);
   if (ra !== rb) return ra - rb;
+  const la = nodeLatency(a);
+  const lb = nodeLatency(b);
+  if (la !== lb) {
+    if (la == null) return 1;
+    if (lb == null) return -1;
+    return la - lb;
+  }
   const ca = a.country || 'ZZ';
   const cb = b.country || 'ZZ';
   if (ca !== cb) return ca < cb ? -1 : 1;
   const sa = a.score ?? -1;
   const sb = b.score ?? -1;
   if (sa !== sb) return sb - sa;
-  return (nodeLatency(a) ?? 1e9) - (nodeLatency(b) ?? 1e9);
+  return String(a.name).localeCompare(String(b.name), 'zh-CN');
 }
 
 // 点击「延迟」表头切换 升序 → 降序 → 取消
@@ -4725,6 +4732,7 @@ const ND_ICON_LOCK = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none
 const ND_ICON_UNLOCK = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>';
 const ND_ICON_LOGOUT = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>';
 const ND_ICON_RESTORE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+const ND_ICON_BOLT = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>';
 const ND_ICON_COPY = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const ND_ICON_HIST = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>';
 const ND_ICON_SHIELD = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>';
@@ -4993,6 +5001,7 @@ function renderNodes() {
         <div class="nd-ops">
           <button type="button" class="btn btn-sm${n.locked ? ' btn-soft' : ''}" title="${n.locked ? '已锁定：无视健康状态，强制进配置（点击解锁）' : '未锁定：跟随系统健康状态判定进出配置（点击锁定）'}" onclick="toggleNodeLock('${fp}', ${!n.locked})">${n.locked ? ND_ICON_UNLOCK : ND_ICON_LOCK}${n.locked ? '解锁' : '锁定'}</button>
           <button type="button" class="btn btn-sm${n.excluded ? ' btn-soft' : ''}" title="${n.excluded ? '已手工移出配置（点击恢复，重新参与系统筛选）' : '手工移出配置：不进入输出订阅；若已锁定会同时解锁'}" onclick="toggleNodeExcluded('${fp}', ${!n.excluded})">${n.excluded ? ND_ICON_RESTORE : ND_ICON_LOGOUT}${n.excluded ? '恢复' : '移出配置'}</button>
+          <button type="button" class="nd-ibtn" title="单独测速（只测这个节点，节省资源）" onclick="probeSingleNode('${fp}', this)">${ND_ICON_BOLT}</button>
           <button type="button" class="nd-ibtn" title="复制节点链接" onclick="copyNodeLink('${fp}')">${ND_ICON_COPY}</button>
           <button type="button" class="nd-ibtn" title="健康历史" onclick="showNodeHistory('${fp}')">${ND_ICON_HIST}</button>
         </div>
@@ -5110,6 +5119,33 @@ async function probeAllNodes() {
   if (!outcome.ok) return; // 结果（或失败原因）已保留在窗口内
   // 结果已展示，再做非关键刷新；刷新失败不影响已展示的结果
   try { await loadNodes(true); } catch (e) { /* loadNodes 内部已提示 */ }
+}
+
+/** 单独测速：只跑一个节点，避免全量测速的资源开销 */
+async function probeSingleNode(fingerprint, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/nodes/probe/one', {
+      method: 'POST',
+      body: JSON.stringify({ fingerprint }),
+      timeout: 40000,
+    });
+    const d = (res && res.data) || {};
+    const node = state.nodes.find((n) => n.fingerprint === fingerprint);
+    const name = node ? node.name : fingerprint;
+    if (d.status === 'alive') {
+      toast(`${name}：延迟 ${d.latency != null ? d.latency + ' ms' : '-'}`);
+    } else if (d.status === 'dead') {
+      toast(`${name}：不通（${d.error || '测速失败'}）`, 'error');
+    } else {
+      toast(`${name}：核心不可用（${d.error || '未知'}）`, 'error');
+    }
+    await loadNodes(true);
+  } catch (e) {
+    toast('单独测速失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // ============ 节点健康历史（点击状态列弹出，纯前端折线图） ============

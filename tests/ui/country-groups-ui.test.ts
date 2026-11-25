@@ -63,6 +63,32 @@ describe('节点默认排序', () => {
     expect(sorted.indexOf('country')).toBeLessThan(sorted.indexOf('dropped'));
     expect(sorted.indexOf('manual')).toBeLessThan(sorted.indexOf('dropped'));
   });
+
+  it('组内按核心延迟从低到高，未探测排最后', () => {
+    const sandbox: Record<string, unknown> = { nodeLatency: (n: { lat?: number | null }) => n.lat ?? null };
+    vm.createContext(sandbox);
+    vm.runInContext(
+      sliceFunction('nodeSortRank') + '\n' + sliceFunction('defaultNodeOrder') + '\n',
+      sandbox
+    );
+    const compare = sandbox.defaultNodeOrder as (a: unknown, b: unknown) => number;
+    const nodes = [
+      { name: 'slow', lat: 800, locked: false, dropped: false, countryExcluded: false, excluded: false },
+      { name: 'fast', lat: 120, locked: false, dropped: false, countryExcluded: false, excluded: false },
+      { name: 'unknown', lat: null, locked: false, dropped: false, countryExcluded: false, excluded: false },
+      { name: 'mid', lat: 300, locked: false, dropped: false, countryExcluded: false, excluded: false },
+    ];
+    expect([...nodes].sort(compare).map((n) => n.name)).toEqual(['fast', 'mid', 'slow', 'unknown']);
+  });
+});
+
+describe('节点行单独测速按钮', () => {
+  it('行内包含闪电按钮与 probeSingleNode 处理函数', () => {
+    expect(source).toContain("title=\"单独测速（只测这个节点，节省资源）\"");
+    expect(source).toContain('probeSingleNode(');
+    expect(source).toContain('ND_ICON_BOLT');
+    expect(generated).toContain('probeSingleNode');
+  });
 });
 
 describe('国家组弹窗排版', () => {

@@ -178,9 +178,9 @@ Score = Math.max(0, Math.min(100, Math.round(
 ## 6. 自动命名（smartRename，替代旧清洗）
 
 ```
-格式: [旗帜] [中文国家名][协议]-NN
-例:  🇭🇰 香港VLESS-01
-     🇯🇵 日本VLESS-02
+格式: [旗帜] [国家码]-NN
+例:  🇭🇰 HK-01
+     🇯🇵 JP-02
 ```
 
 - 2026-11-10 起名字里的二字码改为中文国家名（中文名与协议之间无空格）；`metadata.country` 仍存二字码。

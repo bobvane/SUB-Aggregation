@@ -1305,6 +1305,35 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ success: true, data: health });
   });
 
+  // 单节点测速（闪电按钮）：只跑一个节点，避免全量测速的资源开销
+  app.post('/api/nodes/probe/one', requireAuth(auth), async (c) => {
+    const body = await readBody<{ fingerprint?: string }>(c);
+    if (!body.fingerprint) {
+      return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'fingerprint is required' } }, 400);
+    }
+    const { probeAllNodes } = await import('@/services/node-probe.service');
+    const nodes = deduplicateNodes(await repos.nodes.getAll());
+    const node = nodes.find((n) => nodeFingerprint(n) === body.fingerprint);
+    if (!node) {
+      return c.json({ success: false, error: { code: 'NOT_FOUND', message: '节点不存在' } }, 404);
+    }
+    try {
+      const { results } = await probeAllNodes([node], storage, undefined, { full: true, skipMemo: true });
+      const r = results[0];
+      return c.json({
+        success: true,
+        data: {
+          fingerprint: body.fingerprint,
+          status: r?.status ?? 'unknown',
+          latency: r?.tcpLatency ?? null,
+          error: r?.error ?? null,
+        },
+      });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'PROBE_FAILED', message: (e as Error).message } }, 500);
+    }
+  });
+
   // v2.32: 前端「立即测活」按钮触发全量节点测活（同步等待，前端展示进度）
   app.post('/api/nodes/probe', requireAuth(auth), async (c) => {
     try {

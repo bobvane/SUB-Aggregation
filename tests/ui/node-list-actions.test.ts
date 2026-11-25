@@ -78,11 +78,11 @@ describe('节点列表静态结构（源码 + 生成物）', () => {
     expect(source).toContain('node-action-wrap');
   });
 
-  it('命名格式说明改为中文国家名，生成物同步重建', () => {
-    expect(source).toContain('🇭🇰 香港VLESS-01');
-    expect(source).not.toContain('HK VLESS-01');
-    expect(generated).toContain('🇭🇰 香港VLESS-01');
-    expect(generated).not.toContain('HK VLESS-01');
+  it('命名格式说明改为国家码，生成物同步重建', () => {
+    expect(source).toContain('🇭🇰 HK-01');
+    expect(source).not.toContain('香港VLESS-01');
+    expect(generated).toContain('🇭🇰 HK-01');
+    expect(generated).not.toContain('香港VLESS-01');
     expect(generated).toContain('toggleNodeExcluded');
     expect(generated).toContain("'恢复' : '移出配置'");
   });

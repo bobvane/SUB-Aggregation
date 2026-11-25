@@ -12,6 +12,7 @@ import { createAuthService, createPasswordHash } from '@/services/auth.service';
 import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
 import { createNode, nodeFingerprint, type Node } from '@/models/node';
+import { setCoreProbeRunnerForTest } from '@/services/core-probe.service';
 import { countryDisplayName } from '@/data/country-codes';
 
 const HK = 'hk.example.com';
@@ -73,6 +74,7 @@ describe('输出国家组 API', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    setCoreProbeRunnerForTest(null);
   });
 
   const listNodes = async (): Promise<{ data: NodeRow[]; outputCountries: string[] }> => {
@@ -174,5 +176,36 @@ describe('输出国家组 API', () => {
     }).data;
     expect(d.nodes.inOutput).toBe(1);
     expect(d.nodes.excluded.country).toBe(2);
+  });
+
+  it('单节点测速只写入该节点的健康数据，且不更新增量元数据', async () => {
+    setCoreProbeRunnerForTest(async (nodes) => ({
+      outcomes: nodes.map((n) => ({
+        nodeId: n.id,
+        fingerprint: nodeFingerprint(n),
+        latency: 123,
+        status: 'alive' as const,
+        error: null,
+        timestamp: Date.now(),
+      })),
+      coreOk: true,
+      error: null,
+    }));
+    const hkFp = nodeFingerprint(mkNode(HK));
+    const arFp = nodeFingerprint(mkNode(AR));
+    const res = await app.request('/api/nodes/probe/one', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ fingerprint: hkFp }),
+    });
+    expect(res.status).toBe(200);
+    const d = ((await res.json()) as { data: { status: string; latency: number | null } }).data;
+    expect(d.status).toBe('alive');
+    expect(d.latency).toBe(123);
+
+    expect(await kv.get(`health:latest:${hkFp}`)).not.toBeNull();
+    expect(await kv.get(`health:latest:${arFp}`)).toBeNull();
+    // skipMemo：单节点测速不触发全量/增量节奏
+    expect(await kv.get('probe:last_full_at')).toBeNull();
   });
 });

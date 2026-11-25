@@ -484,6 +484,8 @@ export interface ProbeAllResult {
 export interface ProbeAllOptions {
   /** true = 全量测速（手动按钮）；false/省略 = 增量（仅新增/变化节点，每 6 小时自动全量） */
   full?: boolean;
+  /** true = 不更新增量测速元数据（单节点测速使用，避免打乱全量/增量节奏） */
+  skipMemo?: boolean;
 }
 
 let probeAllNodesInflight: Promise<ProbeAllResult> | null = null;
@@ -720,8 +722,10 @@ async function doProbeAllNodes(
     );
   }
 
-  // 更新增量测速元数据（只记录本轮实际测过的节点）
-  await updateProbeMemo(storage, nodes, testNodes, full);
+  // 更新增量测速元数据（只记录本轮实际测过的节点；单节点测速跳过，避免打乱全量节奏）
+  if (!opts?.skipMemo) {
+    await updateProbeMemo(storage, nodes, testNodes, full);
+  }
 
   // 清理 30 天前历史
   await cleanupOldHistory(storage, results.filter(r => r.status !== 'unknown').map(r => r.fingerprint));
