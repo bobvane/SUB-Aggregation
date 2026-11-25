@@ -17,6 +17,7 @@ import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createNode, nodeFingerprint, type Node } from '@/models/node';
 import { createConfigService } from '@/services/config.service';
 import { isProbeApplicable } from '@/services/node-probe.service';
+import { countryDisplayName } from '@/data/country-codes';
 import { validateMihomo } from '@/generator/mihomo';
 import { parseYaml } from '@/generator/yaml-serializer';
 
@@ -51,6 +52,12 @@ async function setup(nodes: Node[]) {
   const kv = new MemoryKvAdapter();
   const repos = createRepositories(kv);
   await repos.nodes.setBySubscription('sub-tuic', nodes);
+  // 预置 IP 地理缓存：本测试只验证 TUIC 配置闭环，不应依赖外网 ip-api。
+  // 否则 CI 上每个节点会各等 10s 超时，双节点用例直接撞 20s 测试上限。
+  const ts = Date.now();
+  for (const n of nodes) {
+    await repos.settings.set(`ip_geo:${n.server}`, `${ts}|${countryDisplayName('HK')}`);
+  }
   const svc = createConfigService(repos, kv);
   return { kv, repos, svc };
 }

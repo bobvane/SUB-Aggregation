@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createNode, Node, nodeFingerprint } from '@/models/node';
 import { createConfigService } from '@/services/config.service';
+import { countryDisplayName } from '@/data/country-codes';
 import { validateMihomo } from '@/generator/mihomo';
 import { parseYaml } from '@/generator/yaml-serializer';
 
@@ -62,6 +63,11 @@ async function makeSvcWithNodes() {
   const B = createNode({ name: 'B', server: 'b.example.com', port: 443, protocol: 'vless', uuid: 'ub' });
   const C = createNode({ name: 'C', server: 'c.example.com', port: 443, protocol: 'hysteria2', password: 'pc' });
   await repos.nodes.setBySubscription('sub1', [A, B, C]);
+  // 预置 IP 地理缓存：避免 generate() 在 CI 上对每个节点做 10s 外网查询导致超时。
+  const ts = Date.now();
+  for (const n of [A, B, C]) {
+    await repos.settings.set(`ip_geo:${n.server}`, `${ts}|${countryDisplayName('HK')}`);
+  }
   const svc = createConfigService(repos, kv);
   return { kv, repos, svc, A, B, C };
 }
