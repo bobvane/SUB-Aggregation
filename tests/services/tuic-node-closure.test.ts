@@ -73,7 +73,7 @@ const findProxy = (yaml: string, server: string, port: number) =>
 
 describe('TUIC 独立节点闭环：getNodes → generate(mihomo) → validateMihomo', () => {
   it('TUIC 属于 UDP 基础探测不适用协议（不因此被剔除配置）', () => {
-    expect(isProbeApplicable('tuic')).toBe(false);
+    expect(isProbeApplicable('tuic')).toBe(true);
   });
 
   it('TUIC V5（uuid + password）：进入 getNodes 与最终配置，关键字段完整', async () => {

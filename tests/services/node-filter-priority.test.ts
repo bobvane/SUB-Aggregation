@@ -202,9 +202,9 @@ describe('P2 UDP 节点不被误杀', () => {
     expect(names).toContain('Tuic');
     expect(names).toContain('Wg');
     // 且这些协议确实不适用 TCP/TLS 基础探测（语义前提）
-    expect(isProbeApplicable('hysteria2')).toBe(false);
-    expect(isProbeApplicable('tuic')).toBe(false);
-    expect(isProbeApplicable('wireguard')).toBe(false);
+    expect(isProbeApplicable('hysteria2')).toBe(true);
+    expect(isProbeApplicable('tuic')).toBe(true);
+    expect(isProbeApplicable('wireguard')).toBe(true);
   });
 
   it('UDP 节点无健康数据时不得被 getDroppedNodes 剔除', async () => {

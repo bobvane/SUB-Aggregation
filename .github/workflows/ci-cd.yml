@@ -348,6 +348,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          pull: true
           push: true
           provenance: false
           sbom: false

@@ -13,10 +13,11 @@
  *
  * 注意：本文件只测「状态判定」，不重复评分公式细节（见 node-probe-score.test.ts）。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createNode, nodeFingerprint, type Node } from '@/models/node';
 import { createConfigService } from '@/services/config.service';
+import { setCoreProbeRunnerForTest } from '@/services/core-probe.service';
 import {
   probeAllNodes,
   evaluateStateMachine,
@@ -38,6 +39,23 @@ const mk = (id: string, name: string, extra: Partial<Node> = {}): Node =>
   } as Partial<Node> & { name: string });
 
 const DAY = 86_400_000;
+
+beforeEach(() => {
+  // 假核心：默认所有节点 dead；个别用例可覆盖
+  setCoreProbeRunnerForTest(async (nodes) => ({
+    outcomes: nodes.map((n) => ({
+      nodeId: n.id,
+      fingerprint: nodeFingerprint(n),
+      latency: null,
+      status: 'dead' as const,
+      error: 'fake dead',
+      timestamp: Date.now(),
+    })),
+    coreOk: true,
+    error: null,
+  }));
+});
+afterEach(() => setCoreProbeRunnerForTest(null));
 
 /** 写入一条指定状态的历史记录 */
 async function putHist(
@@ -85,7 +103,7 @@ describe('C2 状态语义：五种状态可区分', () => {
     // 1 条 alive（窗口内）+ 本轮 dead → 连续失败 1 次 → suspect
     await putHist(kv, n, { status: 'alive', ageMs: 2 * 3600_000, tcp: 100 });
 
-    const { results } = await probeAllNodes([n], kv, 24);
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
     expect(results[0].status).toBe('dead');
 
     const latest = JSON.parse((await kv.get(`health:latest:${nodeFingerprint(n)}`)) ?? '{}');
@@ -103,7 +121,7 @@ describe('C2 状态语义：五种状态可区分', () => {
     await repos.nodes.setBySubscription('sub1', [n]);
 
     for (let i = 0; i < 3; i++) {
-      const { results } = await probeAllNodes([n], kv, 24);
+      const { results } = await probeAllNodes([n], kv, 24, { full: true });
       expect(results[0].status).toBe('dead');
       await new Promise((r) => setTimeout(r, 5)); // 保证 timestamp 唯一
     }
@@ -186,7 +204,7 @@ describe('C2 状态语义：历史时效性', () => {
     await putHist(kv, n, { status: 'dead', ageMs: 3 * DAY, tcp: null });
 
     const before = (await kv.list(`health:hist:${nodeFingerprint(n)}:`)).length;
-    const { results } = await probeAllNodes([n], kv, 24);
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
     const after = (await kv.list(`health:hist:${nodeFingerprint(n)}:`)).length;
 
     expect(before).toBe(1);
@@ -202,7 +220,7 @@ describe('C2 状态语义：历史时效性', () => {
     await putHist(kv, n, { status: 'dead', ageMs: 40 * DAY });
     expect((await kv.list(`health:hist:${nodeFingerprint(n)}:`)).length).toBe(1);
 
-    await probeAllNodes([n], kv, 24);
+    await probeAllNodes([n], kv, 24, { full: true });
     const keys = await kv.list(`health:hist:${nodeFingerprint(n)}:`);
     expect(keys.length).toBe(1);      // 仅剩本轮新记录
     expect(keys[0].key).toContain(String(Date.now()).slice(0, 8)); // 本轮时间戳
@@ -224,7 +242,7 @@ describe('C2 状态语义：非法数据不污染判定', () => {
       })
     );
     // 3 条 alive 全部无有效延迟 → 样本 S 为空
-    const { results } = await probeAllNodes([n], kv, 24);
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
     // 本轮 TCP 也不通（127.0.0.1:1）→ probeAlive=false，但 aliveCount=3 → Q1 不介入
     // availability=3/3=1；latency/stability 因 |S|=0 → 0.5/0；非 TLS 权重
     expect(Number.isFinite(results[0].score)).toBe(true);
@@ -253,7 +271,7 @@ describe('C2 状态语义：非法数据不污染判定', () => {
       );
     }
 
-    const { results } = await probeAllNodes([n], kv, 24);
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
     const latest = JSON.parse((await kv.get(`health:latest:${nodeFingerprint(n)}`)) ?? '{}');
     expect(results[0].status).toBe('dead');
 
@@ -281,7 +299,7 @@ describe('C2 状态语义：协议特殊性与评分分离', () => {
     // 2 条 TLS 成功历史（窗口内）
     await putHist(kv, n, { status: 'alive', ageMs: 3600_000, tcp: 50, tls: 60 });
     await putHist(kv, n, { status: 'alive', ageMs: 2 * 3600_000, tcp: 50, tls: 60 });
-    const { results } = await probeAllNodes([n], kv, 24);
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
     // 本轮 TCP 不通 → dead；但有 alive 历史 → Q1 不介入 → 正分
     expect(results[0].score).toBeGreaterThan(0);
   });
@@ -324,20 +342,20 @@ describe('C2 状态语义：协议特殊性与评分分离', () => {
     expect(nonTls).toBeGreaterThan(tlsFail);
   });
 
-  it('UDP 未检测：不写健康数据、不剔除、进配置', async () => {
+  it('UDP 协议也由核心测速：写健康数据、单轮失败不剔除、进配置', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
     const n = mk('n-udp', 'UdpNode', { protocol: 'tuic', server: '10.5.0.7' });
     await repos.nodes.setBySubscription('sub1', [n]);
 
-    const { results } = await probeAllNodes([n], kv, 24);
-    expect(results[0].status).toBe('unknown');
-    expect((await kv.list(`health:hist:${nodeFingerprint(n)}:`)).length).toBe(0);
-    expect(await getNodeHealthLatest(nodeFingerprint(n), kv)).toBeNull();
+    const { results } = await probeAllNodes([n], kv, 24, { full: true });
+    expect(results[0].status).toBe('dead');
+    expect((await kv.list(`health:hist:${nodeFingerprint(n)}:`)).length).toBe(1);
+    expect(await getNodeHealthLatest(nodeFingerprint(n), kv)).not.toBeNull();
 
     const svc = createConfigService(repos, kv);
     expect(await svc.getDroppedNodes()).not.toContain(nodeFingerprint(n));
     expect((await svc.getNodes()).map((x) => x.name)).toContain('UdpNode');
-    expect(isProbeApplicable('tuic')).toBe(false);
+    expect(isProbeApplicable('tuic')).toBe(true);
   });
 });

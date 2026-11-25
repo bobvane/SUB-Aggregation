@@ -1,5 +1,17 @@
 # 更新日志
 
+## v2.50.0 — 2026-11-25
+
+测速引擎改为 mihomo 核心，所有协议真实测速（含 UDP）。
+
+- **核心测速**：移除 TCP/TLS 握手探测，统一由 mihomo 核心发起真实 HTTP 请求（`/proxies/:name/delay`）。Hysteria2 / TUIC / WireGuard / AnyTLS / SSR 等全部协议都参与健康状态、排序与慢节点判定。
+- **多 URL fallback**：gstatic / cloudflare / apple 依次尝试；核心启动失败时本轮标记 unknown，不误杀节点。
+- **增量测速**：订阅拉取后只测新增/变化节点；每 6 小时或手动「立即测速」做全量。
+- **核心内置与升级**：Docker 构建从官方 `metacubex/mihomo:latest` 镜像 COPY 二进制（只走 Docker Hub）；设置页显示版本，支持从 GitHub 官方 Release 升级到 `/data/core/mihomo`（best-effort）。
+- **阈值/评分**：新增 `core_drop_latency_ms`（500–10000，默认 3000）；评分延迟归一化改为 3000ms；TLS 维度不再参与评分。
+- **UI**：节点列表移除「UDP · 不适用」，所有节点显示核心延迟；设置页新增「测速核心」区块（版本 / 检查更新 / 升级 / 立即测速 / 测试地址）。
+- **许可证**：新增 `THIRD_PARTY_NOTICES.md`（mihomo GPL-3.0）。
+
 ## v2.48.2 — 2026-11-25
 
 节点列表默认排序与国家组弹窗排版调整。

@@ -45,6 +45,13 @@ import {
   type ProxyTarget,
   type ProxyTargetMode,
 } from '@/engine/proxy-config';
+import {
+  CORE_DROP_LATENCY_KEY,
+  DEFAULT_CORE_DROP_LATENCY_MS,
+  CORE_TEST_URLS_KEY,
+  DEFAULT_CORE_TEST_URLS,
+} from '@/services/core-probe.service';
+import { getCoreStatus, getLatestCoreRelease, upgradeCore } from '@/services/core-upgrade.service';
 
 /**
  * 请求是否走 https。
@@ -485,13 +492,13 @@ export function createApp(deps: AppDeps): Hono {
     const locked = new Set(await config.getLockedNodes());
     // 输出国家组：非空时，未勾选国家（含未识别国家）的节点不进入输出配置
     const outputCountries = new Set(await config.getOutputCountries());
-    const { getAllNodeHealth, nodeLatencyMs, isProbeApplicable } = await import('@/services/node-probe.service');
+    const { getAllNodeHealth, nodeLatencyMs } = await import('@/services/node-probe.service');
     const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
     const mapper = (n: import('@/models/node').Node) => {
       const fp = nodeFingerprint(n);
       const h = healthByFp.get(fp);
-      // P0-1：UDP 协议（Hysteria2/TUIC/WireGuard）不适用 TCP/TLS 基础探测 → 显式标记，不伪装为 alive/dead
-      const probeApplicable = isProbeApplicable(n.protocol);
+      // v2.50.0：所有协议统一由 mihomo 核心测速（含 UDP 协议），probeApplicable 恒 true。
+      const probeApplicable = true;
       const country = n.metadata?.country ?? '';
       // 国家未启用：白名单生效时，国家为空或不在白名单内，且未锁定 → 不进入输出配置
       const countryExcluded = outputCountries.size > 0
@@ -514,11 +521,11 @@ export function createApp(deps: AppDeps): Hono {
         dropped: dropped.has(fp),
         countryExcluded,
         probeApplicable,
-        healthStatus: probeApplicable ? (h?.status ?? null) : 'unknown',
-        statusMachine: probeApplicable ? (h?.statusMachine ?? null) : null,
-        score: probeApplicable ? (h?.score ?? null) : null,
-        latency: probeApplicable ? (h ? nodeLatencyMs(h) : null) : null,
-        error: probeApplicable ? (h?.error ?? null) : `${n.protocol} 基于 UDP，基础 TCP/TLS 探测不适用`,
+        healthStatus: h?.status ?? null,
+        statusMachine: h?.statusMachine ?? null,
+        score: h?.score ?? null,
+        latency: h ? nodeLatencyMs(h) : null,
+        error: h?.error ?? null,
       };
     };
     if (subscriptionId) {
@@ -1050,12 +1057,50 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ success: true, data: { id } });
   });
 
+  // ============ Core (mihomo 测速核心) ============
+
+  app.get('/api/core/status', requireAuth(auth), async (c) => {
+    const status = await getCoreStatus();
+    return c.json({ success: true, data: status });
+  });
+
+  app.get('/api/core/latest', requireAuth(auth), async (c) => {
+    try {
+      const latest = await getLatestCoreRelease(http.asFetch('version'), process.env.GITHUB_TOKEN);
+      return c.json({ success: true, data: latest });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'CORE_LATEST_FAILED', message: (e as Error).message } }, 502);
+    }
+  });
+
+  app.post('/api/core/upgrade', requireAuth(auth), sensitiveOpRateLimit, async (c) => {
+    try {
+      const result = await upgradeCore(http.asFetch('version'), process.env.GITHUB_TOKEN);
+      return c.json({ success: true, data: result });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'CORE_UPGRADE_FAILED', message: (e as Error).message } }, 502);
+    }
+  });
+
   // ============ Settings ============
 
   app.get('/api/settings', requireAuth(auth), async (c) => {
     const appName = await repos.settings.get('app_name');
     const intervalRaw = await repos.settings.get('sub_update_interval');
-    const dropLatRaw = await repos.settings.get('node_drop_latency_ms');
+    const coreDropRaw = await repos.settings.get(CORE_DROP_LATENCY_KEY);
+    const coreTestUrlsRaw = await repos.settings.get(CORE_TEST_URLS_KEY);
+    let coreTestUrls: string[] = DEFAULT_CORE_TEST_URLS;
+    if (coreTestUrlsRaw) {
+      try {
+        const p = JSON.parse(coreTestUrlsRaw);
+        if (Array.isArray(p)) {
+          const urls = p.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u));
+          if (urls.length > 0) coreTestUrls = urls;
+        }
+      } catch {
+        // 非法 JSON → 回退默认
+      }
+    }
     const raw = await readRawProxyConfig(repos.settings);
     const targets = resolveProxyTargets(raw.targets);
     return c.json({
@@ -1063,7 +1108,10 @@ export function createApp(deps: AppDeps): Hono {
       data: {
         app_name: appName ?? 'SUB-Aggregation',
         sub_update_interval: intervalRaw !== null ? parseInt(intervalRaw, 10) : 24,
-        node_drop_latency_ms: dropLatRaw !== null ? parseInt(dropLatRaw, 10) : 2000,
+        core_drop_latency_ms: coreDropRaw !== null ? parseInt(coreDropRaw, 10) : DEFAULT_CORE_DROP_LATENCY_MS,
+        core_test_urls: coreTestUrls,
+        // legacy alias（旧前端/旧客户端兼容）
+        node_drop_latency_ms: coreDropRaw !== null ? parseInt(coreDropRaw, 10) : DEFAULT_CORE_DROP_LATENCY_MS,
         // 只回显用户真正保存过的值（脱敏）；未保存 = 空串，前端据此显示「未配置」
         proxy_url: maskProxyUrl(raw.url) ?? '',
         proxy_targets: targets,
@@ -1088,6 +1136,8 @@ export function createApp(deps: AppDeps): Hono {
       app_name?: string;
       sub_update_interval?: number;
       node_drop_latency_ms?: number;
+      core_drop_latency_ms?: number;
+      core_test_urls?: unknown;
       proxy_url?: unknown;
       proxy_targets?: unknown;
       proxy_bypass?: unknown;
@@ -1103,11 +1153,30 @@ export function createApp(deps: AppDeps): Hono {
       await repos.settings.set('sub_update_interval', String(h));
     }
     if (body.node_drop_latency_ms !== undefined) {
+      // legacy：旧客户端仍可写；v2.50.0 起测速改用 core_drop_latency_ms，此值不再参与判定
       const v = Number(body.node_drop_latency_ms);
       if (!Number.isInteger(v) || v < 100 || v > 2000) {
         return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '抛弃延迟阈值须为 100-2000 的整数（毫秒）' } }, 400);
       }
       await repos.settings.set('node_drop_latency_ms', String(v));
+    }
+    if (body.core_drop_latency_ms !== undefined) {
+      const v = Number(body.core_drop_latency_ms);
+      if (!Number.isInteger(v) || v < 500 || v > 10000) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: '核心延迟阈值须为 500-10000 的整数（毫秒）' } }, 400);
+      }
+      await repos.settings.set(CORE_DROP_LATENCY_KEY, String(v));
+    }
+    if (body.core_test_urls !== undefined) {
+      if (!Array.isArray(body.core_test_urls)) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'core_test_urls 必须是数组' } }, 400);
+      }
+      const rawUrls = body.core_test_urls;
+      const urls = rawUrls.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u));
+      if (urls.length !== rawUrls.length || urls.length === 0 || urls.length > 5) {
+        return c.json({ success: false, error: { code: 'INVALID_PARAMETER', message: 'core_test_urls 须为 1-5 个 http(s) URL' } }, 400);
+      }
+      await repos.settings.set(CORE_TEST_URLS_KEY, JSON.stringify(urls));
     }
 
     // ============ 网络代理（v2.46.0：地址 + 5 项目标策略 + bypass） ============
@@ -1241,7 +1310,7 @@ export function createApp(deps: AppDeps): Hono {
     try {
       const { probeAllNodes } = await import('@/services/node-probe.service');
       const nodes = deduplicateNodes(await repos.nodes.getAll());
-      const { stats } = await probeAllNodes(nodes, storage);
+      const { stats } = await probeAllNodes(nodes, storage, undefined, { full: true });
       return c.json({ success: true, nodeCount: nodes.length, stats });
     } catch (e) {
       return c.json({ success: false, error: { code: 'PROBE_FAILED', message: (e as Error).message } }, 500);

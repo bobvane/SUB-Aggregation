@@ -8,13 +8,14 @@
  *  ④ 配置生成不再包含该节点；
  *  ⑤ API 返回数据正常（healthStatus 非 500）。
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MemoryKvAdapter, createRepositories } from '@/storage/kv';
 import { createApp } from '@/api/routes';
 import { createAuthService, createPasswordHash } from '@/services/auth.service';
 import { createSubscriptionService } from '@/services/subscription.service';
 import { createConfigService } from '@/services/config.service';
 import { probeAllNodes, nodeFingerprint, resetProbeDataIfEngineChanged } from '@/services/node-probe.service';
+import { setCoreProbeRunnerForTest } from '@/services/core-probe.service';
 import { createNode, type Node } from '@/models/node';
 
 const deadNode = (): Node =>
@@ -28,7 +29,23 @@ const deadNode = (): Node =>
     metadata: { source: 'test', originalName: 'ColdNode', tags: [] },
   });
 
-describe('P0 闭环：引擎版本冷启动（engine 3→4）完整链路', () => {
+beforeEach(() => {
+  setCoreProbeRunnerForTest(async (nodes) => ({
+    outcomes: nodes.map((n) => ({
+      nodeId: n.id,
+      fingerprint: nodeFingerprint(n),
+      latency: null,
+      status: 'dead' as const,
+      error: 'fake dead',
+      timestamp: Date.now(),
+    })),
+    coreOk: true,
+    error: null,
+  }));
+});
+afterEach(() => setCoreProbeRunnerForTest(null));
+
+describe('P0 闭环：引擎版本冷启动（engine 3→5）完整链路', () => {
   it('旧引擎 3 条 dead 历史 + engine_version=3 → 历史保留 → 连续失败延续 → disabled → 剔除 → 配置不含', async () => {
     const kv = new MemoryKvAdapter();
     const repos = createRepositories(kv);
@@ -63,15 +80,15 @@ describe('P0 闭环：引擎版本冷启动（engine 3→4）完整链路', () =
     // ① 版本键同步：三个键全部就位，且**不删除任何数据**
     const changed = await resetProbeDataIfEngineChanged(kv);
     expect(changed).toBe(true);
-    expect(await kv.get('probe:engine_version')).toBe('4');
-    expect(await kv.get('probe:score_version')).toBe('4');
+    expect(await kv.get('probe:engine_version')).toBe('5');
+    expect(await kv.get('probe:score_version')).toBe('5');
     expect(await kv.get('probe:schema_version')).toBe('1');
     expect((await kv.list(`health:hist:${fp}:`)).length).toBe(3); // 历史保留
     expect(await kv.get(`health:latest:${fp}`)).not.toBeNull(); // latest 保留（含 disabled）
 
     // ② 首轮失败 → 追加 1 条 → 连续失败 4 次 → disabled（跨版本延续）
     await repos.nodes.setBySubscription('sub1', [node]);
-    const { results } = await probeAllNodes([node], kv, 24);
+    const { results } = await probeAllNodes([node], kv, 24, { full: true });
     expect(results[0].status).toBe('dead');
     const latest = JSON.parse((await kv.get(`health:latest:${fp}`)) ?? '');
     expect(latest.statusMachine).toBe('disabled');

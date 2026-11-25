@@ -163,14 +163,14 @@ describe('慢节点阈值（规则②）与健康状态机（规则①）相互�
     expect(nodes.map(n => n.name)).toContain('S'); // 保留
   });
 
-  it('最新超阈值（2500 > 默认 2000）→ 按慢节点规则剔除；健康状态仍为 alive', async () => {
+  it('最新超阈值（3500 > 默认 3000）→ 按核心延迟规则剔除；健康状态仍为 alive', async () => {
     const { kv, repos, svc } = await makeSvcWithNodes();
     const S = createNode({ name: 'S', server: 's.example.com', port: 443, protocol: 'vless', uuid: 'us' });
     await repos.nodes.setBySubscription('sub1', [...(await repos.nodes.getAll()), S]);
     const f = fp(S);
     const ts = [Date.now() - 3600_000, Date.now() - 3_600_000, Date.now() - 7_200_000];
-    for (const t of ts) await kv.put('health:hist:' + f + ':' + t, healthLatestJson(f, 'alive', 2500));
-    await kv.put('health:latest:' + f, healthLatestJson(f, 'alive', 2500));
+    for (const t of ts) await kv.put('health:hist:' + f + ':' + t, healthLatestJson(f, 'alive', 3500));
+    await kv.put('health:latest:' + f, healthLatestJson(f, 'alive', 3500));
     let nodes = await svc.getNodes();
     expect(nodes.map(n => n.name)).not.toContain('S');   // 规则②：超阈值 → 不输出
     expect(await svc.getDroppedNodes()).toContain(f);

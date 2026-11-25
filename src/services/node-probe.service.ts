@@ -22,30 +22,26 @@
  * 延迟取 TLS RTT（有）否则 TCP RTT。
  */
 
-import net from 'node:net';
-import tls from 'node:tls';
+import { createHash } from 'node:crypto';
 import { KV_KEYS } from '@/models/config';
 import { Node, NodeProtocol, nodeFingerprint as canonicalNodeFingerprint } from '@/models/node';
+import {
+  runCoreProbe,
+  type CoreProbeOutcome,
+  CORE_TEST_URLS_KEY,
+  DEFAULT_CORE_TEST_URLS,
+  CORE_FULL_PROBE_INTERVAL_MS,
+} from '@/services/core-probe.service';
 
-const PROBE_TIMEOUT_MS = 3000;
-const PROBE_CONCURRENCY = 50;
 const HEALTH_HISTORY_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 天
 
 /**
- * 基础 TCP/TLS 探测不适用的协议。
- * 这些协议基于 UDP（Hysteria2/TUIC 走 QUIC，WireGuard 走 UDP），
- * 对 UDP 端口做 TCP connect 无意义、必然失败，不能据此判 dead。
- * （P0-1：UDP 节点误杀修复）
+ * v2.50.0：所有协议统一由 mihomo 核心真实测速（含 Hysteria2/TUIC/WireGuard/AnyTLS/SSR），
+ * 不再存在“基础 TCP/TLS 探测不适用”的协议。
+ * 保留该函数以兼容既有调用方（返回值恒 true）。
  */
-export const UDP_PROBE_UNSUPPORTED_PROTOCOLS: ReadonlySet<NodeProtocol> = new Set([
-  'hysteria2',
-  'tuic',
-  'wireguard',
-]);
-
-/** 该协议是否适用于「TCP/TLS 基础连通性探测」 */
-export function isProbeApplicable(protocol: NodeProtocol): boolean {
-  return !UDP_PROBE_UNSUPPORTED_PROTOCOLS.has(protocol);
+export function isProbeApplicable(_protocol: NodeProtocol): boolean {
+  return true;
 }
 
 export type ProbeStatus = 'alive' | 'dead' | 'timeout' | 'error' | 'unknown';
@@ -100,130 +96,22 @@ export interface StateMachineResult {
 }
 
 /**
- * TCP Connect 探测 —— 真实 TCP 三次握手 RTT
- * 节点端口不是 WebSocket 服务，不能拿 wss:// 当连通性测试（v2.35 及以前如此，全部误判为 dead）
+ * 核心探测结果 → 既有健康记录结构。
+ * v2.50.0 起 `tcpLatency` 承载「mihomo 核心 HTTP 延迟」（字段名保留以兼容历史/评分/UI），
+ * `tlsLatency` 恒 null，`tlsApplicable` 恒 false（评分自动剔除 TLS 维度）。
  */
-function probeTcp(host: string, port: number): Promise<{ latency: number | null; error: string | null }> {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const sock = net.connect({ host, port });
-    const done = (r: { latency: number | null; error: string | null }) => {
-      sock.destroy();
-      resolve(r);
-    };
-    sock.setTimeout(PROBE_TIMEOUT_MS);
-    sock.once('connect', () => done({ latency: Date.now() - start, error: null }));
-    sock.once('timeout', () => done({ latency: null, error: 'TCP 超时' }));
-    sock.once('error', (e: NodeJS.ErrnoException) => done({ latency: null, error: `TCP ${e.code ?? e.message}` }));
-  });
-}
-
-/**
- * TLS 握手探测 —— 真实 handshake RTT
- * 只量握手耗时，不校验证书链（自签/过期证书不影响节点可用性判断）
- */
-function probeTls(host: string, port: number, sni?: string): Promise<{ latency: number | null; error: string | null }> {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    let sock: tls.TLSSocket;
-    try {
-      // 优先用节点的真实 SNI（CDN/Reality 节点 host 常为 IP，必须带 SNI 才握手成功；
-      // 裸 IP 强设 servername 会抛错，故 IP 且无 sni 时省略）
-      const servername = (sni ? sni.split(':')[0] : undefined) || (net.isIP(host) === 0 ? host : undefined);
-      const opts: tls.ConnectionOptions = {
-        host,
-        port,
-        rejectUnauthorized: false,
-        ...(servername ? { servername } : {}),
-      };
-      sock = tls.connect(opts);
-    } catch (e) {
-      resolve({ latency: null, error: `TLS ${(e as Error).message}` });
-      return;
-    }
-    const done = (r: { latency: number | null; error: string | null }) => {
-      sock.destroy();
-      resolve(r);
-    };
-    sock.setTimeout(PROBE_TIMEOUT_MS);
-    sock.once('secureConnect', () => done({ latency: Date.now() - start, error: null }));
-    sock.once('timeout', () => done({ latency: null, error: 'TLS 超时' }));
-    sock.once('error', (e: NodeJS.ErrnoException) => done({ latency: null, error: `TLS ${e.code ?? e.message}` }));
-  });
-}
-
-/**
- * 3 次并行探测：成功次数取延迟中位（丢最高丢最低），成败按多数票 —— 3 次全死才 dead
- * （v2.36.8：单次抖动既不会把延迟打飞，也不会把活节点误判死）
- */
-export async function probe3(probe: () => Promise<{ latency: number | null; error: string | null }>): Promise<{ latency: number | null; error: string | null }> {
-  const [a, b, c] = await Promise.all([probe(), probe(), probe()]);
-  const ok = [a, b, c].filter(r => r.latency !== null).map(r => r.latency!).sort((x, y) => x - y);
-  if (ok.length < 2) {
-    const failed = [a, b, c].find(r => r.latency === null);
-    return { latency: null, error: failed?.error ?? '3 轮探测全部失败' };
-  }
-  // 3 成功 → 中间值；2 成功 → 两者取高（保守）；排序后都是 [1]
-  return { latency: ok[1], error: null };
-}
-
-/**
- * 单节点探测：TCP 握手 →（tls 节点才做）TLS 握手
- * 判定：TCP 不通 = dead；tls 节点 TLS 握手不过 = dead。
- * 延迟取 TLS RTT，无 TLS 时取 TCP RTT。
- * v2.36.8：TCP/TLS 各 3 次取中位，历史与抛弃判定都基于中位值
- */
-async function probeNode(node: Node): Promise<ProbeResult> {
-  const fingerprint = nodeFingerprint(node);
-  const timestamp = Date.now();
-  const httpLatency: number | null = null; // 穿节点 HTTP 不可测，恒 null（见文件头说明）
-
-  // P0-1：UDP 协议（Hysteria2/TUIC/WireGuard）不做 TCP/TLS 基础探测。
-  // TCP connect 对 UDP-only 端口必然失败，不能据此判 dead。
-  // 状态标记为 'unknown'（基础探测不适用），不写入健康历史、不进入 dropped。
-  if (!isProbeApplicable(node.protocol)) {
-    return {
-      nodeId: node.id, fingerprint, tcpLatency: null, tlsLatency: null, httpLatency,
-      status: 'unknown', tlsApplicable: false,
-      error: `${node.protocol} 基于 UDP，基础 TCP/TLS 探测不适用`,
-      score: 0, timestamp,
-    };
-  }
-
-  const tcp = await probe3(() => probeTcp(node.server, node.port));
-  if (tcp.latency === null) {
-    return {
-      nodeId: node.id, fingerprint, tcpLatency: null, tlsLatency: null, httpLatency,
-      status: 'dead', tlsApplicable: !!node.tls, error: tcp.error, score: 0, timestamp,
-    };
-  }
-
-  // 明文协议（ss / 无 tls 的 vmess 等）不做 TLS 握手：必然失败，不代表节点坏
-  if (node.tls) {
-    const handshake = await probe3(() => probeTls(node.server, node.port, node.sni));
-    if (handshake.latency === null) {
-      return {
-        nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
-        status: 'dead', tlsApplicable: true, error: handshake.error, score: 0, timestamp,
-      };
-    }
-    return {
-      nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: handshake.latency, httpLatency,
-      status: 'alive', tlsApplicable: true, error: null,
-      // 占位值：doProbeAllNodes 会在写入 health:* 之前用真实历史重算并覆盖（见 :630）。
-      // 此处不再做一次 history: [] 的无效计算（C4）。
-      score: 0,
-      timestamp,
-    };
-  }
-
+function mapCoreOutcome(o: CoreProbeOutcome): ProbeResult {
   return {
-    nodeId: node.id, fingerprint, tcpLatency: tcp.latency, tlsLatency: null, httpLatency,
-    status: 'alive', tlsApplicable: false, error: null,
-    // 占位值：doProbeAllNodes 会在写入 health:* 之前用真实历史重算并覆盖（见 :630）。
-    // 此处不再做一次 history: [] 的无效计算（C4）。
+    nodeId: o.nodeId,
+    fingerprint: o.fingerprint,
+    tcpLatency: o.latency,
+    tlsLatency: null,
+    httpLatency: null,
+    status: o.status,
+    tlsApplicable: false,
+    error: o.error,
     score: 0,
-    timestamp,
+    timestamp: o.timestamp,
   };
 }
 
@@ -263,6 +151,8 @@ export interface ScoreInput {
    */
   history: Array<{ timestamp: number; tcpLatency: number | null; tlsLatency: number | null; status: string; score: number }>;
   windowHours: number;
+  /** 延迟评分归一化基准（毫秒）。默认 1000（旧口径）；生产核心测速传 3000 */
+  latencyScaleMs?: number;
   /** 时间基准（显式注入以获得确定性结果）；省略时取 Date.now() */
   now?: number;
 }
@@ -272,6 +162,9 @@ export interface ScoreInput {
  * 超过该范围的记录视为无效历史（按缺失/NaN/非正数同样处理）。
  */
 export const FUTURE_TS_TOLERANCE_MS = 5 * 60 * 1000;
+
+/** 核心延迟评分归一化基准（毫秒）：核心 HTTP 延迟通常高于 TCP/TLS RTT，故从 1000ms 放宽到 3000ms */
+export const SCORE_LATENCY_SCALE_MS = 3000;
 
 /**
  * 历史记录 timestamp 的**统一**有效性规则（阶段 2 / R1 修复）。
@@ -358,6 +251,7 @@ export function scoreWeights(tlsApplicable: boolean): {
  */
 export function calculateScore(input: ScoreInput): number {
   const { tcpLatency, tlsLatency, tcpOk, tlsOk, tlsApplicable, history, windowHours } = input;
+  const latencyScale = input.latencyScaleMs ?? 1000;
   const now = input.now ?? Date.now();
   const windowMs = windowHours * 3600 * 1000;
 
@@ -373,7 +267,7 @@ export function calculateScore(input: ScoreInput): number {
   const aliveCount = recent.filter(h => h.status === 'alive').length;
   const availabilityScore = N === 0 ? 0.5 : aliveCount / N;
 
-  // 本轮是否 alive（与 probeNode 的 alive 定义一致：TCP 成功，且 TLS 适用时 TLS 成功）
+  // 本轮是否 alive（核心测速：status==='alive'；tlsApplicable 恒 false，TLS 维度不参与）
   const probeAlive = tcpOk && (tlsApplicable ? tlsOk : true);
 
   // Q1：本轮探测失败（TCP 不通 / TCP 通但 TLS 握手失败 / 非 TLS 节点 TCP 不通）
@@ -394,7 +288,7 @@ export function calculateScore(input: ScoreInput): number {
   }
 
   // 延迟得分 (30%)：样本不足 3 条取默认基线 0.5；否则用中位数
-  const latencyScore = samples.length < 3 ? 0.5 : Math.max(0, 1 - median(samples) / 1000);
+  const latencyScore = samples.length < 3 ? 0.5 : Math.max(0, 1 - median(samples) / latencyScale);
 
   // 稳定性 (10%)：同一 S 上的变异系数
   let stabilityScore: number;
@@ -519,8 +413,8 @@ export async function resolveWindowHours(storage: HealthStorage): Promise<number
  * （需再连续失败 3 轮才会被重新剔除），同时把状态机的连续失败计数一并归零。
  * 故阶段 2 起改为「只写版本号、不动数据」。
  */
-const PROBE_ENGINE_VERSION = 4;
-const PROBE_SCORE_VERSION = 4;
+const PROBE_ENGINE_VERSION = 5;
+const PROBE_SCORE_VERSION = 5;
 const PROBE_SCHEMA_VERSION = 1;
 const PROBE_ENGINE_KEY = 'probe:engine_version';
 const PROBE_SCORE_KEY = 'probe:score_version';
@@ -587,47 +481,179 @@ export interface ProbeAllResult {
   stats: ProbeAllStats;
 }
 
+export interface ProbeAllOptions {
+  /** true = 全量测速（手动按钮）；false/省略 = 增量（仅新增/变化节点，每 6 小时自动全量） */
+  full?: boolean;
+}
+
 let probeAllNodesInflight: Promise<ProbeAllResult> | null = null;
 
 export function probeAllNodes(
   nodes: Node[],
   storage: HealthStorage,
-  windowHours?: number
+  windowHours?: number,
+  opts?: ProbeAllOptions
 ): Promise<ProbeAllResult> {
   if (probeAllNodesInflight) {
-    return probeAllNodesInflight.then(() => doProbeAllNodes(nodes, storage, windowHours));
+    return probeAllNodesInflight.then(() => doProbeAllNodes(nodes, storage, windowHours, opts));
   }
-  probeAllNodesInflight = doProbeAllNodes(nodes, storage, windowHours).finally(() => {
+  probeAllNodesInflight = doProbeAllNodes(nodes, storage, windowHours, opts).finally(() => {
     probeAllNodesInflight = null;
   });
   return probeAllNodesInflight;
 }
 
+/** 节点连通性相关字段的稳定哈希（增量测速判断节点是否变化） */
+function nodeConnectivityHash(node: Node): string {
+  const relevant = {
+    server: node.server,
+    port: node.port,
+    protocol: node.protocol,
+    username: node.username,
+    password: node.password,
+    uuid: node.uuid,
+    tls: node.tls,
+    transport: node.transport,
+    flow: node.flow,
+    pbk: node.pbk,
+    sid: node.sid,
+    sni: node.sni,
+    plugin: node.plugin,
+    allowInsecure: node.allowInsecure,
+    ports: node.ports,
+    up: node.up,
+    down: node.down,
+    obfs: node.obfs,
+    obfsPassword: node.obfsPassword,
+    token: node.token,
+    udpRelayMode: node.udpRelayMode,
+    congestionController: node.congestionController,
+    disableSni: node.disableSni,
+    reduceRtt: node.reduceRtt,
+    fastOpen: node.fastOpen,
+    wgIp: node.wgIp,
+    wgIpv6: node.wgIpv6,
+    wgPrivateKey: node.wgPrivateKey,
+    wgPublicKey: node.wgPublicKey,
+    wgAllowedIps: node.wgAllowedIps,
+    wgPreSharedKey: node.wgPreSharedKey,
+    wgReserved: node.wgReserved,
+    wgMtu: node.wgMtu,
+    idleSessionCheckInterval: node.idleSessionCheckInterval,
+    idleSessionTimeout: node.idleSessionTimeout,
+    minIdleSession: node.minIdleSession,
+    clientMetadata: node.clientMetadata,
+    ssrProtocol: node.ssrProtocol,
+    ssrProtocolParam: node.ssrProtocolParam,
+    ssrObfsParam: node.ssrObfsParam,
+    alpn: node.alpn,
+    fingerprint: node.fingerprint,
+  };
+  return createHash('sha1').update(JSON.stringify(relevant)).digest('hex');
+}
+
+const PROBE_LAST_FULL_KEY = 'probe:last_full_at';
+const PROBE_TESTED_HASHES_KEY = 'probe:tested_hashes';
+
+async function readJsonObject(storage: HealthStorage, key: string): Promise<Record<string, string>> {
+  try {
+    const raw = await storage.get(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 选择本轮要测的节点：全量 or 仅新增/变化 */
+async function selectNodesToProbe(
+  nodes: Node[],
+  storage: HealthStorage,
+  forceFull?: boolean
+): Promise<{ nodes: Node[]; full: boolean }> {
+  const now = Date.now();
+  let lastFull = 0;
+  try {
+    lastFull = Number((await storage.get(PROBE_LAST_FULL_KEY)) ?? 0) || 0;
+  } catch {
+    lastFull = 0;
+  }
+  const full = !!forceFull || lastFull <= 0 || now - lastFull >= CORE_FULL_PROBE_INTERVAL_MS;
+  if (full) return { nodes, full: true };
+  const tested = await readJsonObject(storage, PROBE_TESTED_HASHES_KEY);
+  const selected = nodes.filter((n) => tested[nodeFingerprint(n)] !== nodeConnectivityHash(n));
+  return { nodes: selected, full: false };
+}
+
+/** 更新增量测速元数据（只记录本轮实际测过的节点） */
+async function updateProbeMemo(
+  storage: HealthStorage,
+  allNodes: Node[],
+  testedNodes: Node[],
+  full: boolean
+): Promise<void> {
+  try {
+    if (full) {
+      const hashes: Record<string, string> = {};
+      for (const n of allNodes) hashes[nodeFingerprint(n)] = nodeConnectivityHash(n);
+      await storage.put(PROBE_TESTED_HASHES_KEY, JSON.stringify(hashes));
+      await storage.put(PROBE_LAST_FULL_KEY, String(Date.now()));
+    } else {
+      const hashes = await readJsonObject(storage, PROBE_TESTED_HASHES_KEY);
+      for (const n of testedNodes) hashes[nodeFingerprint(n)] = nodeConnectivityHash(n);
+      await storage.put(PROBE_TESTED_HASHES_KEY, JSON.stringify(hashes));
+    }
+  } catch {
+    // 增量元数据写入失败不影响本轮结果
+  }
+}
+
+/** 读取设置里的测试 URL 列表 */
+async function readCoreTestUrls(storage: HealthStorage): Promise<string[]> {
+  try {
+    const raw = await storage.get(KV_KEYS.setting(CORE_TEST_URLS_KEY));
+    if (!raw) return DEFAULT_CORE_TEST_URLS;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_CORE_TEST_URLS;
+    const urls = parsed.filter((u): u is string => typeof u === 'string' && /^https?:\/\//i.test(u));
+    return urls.length > 0 ? urls : DEFAULT_CORE_TEST_URLS;
+  } catch {
+    return DEFAULT_CORE_TEST_URLS;
+  }
+}
+
 /**
- * 全量探测所有节点
+ * 全量/增量探测所有节点（mihomo 核心真实测速）
  * windowHours 省略时自动取设置页 sub_update_interval（刷新一次测一次，窗口跟着走）
  */
 async function doProbeAllNodes(
   nodes: Node[],
   storage: HealthStorage,
-  windowHours?: number
+  windowHours?: number,
+  opts?: ProbeAllOptions
 ): Promise<ProbeAllResult> {
   const win = windowHours ?? (await resolveWindowHours(storage));
   await resetProbeDataIfEngineChanged(storage);
+
+  // 增量：只测新增/变化节点；每 6 小时或手动触发时全量。
+  const { nodes: testNodes, full } = await selectNodesToProbe(nodes, storage, opts?.full);
   const results: ProbeResult[] = [];
-  
-  // 并发控制：分批 Promise.all
-  for (let i = 0; i < nodes.length; i += PROBE_CONCURRENCY) {
-    const batch = nodes.slice(i, i + PROBE_CONCURRENCY);
-    const batchResults = await Promise.all(batch.map(node => probeNode(node)));
-    results.push(...batchResults);
+
+  if (testNodes.length > 0) {
+    const core = await runCoreProbe(testNodes, { testUrls: await readCoreTestUrls(storage) });
+    results.push(...core.outcomes.map(mapCoreOutcome));
+    if (!core.coreOk && core.error) {
+      console.warn(`[Probe] 核心测速未完全成功: ${core.error}`);
+    }
   }
-  
+
   // 写入历史 + 计算评分 + 状态机 + 写最新快照
   const machineStatus = new Map<string, 'active' | 'suspect' | 'disabled'>();
   for (const result of results) {
-    // P0-1：基础探测不适用（UDP 协议等）—— 不写历史、不写最新快照、不参与状态机。
-    // 避免把 'unknown' 当作失败累计、也避免给节点留下误导性的 dead 记录。
+    // 核心不可用/单批失败：标记 unknown，不写历史、不写快照、不参与状态机（保留旧健康数据）。
     if (result.status === 'unknown') {
       continue;
     }
@@ -635,7 +661,7 @@ async function doProbeAllNodes(
     // 读取历史用于评分和状态机
     const historyKeys = await storage.list(`${KV_KEYS.healthHistory(result.fingerprint, 0).split(':').slice(0, -1).join(':')}:`);
     const history: NodeHealthHistory[] = [];
-    
+
     for (const k of historyKeys) {
       const raw = await storage.get(k.key);
       if (raw) {
@@ -644,8 +670,8 @@ async function doProbeAllNodes(
         } catch {}
       }
     }
-    
-    // 计算四维评分
+
+    // 计算评分（核心延迟写入 tcpLatency；tlsApplicable=false 时自动剔除 TLS 维度）
     const historyForScore = history.map(h => ({
       timestamp: h.timestamp,
       tcpLatency: h.tcpLatency,
@@ -653,31 +679,28 @@ async function doProbeAllNodes(
       status: h.status,
       score: h.score,
     }));
-    
-    // 本轮时间基准：评分与状态机共用同一 `now`，确保两侧对时间戳有效性的判断一致（R1）
+
+    // 本轮时间基准：评分与状态机共用同一 `now`
     const nowTs = Date.now();
 
     result.score = calculateScore({
       tcpLatency: result.tcpLatency,
       tlsLatency: result.tlsLatency,
-      tcpOk: result.tcpLatency !== null,
-      tlsOk: result.tlsLatency !== null,
-      tlsApplicable: result.tlsApplicable,
+      tcpOk: result.status === 'alive',
+      tlsOk: false,
+      tlsApplicable: false,
       history: historyForScore,
       windowHours: win,
+      latencyScaleMs: SCORE_LATENCY_SCALE_MS,
       now: nowTs,
     });
 
-    // 状态机判定
-    // P0-2：把本轮结果计入历史再评估——「连续 3 轮失败 → disabled」按文档语义成立；
-    // 旧实现只评估写入前的旧历史，第 3 轮 dead 仍显示 suspect（差一轮），第 4 轮才 disabled。
+    // 状态机判定（把本轮结果计入历史再评估）
     const machineHistory = [...history, { status: result.status, timestamp: result.timestamp }];
     const stateMachine = evaluateStateMachine(machineHistory, nowTs);
     machineStatus.set(result.fingerprint, stateMachine.status);
-    
-    // 写历史（追加）—— 每轮写一条（timestamp = Date.now），即一次独立探测轮次
-    // v2.38.7：同一毫秒内的连续两轮会命中同一个 key 互相覆盖（快机器上可稳定复现，
-    // 表现为「重启后历史少一条 / 连续失败轮次被吞」）。冲突时顺延 1ms，保证每轮都留痕。
+
+    // 写历史（追加），同一毫秒冲突顺延 1ms
     let historyTs = result.timestamp;
     let historyKey = KV_KEYS.healthHistory(result.fingerprint, historyTs);
     if (await storage.get(historyKey)) {
@@ -689,17 +712,20 @@ async function doProbeAllNodes(
       JSON.stringify({ ...result, timestamp: historyTs, statusMachine: stateMachine.status }),
       { expirationTtl: HEALTH_HISTORY_TTL_MS / 1000 }
     );
-    
+
     // 写最新快照（覆盖）
     await storage.put(
       KV_KEYS.healthLatest(result.fingerprint),
       JSON.stringify({ ...result, statusMachine: stateMachine.status })
     );
   }
-  
+
+  // 更新增量测速元数据（只记录本轮实际测过的节点）
+  await updateProbeMemo(storage, nodes, testNodes, full);
+
   // 清理 30 天前历史
   await cleanupOldHistory(storage, results.filter(r => r.status !== 'unknown').map(r => r.fingerprint));
-  
+
   // 统计（供前端测活结果反馈用）—— dead 只统计显式 dead，不含 unknown
   const alive = results.filter(r => r.status === 'alive').length;
   const dead = results.filter(r => r.status === 'dead').length;

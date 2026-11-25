@@ -149,11 +149,11 @@ describe('立即测活结果渲染（回归，不允许被国家码改造影响�
       nodeCount: 8,
       stats: { total: 8, alive: 5, dead: 2, unknown: 1, suspect: 0, disabled: 2, avgLatency: 123, minLatency: 45 },
     });
-    expect(labelsOf(out)).toEqual(['总节点', '存活', '不通', '不适用（UDP 等）', '疑似（待复核）', '已抛弃', '平均延迟', '最小延迟']);
+    expect(labelsOf(out)).toEqual(['总节点', '存活', '不通', '未知（核心不可用）', '疑似（待复核）', '已抛弃', '平均延迟', '最小延迟']);
     expect(cellOf(out, '总节点')).toBe('8');
     expect(cellOf(out, '存活')).toBe('5');
     expect(cellOf(out, '平均延迟')).toBe('123 ms');
-    expect(out).toContain('连通性探测完成');
+    expect(out).toContain('核心测速完成');
   });
 
   it('缺 stats 时回退 nodeCount，不报错', () => {

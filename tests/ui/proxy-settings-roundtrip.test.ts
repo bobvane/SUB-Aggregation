@@ -51,6 +51,7 @@ function sliceSettingsFunctions(): string {
 
 const ELEMENT_IDS = [
   'settingAppName', 'settingSubUpdateInterval', 'settingNodeDropLatency',
+  'settingCoreTestUrls', 'coreVersion', 'corePath', 'coreHint',
   'proxyProtocol', 'proxyHost', 'proxyPort', 'proxyAdvanced', 'settingProxyUrl',
   'proxyUrlPreview', 'proxyTargetsList', 'proxyTestResult',
   'settingProxyBypass', 'bypassPresets', 'bypassHint',
@@ -74,7 +75,8 @@ function createHarness(payload: SettingsPayload) {
   }
   elements.settingAppName.value = 'SUB-Aggregation';
   elements.settingSubUpdateInterval.value = '24';
-  elements.settingNodeDropLatency.value = '2000';
+  elements.settingNodeDropLatency.value = '3000';
+  elements.settingCoreTestUrls.value = 'https://www.gstatic.com/generate_204';
 
   /**
    * v2.47 起代理目标改成三段按钮（`.segmented[data-key]` 内一组 `button[data-val]`，
@@ -156,6 +158,8 @@ const payload = (overrides: SettingsPayload = {}): SettingsPayload => ({
   app_name: 'SUB-Aggregation',
   sub_update_interval: 24,
   node_drop_latency_ms: 2000,
+  core_drop_latency_ms: 3000,
+  core_test_urls: ['https://www.gstatic.com/generate_204'],
   proxy_url: '',
   proxy_targets: { subscription: 'auto', rules: 'auto', version: 'auto', dns: 'auto', geo: 'auto' },
   proxy_bypass: '',

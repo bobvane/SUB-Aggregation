@@ -492,7 +492,7 @@ describe('T23 版本键：三键分离且不清理数据', () => {
     expect(changed).toBe(true);
     expect(await kv.get(HIST_KEY)).not.toBeNull();
     expect(await kv.get(LATEST_KEY)).not.toBeNull();
-    expect(await kv.get(PROBE_VERSION_KEYS.engine)).toBe('4');
+    expect(await kv.get(PROBE_VERSION_KEYS.engine)).toBe('5');
   });
 
   it('statusMachine=disabled 的 latest 必须保留（清空会让失效节点复活进配置）', async () => {

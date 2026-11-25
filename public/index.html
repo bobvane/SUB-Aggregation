@@ -2280,15 +2280,15 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
   <div class="page" id="page-nodes">
     <div class="atlas-pagehead fade-up">
       <div><div class="atlas-eyebrow">资源</div><h2>节点列表</h2><div class="atlas-subtitle">维护节点状态、连通性和输出范围。</div></div>
-      <button class="btn btn-primary" id="btnProbe" onclick="probeAllNodes()" title="对所有节点执行基础连通性探测（TCP/TLS 握手 RTT，非真实代理延迟）。UDP 协议节点（hysteria2/tuic/wireguard）基础探测不适用。真实代理端到端延迟由客户端 Mihomo 自动选择组负责。">
+      <button class="btn btn-primary" id="btnProbe" onclick="probeAllNodes()" title="通过 mihomo 核心对所有节点做真实测速（HTTP 延迟，含 Hysteria2/TUIC/WireGuard/AnyTLS/SSR 等全部协议）。测速完成后用于健康状态、排序与慢节点判定。">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>
-        立即测活
+        立即测速
       </button>
     </div>
 
     <div class="nd-tip fade-up" id="nodeTip">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-      <div class="nd-tip-text"><b>锁定</b> = 无视探测与延迟，强制进配置；<b>移出配置</b> = 手工排除，不进入输出订阅；<b>恢复</b> = 重新参与系统筛选。锁定与移出互斥，操作一个会自动取消另一个。延迟为 TCP/TLS 握手 RTT，仅供基础参考，真实代理端到端延迟由客户端 Mihomo 自动选择组负责；UDP 协议（Hysteria2 / TUIC / WireGuard）基础探测不适用。</div>
+      <div class="nd-tip-text"><b>锁定</b> = 无视探测与延迟，强制进配置；<b>移出配置</b> = 手工排除，不进入输出订阅；<b>恢复</b> = 重新参与系统筛选。锁定与移出互斥，操作一个会自动取消另一个。延迟为 mihomo 核心真实 HTTP 延迟（含 Hysteria2 / TUIC / WireGuard / AnyTLS / SSR 等全部协议），用于健康状态、排序与慢节点判定。</div>
       <button type="button" class="nd-tip-x" onclick="dismissNodeTip()" aria-label="关闭提示">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
@@ -2561,16 +2561,42 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
             </div>
 
             <div class="st-field">
-              <label class="st-label" for="settingNodeDropLatency">慢节点抛弃阈值</label>
+              <label class="st-label" for="settingNodeDropLatency">核心延迟阈值</label>
               <div class="st-slider-row">
-                <input type="range" id="settingNodeDropLatency" min="100" max="2000" step="10" value="2000">
-                <div class="st-slider-val" id="settingNodeDropLatencyVal">2000 ms</div>
+                <input type="range" id="settingNodeDropLatency" min="500" max="10000" step="100" value="3000">
+                <div class="st-slider-val" id="settingNodeDropLatencyVal">3000 ms</div>
               </div>
-              <p class="st-hint">延迟（连通性 RTT，TLS 优先，无 TLS 用 TCP）超过阈值即视为慢节点，按「已抛弃」处理、不输出到配置；等于阈值不抛弃。该判定独立于健康状态机，节点仍会继续测活。</p>
+              <p class="st-hint">mihomo 核心真实 HTTP 延迟超过阈值即视为慢节点，按「已抛弃」处理、不输出到配置；等于阈值不抛弃。该判定独立于健康状态机，节点仍会继续测速。</p>
             </div>
 
             <div>
               <button class="btn btn-primary st-save-btn" onclick="saveSettings()"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span>保存</span></button>
+            </div>
+          </div>
+        </div>
+        </div>
+
+        <div class="card st-section">
+          <div class="st-sec-head">
+            <span class="st-sec-ico"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg></span>
+            <div><h3>测速核心</h3><p>mihomo 核心：所有协议真实测速（含 UDP）</p></div>
+          </div>
+          <div class="st-stack">
+            <div class="st-field">
+              <label class="st-label">核心版本</label>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <b id="coreVersion" style="font-family:var(--font-mono);font-size:15px">-</b>
+                <span id="corePath" style="color:var(--muted);font-size:12px"></span>
+                <button type="button" class="btn btn-sm" onclick="checkCoreLatest()">检查更新</button>
+                <button type="button" class="btn btn-primary btn-sm" onclick="upgradeCore(this)">升级核心</button>
+                <button type="button" class="btn btn-sm" onclick="runCoreProbeNow()">立即测速</button>
+              </div>
+              <p class="st-hint" id="coreHint">核心随镜像内置；升级会从 GitHub 下载官方最新版本到 /data/core/mihomo（需要能访问 GitHub 或已配置代理）。</p>
+            </div>
+            <div class="st-field">
+              <label class="st-label" for="settingCoreTestUrls">测试地址（每行一个，最多 5 个）</label>
+              <textarea class="st-input" id="settingCoreTestUrls" rows="3" style="width:100%;min-height:76px;resize:vertical;font-family:var(--font-mono);font-size:12px" placeholder="https://www.gstatic.com/generate_204"></textarea>
+              <p class="st-hint">按顺序 fallback；全部失败才判节点不通。默认 gstatic / cloudflare / apple。</p>
             </div>
           </div>
         </div>
@@ -3404,15 +3430,15 @@ function renderProbeResult(res) {
     taskRow('总节点', taskNum(total)),
     taskRow('存活', taskNum(s.alive)),
     taskRow('不通', taskNum(s.dead)),
-    taskRow('不适用（UDP 等）', taskNum(s.unknown)),
+    taskRow('未知（核心不可用）', taskNum(s.unknown)),
     taskRow('疑似（待复核）', taskNum(s.suspect)),
     taskRow('已抛弃', taskNum(s.disabled)),
     taskRow('平均延迟', taskLatency(s.avgLatency)),
     taskRow('最小延迟', taskLatency(s.minLatency)),
   ];
-  return '<div class="task-result-title ok">✅ 连通性探测完成</div>'
+  return '<div class="task-result-title ok">✅ 核心测速完成</div>'
     + '<div class="task-result-grid">' + rows.join('') + '</div>'
-    + '<div class="task-result-note">延迟为 TCP/TLS 握手 RTT（非真实代理延迟）；UDP 协议节点基础探测不适用。</div>';
+    + '<div class="task-result-note">延迟为 mihomo 核心真实 HTTP 延迟（含所有协议）；核心不可用时对应节点标记为未知，不误判。</div>';
 }
 
 /**
@@ -4749,15 +4775,14 @@ function nodeFlagOf(n) {
   return { flag: '🌐', label: name };
 }
 
-// 延迟单元格：进度条 + 数值（颜色 <100 绿 / <300 黄绿 / <1000 橙 / 其余红）
+// 延迟单元格：进度条 + 数值（核心 HTTP 延迟：<300 绿 / <800 黄绿 / <2000 橙 / 其余红）
 function latencyCell(n) {
-  if (n.probeApplicable === false) return '<span class="nd-lat-na">UDP · 不适用</span>';
   const l = nodeLatency(n);
   const known = !!state.nodeHealth[n.fingerprint] || n.latency != null || !!n.healthStatus;
   if (!known) return '<span class="nd-lat-na">未探测</span>';
   if (l == null) return '<span class="nd-lat-timeout">超时</span>';
-  const c = l < 100 ? 'var(--ok)' : l < 300 ? '#a3e635' : l < 1000 ? 'var(--warn)' : 'var(--bad)';
-  const pct = Math.min(100, (l / 1500) * 100 + 4);
+  const c = l < 300 ? 'var(--ok)' : l < 800 ? '#a3e635' : l < 2000 ? 'var(--warn)' : 'var(--bad)';
+  const pct = Math.min(100, (l / 5000) * 100 + 4);
   return `<div class="nd-lat"><div class="nd-lat-bar"><div class="nd-lat-fill" style="width:${pct.toFixed(1)}%;background:${c};box-shadow:0 0 10px ${c}"></div></div>`
     + `<span class="nd-lat-num" style="color:${c}">${l}<i>ms</i></span></div>`;
 }
@@ -4933,9 +4958,8 @@ function renderNodes() {
   tbody.innerHTML = view.map(n => {
     const tagClass = protocolTagClass(n.protocol);
     const latency = nodeLatency(n);
-    // P0 v2.38：UDP 协议节点基础探测不适用 —— 状态按「未探测」展示，不做假判定
-    const notApplicable = n.probeApplicable === false;
-    const st = notApplicable ? '' : String(n.healthStatus || '');
+    // v2.50.0：所有协议统一由 mihomo 核心测速，状态直接来自健康快照
+    const st = String(n.healthStatus || '');
     const isDead = !!st && st !== 'alive';
     const scoreTip = n.score != null ? `得分 ${n.score}` : '尚未探测';
     const dropped = n.dropped ? '<span class="badge badge-bad" title="系统健康状态判定失效（连续失败被状态机确认），已从生成的配置中剔除（记录保留，恢复后自动回来）">已抛弃</span>' : '';
@@ -4944,7 +4968,7 @@ function renderNodes() {
     let healthBadge;
     if (st === 'alive') healthBadge = `<span class="badge badge-ok" title="${escHtml(scoreTip)}"><i class="badge-dot"></i>存活</span>`;
     else if (isDead) healthBadge = `<span class="badge badge-bad" title="${escHtml(scoreTip + (n.error ? ' · ' + n.error : ''))}"><i class="badge-dot"></i>不通</span>`;
-    else healthBadge = `<span class="badge badge-muted" title="${notApplicable ? 'UDP 协议节点，基础 TCP/TLS 连通性探测不适用' : '尚未探测'}"><i class="badge-dot"></i>未探测</span>`;
+    else healthBadge = `<span class="badge badge-muted" title="尚未探测"><i class="badge-dot"></i>未探测</span>`;
     const nm = nodeFlagOf(n);
     const faded = ((n.dropped && !n.locked) || n.excluded || (n.countryExcluded && !n.locked)) ? ' is-faded' : '';
     const subLocked = n.locked ? `<div class="nd-nm-sub is-violet">${ND_ICON_LOCK_SM} 已锁定</div>` : '';
@@ -5071,13 +5095,13 @@ function updateCountryGroupButton() {
   if (btn) btn.classList.toggle('btn-soft', n > 0);
 }
 
-// ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待）
+// ⚡ 立即测速：mihomo 核心真实测速（全部协议，含 UDP）
 // 任务窗口：running → success/failed，结果保留在窗口内，仅右上角 X 关闭
 async function probeAllNodes() {
   const outcome = await runNodeTask({
-    title: '⚡ 正在连通性探测所有节点…',
-    successTitle: '⚡ 连通性探测完成',
-    failedTitle: '⚡ 连通性探测未完成',
+    title: '⚡ 正在通过 mihomo 核心测速…',
+    successTitle: '⚡ 核心测速完成',
+    failedTitle: '⚡ 核心测速未完成',
     capMs: 180000,
     // 接口与调用方式保持原样
     fn: () => api('/nodes/probe', { method: 'POST', timeout: 180000 }),
@@ -5616,7 +5640,7 @@ const PROXY_MODE_OPTIONS = [['auto', '自动'], ['on', '代理'], ['off', '直�
 /** 设置页滑杆：id / 值框 id / 区间 / 单位 / 0 值文案 */
 const SETTINGS_SLIDERS = [
   { id: 'settingSubUpdateInterval', out: 'settingSubUpdateIntervalVal', min: 0, max: 24, unit: '小时', zeroLabel: '不更新' },
-  { id: 'settingNodeDropLatency', out: 'settingNodeDropLatencyVal', min: 100, max: 2000, unit: 'ms', zeroLabel: '' },
+  { id: 'settingNodeDropLatency', out: 'settingNodeDropLatencyVal', min: 500, max: 10000, unit: 'ms', zeroLabel: '' },
 ];
 
 function switchSettingsTab(tab) {
@@ -5836,7 +5860,12 @@ async function loadSettings() {
     const d = data.data || {};
     document.getElementById('settingAppName').value = d.app_name || '';
     document.getElementById('settingSubUpdateInterval').value = String(d.sub_update_interval ?? 24);
-    document.getElementById('settingNodeDropLatency').value = String(d.node_drop_latency_ms ?? 2000);
+    document.getElementById('settingNodeDropLatency').value = String(d.core_drop_latency_ms ?? 3000);
+    const coreUrlsEl = document.getElementById('settingCoreTestUrls');
+    if (coreUrlsEl) {
+      const urls = Array.isArray(d.core_test_urls) ? d.core_test_urls : [];
+      coreUrlsEl.value = urls.join('\n');
+    }
     syncSettingsSliders();
 
     // 节点清单、bypass 预设等元数据由后端下发，避免前后端各写一份漂移
@@ -5851,8 +5880,70 @@ async function loadSettings() {
     }
     proxyFormSnapshot = currentProxyFormValues();
   } catch {}
+  loadCoreStatus();
   loadCatalogStatus();
   searchCatalog(); // 默认显示前 100 个分类
+}
+
+// ===== 测速核心（mihomo） =====
+async function loadCoreStatus() {
+  const verEl = document.getElementById('coreVersion');
+  const pathEl = document.getElementById('corePath');
+  try {
+    const res = await api('/core/status');
+    const d = (res && res.data) || {};
+    if (verEl) verEl.textContent = d.version ? 'v' + String(d.version).replace(/^v/i, '') : '未安装';
+    if (pathEl) pathEl.textContent = d.path || d.installPath || '';
+  } catch {
+    if (verEl) verEl.textContent = '读取失败';
+  }
+}
+
+async function checkCoreLatest() {
+  const hint = document.getElementById('coreHint');
+  try {
+    const res = await api('/core/latest');
+    const d = (res && res.data) || {};
+    if (hint) hint.textContent = d.version
+      ? `最新版本：v${String(d.version).replace(/^v/i, '')}（${d.assetName || ''}）`
+      : '无法确认最新版本';
+    toast(d.version ? `最新核心：v${String(d.version).replace(/^v/i, '')}` : '无法获取最新版本');
+  } catch (e) {
+    const msg = (e && e.message) || '未知错误';
+    if (hint) hint.textContent = '检查更新失败：' + msg;
+    toast('检查更新失败：' + msg, 'error');
+  }
+}
+
+async function upgradeCore(btn) {
+  if (btn) btn.disabled = true;
+  const hint = document.getElementById('coreHint');
+  if (hint) hint.textContent = '正在下载并安装最新核心…';
+  try {
+    const res = await api('/core/upgrade', { method: 'POST', timeout: 180000 });
+    const d = (res && res.data) || {};
+    const to = String(d.to || '').replace(/^v/i, '');
+    toast(`核心已升级：v${to}`);
+    if (hint) hint.textContent = `已升级到 v${to}`;
+    await loadCoreStatus();
+  } catch (e) {
+    const msg = (e && e.message) || '未知错误';
+    if (hint) hint.textContent = '升级失败：' + msg;
+    toast('升级失败：' + msg, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function runCoreProbeNow() {
+  switchPage('nodes');
+  setTimeout(() => {
+    try {
+      probeAllNodes();
+    } catch (e) {
+      toast('测速启动失败：' + ((e && e.message) || '未知错误'), 'error');
+    }
+  }, 50);
 }
 
 const ST_ICON_PLUG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>';
@@ -5895,7 +5986,12 @@ async function saveSettings() {
   const subInterval = parseInt(document.getElementById('settingSubUpdateInterval').value, 10);
   if (Number.isNaN(subInterval) || subInterval < 0 || subInterval > 24) { toast('自动更新间隔须为 0-24 的整数（0 = 不更新）', 'error'); return; }
   const dropLat = parseInt(document.getElementById('settingNodeDropLatency').value, 10);
-  if (Number.isNaN(dropLat) || dropLat < 100 || dropLat > 2000) { toast('慢节点抛弃阈值须为 100-2000 的整数（毫秒）', 'error'); return; }
+  if (Number.isNaN(dropLat) || dropLat < 500 || dropLat > 10000) { toast('核心延迟阈值须为 500-10000 的整数（毫秒）', 'error'); return; }
+  const coreUrlsRaw = (document.getElementById('settingCoreTestUrls')?.value || '')
+    .split(/\r?\n|,/).map((s) => s.trim()).filter(Boolean);
+  if (coreUrlsRaw.length === 0 || coreUrlsRaw.length > 5 || coreUrlsRaw.some((u) => !/^https?:\/\//i.test(u))) {
+    toast('测试地址须为 1-5 个 http(s) URL（每行一个）', 'error'); return;
+  }
 
   const proxy = currentProxyFormValues();
   if (proxy.url && !/^https?:\/\/\S+$/i.test(proxy.url)) {
@@ -5908,7 +6004,8 @@ async function saveSettings() {
     const body = {
       app_name: appName,
       sub_update_interval: subInterval,
-      node_drop_latency_ms: dropLat,
+      core_drop_latency_ms: dropLat,
+      core_test_urls: coreUrlsRaw,
     };
     const prev = proxyFormSnapshot;
     if (prev) {

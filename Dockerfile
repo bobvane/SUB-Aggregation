@@ -1,3 +1,7 @@
+# ---------- 测速核心：从官方 mihomo 镜像取二进制（只走 Docker Hub） ----------
+# 不在构建时访问 GitHub；NAS 通过厂家加速的 Docker Hub 拉取镜像即可。
+FROM metacubex/mihomo:latest AS core
+
 # ---------- 构建阶段：装依赖、生成内联 HTML、跑测试、打成单文件 ----------
 FROM node:24-alpine AS build
 WORKDIR /app
@@ -14,9 +18,15 @@ RUN npm run build:html && npm test
 # 打成单文件：运行镜像里不需要 node_modules
 RUN npm run build:server
 
-# ---------- 运行阶段：只有 node 和一个 server.mjs ----------
+# ---------- 运行阶段：node、server.mjs、测速核心 ----------
 FROM node:24-alpine
 WORKDIR /app
+
+# 测速核心（mihomo）与第三方许可证声明
+RUN mkdir -p /app/core
+COPY --from=core /mihomo /app/core/mihomo
+RUN chmod +x /app/core/mihomo
+COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 
 COPY --from=build /app/dist/server.mjs ./server.mjs
 

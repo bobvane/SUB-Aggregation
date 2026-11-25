@@ -13,6 +13,7 @@ import { generateBase64Config } from '@/generator/base64-generator';
 import { nodeToUrl } from '@/generator/node-to-url';
 import { MetaCubeXRule, RULE_GROUPS, CustomRule, mergeCustomRules, findRuleInGroups } from '@/data/metacubex-rules';
 import { createIpGeoResolver, prewarmIpGeo, PrewarmResult, filterUnlocatedServers, countUnlocatedGeo } from './ip-geo.service';
+import { CORE_DROP_LATENCY_KEY, DEFAULT_CORE_DROP_LATENCY_MS } from './core-probe.service';
 import { deduplicateNodes } from '@/parser';
 import { createSnapshotCache } from './config-cache.service';
 import { createOperationLog } from './operation-log.service';
@@ -275,21 +276,19 @@ const DISABLED_NODES_KEY = 'disabled_nodes';
 const LOCKED_NODES_KEY = 'locked_nodes';
 /** 输出国家组白名单：KV 键名（JSON 数组，ISO alpha-2 大写码） */
 const OUTPUT_COUNTRIES_KEY = 'output_countries';
-/** 慢节点抛弃阈值：KV 键名（与 /api/settings 同一键） */
-const NODE_DROP_LATENCY_KEY = 'node_drop_latency_ms';
-/** 慢节点抛弃阈值兜底值（毫秒）。缺省/非法/越界一律回退到这里，与 /api/settings 口径一致 */
-export const DEFAULT_NODE_DROP_LATENCY_MS = 2000;
+/** 核心延迟抛弃阈值兜底值（毫秒）。缺省/非法/越界一律回退到这里 */
+export const DEFAULT_NODE_DROP_LATENCY_MS = DEFAULT_CORE_DROP_LATENCY_MS;
 
 /**
- * 读取慢节点抛弃阈值（毫秒）。
- * 与 /api/settings PUT 的校验口径（100–2000 整数）保持一致：
- * 缺失 / 非数字 / 越界 → 回退默认 2000，**不静默返回 0**（否则会把全部节点判为慢节点）。
+ * 读取核心延迟抛弃阈值（毫秒）。
+ * v2.50.0 起测速改为 mihomo 核心 HTTP 延迟，阈值范围放宽到 500–10000ms，默认 3000ms。
+ * 缺失 / 非数字 / 越界 → 回退默认值，不静默返回 0。
  */
 async function readDropLatencyMs(repos: Repositories): Promise<number> {
-  const raw = await repos.settings.get(NODE_DROP_LATENCY_KEY);
-  if (raw === null || raw === undefined) return DEFAULT_NODE_DROP_LATENCY_MS;
+  const raw = await repos.settings.get(CORE_DROP_LATENCY_KEY);
+  if (raw === null || raw === undefined) return DEFAULT_CORE_DROP_LATENCY_MS;
   const v = Number(raw);
-  if (!Number.isFinite(v) || v < 100 || v > 2000) return DEFAULT_NODE_DROP_LATENCY_MS;
+  if (!Number.isFinite(v) || v < 500 || v > 10000) return DEFAULT_CORE_DROP_LATENCY_MS;
   return v;
 }
 const SELECTED_RULES_KEY = 'selected_rules';
@@ -500,9 +499,8 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
         if (disabled.has(fp)) return false;
         if (dropped.has(fp)) return false;
         if (n.removed_at) return false;
-        // v2.38 P1（阶段 1）：UDP 协议（hysteria2/tuic/wireguard）不再按
-        // “探测引擎不适用”从配置剔除。TCP/TLS 探测不适用 ≠ 节点不可用；
-        // 节点可用性由协议字段映射、客户端健康检查与用户锁定/禁用语义共同决定。
+        // v2.50.0：所有协议（含 Hysteria2/TUIC/WireGuard/AnyTLS/SSR）统一由 mihomo 核心测速，
+        // 节点可用性由健康快照（核心测速结果）与用户锁定/禁用语义共同决定。
         return true;
       });
     },
@@ -516,17 +514,16 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
      *   由 evaluateStateMachine 判定）。单轮 dead 只是 suspect，保留在配置里观察；
      *   恢复连续 alive → active 自动回归。
      *
-     * 规则②「慢节点阈值」（v2.38.3 恢复）：节点延迟（TLS RTT 优先，无则 TCP RTT，
+     * 规则②「核心延迟阈值」（v2.50.0）：节点延迟（mihomo 核心真实 HTTP 延迟，
      *   与列表页展示/红字高亮同一口径 `nodeLatencyMs`）**严格大于**用户配置的
-     *   `node_drop_latency_ms`（100–2000，默认 2000）→ 归入「已抛弃」，不输出到配置。
+     *   `core_drop_latency_ms`（500–10000，默认 3000）→ 归入「已抛弃」，不输出到配置。
      *
      * **规则② 是筛选依据，不是健康判定**：不把节点写成 dead、不写 health 历史、
-     *   不改 statusMachine、不影响 RTT 统计与排序；节点继续正常测活，
+     *   不改 statusMachine、不影响延迟统计与排序；节点继续正常测速，
      *   用户把阈值调高后下一轮判定立刻回归。因此两条规则可共存而不互相矛盾。
      *
      * 规则② 的生效前提：仅有可用延迟样本时判定（null / 非有限值不判定）。
-     *   UDP 协议（hysteria2/tuic/wireguard）不适用基础探测，`doProbeAllNodes` 对
-     *   `status === 'unknown'` 直接 continue，不写 health 快照 → 天然无延迟样本 → 不被本规则抛弃。
+     *   核心不可用（status === 'unknown'）时不写快照 → 天然无延迟样本 → 不被本规则抛弃。
      *
      * 边界约定：`latency > threshold` 才抛弃，`latency === threshold` **不**抛弃
      *   （与列表页红字高亮 `latency > state.nodeDropLatency` 完全一致）。

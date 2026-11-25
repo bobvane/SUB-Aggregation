@@ -295,17 +295,17 @@ describe('C3 闭环：/api/nodes 与后端筛选一致', () => {
     expect(byFp.get(fp(locked))?.statusMachine).toBe('disabled');
   });
 
-  it('API 对 UDP 节点标记 probeApplicable=false / healthStatus=unknown / score=null', async () => {
+  it('API 对 UDP 节点同样适用核心测速；未探测时 healthStatus/score 为 null', async () => {
     const { app, token, udp } = await makeApp();
     const res = await app.request('/api/nodes', { headers: { Cookie: `sub_session=${token}` } });
     const list = ((await res.json()) as {
       data: Array<{ fingerprint: string; probeApplicable: boolean; healthStatus: string | null; score: number | null; error: string | null }>;
     }).data;
     const row = list.find((n) => n.fingerprint === fp(udp));
-    expect(row?.probeApplicable).toBe(false);
-    expect(row?.healthStatus).toBe('unknown');
+    expect(row?.probeApplicable).toBe(true);
+    expect(row?.healthStatus).toBeNull();
     expect(row?.score).toBeNull();
-    expect(row?.error).toContain('UDP');
+    expect(row?.error).toBeNull();
   });
 
   it('API 列出的可进配置节点集合 == getNodes() 结果', async () => {
