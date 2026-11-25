@@ -121,6 +121,19 @@ function buildScoreOf(
   };
 }
 
+/**
+ * 输出国家组过滤（必须在 smartRename 之后调用：此时 metadata.country 才有值）。
+ * - allow 为空 = 不过滤（保留全部）。
+ * - 锁定节点强制保留（沿用 locked 最高优先级）。
+ * - 未识别国家的节点按约定排除。
+ */
+function isCountryAllowed(node: Node, allow: Set<string>, locked: Set<string>): boolean {
+  if (allow.size === 0) return true;
+  if (locked.has(nodeFingerprint(node))) return true;
+  const code = (node.metadata?.country || '').toUpperCase();
+  return !!code && allow.has(code);
+}
+
 export type OutputFormat =
   | 'mihomo'
   | 'singbox'
@@ -175,6 +188,14 @@ export interface ConfigService {
   getLockedNodes(): Promise<string[]>;
   /** 设置锁定的节点指纹列表 */
   setLockedNodes(fingerprints: string[]): Promise<void>;
+  /**
+   * 输出国家组（自由多选，ISO 3166-1 alpha-2 大写码）。
+   * - 非空 = 白名单生效：仅这些国家进入输出配置；未识别国家的节点按约定排除。
+   * - 空数组 = 不过滤（保留全部），避免误清空导致节点全被删。
+   */
+  getOutputCountries(): Promise<string[]>;
+  /** 设置输出国家组（自动去重、大写、过滤非法码） */
+  setOutputCountries(codes: string[]): Promise<void>;
   /** 获取用户勾选的规则 id 列表 */
   getSelectedRuleIds(): Promise<string[]>;
   /** 设置用户勾选的规则 id 列表 */
@@ -235,6 +256,8 @@ export interface OutputStatus {
       removed: number;
       disabled: number;
       dropped: number;
+      /** 所在国家不在输出国家组白名单内（含未识别国家） */
+      country: number;
     };
   };
 }
@@ -250,6 +273,8 @@ const FORMAT_META: Record<OutputFormat, { contentType: string; filename: string 
 
 const DISABLED_NODES_KEY = 'disabled_nodes';
 const LOCKED_NODES_KEY = 'locked_nodes';
+/** 输出国家组白名单：KV 键名（JSON 数组，ISO alpha-2 大写码） */
+const OUTPUT_COUNTRIES_KEY = 'output_countries';
 /** 慢节点抛弃阈值：KV 键名（与 /api/settings 同一键） */
 const NODE_DROP_LATENCY_KEY = 'node_drop_latency_ms';
 /** 慢节点抛弃阈值兜底值（毫秒）。缺省/非法/越界一律回退到这里，与 /api/settings 口径一致 */
@@ -311,6 +336,41 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
       await repos.settings.set(LOCKED_NODES_KEY, JSON.stringify(unique));
       await snapshotCache.invalidateAll();
       await opLog.logManualAction(`锁定 ${unique.length} 个节点（强制进配置）`);
+    },
+
+    async getOutputCountries(): Promise<string[]> {
+      const raw = await repos.settings.get(OUTPUT_COUNTRIES_KEY);
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        const valid = new Set(Object.keys(COUNTRIES));
+        return [...new Set(
+          parsed
+            .filter((x): x is string => typeof x === 'string')
+            .map((x) => x.toUpperCase())
+            .filter((x) => valid.has(x))
+        )];
+      } catch {
+        return [];
+      }
+    },
+
+    async setOutputCountries(codes: string[]): Promise<void> {
+      const valid = new Set(Object.keys(COUNTRIES));
+      const unique = [...new Set(
+        (Array.isArray(codes) ? codes : [])
+          .filter((x): x is string => typeof x === 'string')
+          .map((x) => x.toUpperCase())
+          .filter((x) => valid.has(x))
+      )];
+      await repos.settings.set(OUTPUT_COUNTRIES_KEY, JSON.stringify(unique));
+      await snapshotCache.invalidateAll();
+      await opLog.logManualAction(
+        unique.length > 0
+          ? `更新输出国家组（${unique.length} 个地区）`
+          : '清空输出国家组（不过滤，保留全部）'
+      );
     },
 
     async getSelectedRuleIds(): Promise<string[]> {
@@ -600,31 +660,39 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
       }, geoFetch);
       const healthList = await getAllNodeHealth(kv);
       const healthByFp = new Map<string, NodeHealthLatest>(healthList.map(h => [h.fingerprint, h]));
-      await smartRename(nodes, ipGeoResolver, new Set(await this.getLockedNodes()));
+      const lockedSet = new Set(await this.getLockedNodes());
+      await smartRename(nodes, ipGeoResolver, lockedSet);
+
+      // 输出国家组过滤（必须在 smartRename 之后：此时 metadata.country 才被写入）。
+      // 空集合 = 不过滤；锁定节点强制保留；未识别国家默认排除。
+      const allowCountries = new Set(await this.getOutputCountries());
+      const outputNodes = allowCountries.size === 0
+        ? nodes
+        : nodes.filter((n) => isCountryAllowed(n, allowCountries, lockedSet));
 
       let content = '';
       switch (format) {
         case 'mihomo':
           content = await generateMihomoConfig(
-            nodes,
+            outputNodes,
             await this.getSelectedRules(),
             await this.getMergedGroups(),
             ipGeoResolver,
             new Set(await this.getDisabledGroupKeys()),
-            buildScoreOf(nodes, healthByFp)
+            buildScoreOf(outputNodes, healthByFp)
           );
           // 写缓存（沿用生成开始时的版本）
           await snapshotCache.setCachedConfig(format, content, version);
           await repos.settings.set('config_last_generated_at', String(Date.now()));
           break;
         case 'singbox':
-          content = generateSingboxConfig(nodes);
+          content = generateSingboxConfig(outputNodes);
           break;
         case 'v2ray':
         case 'v2rayn':
         case 'nekoray':
         case 'shadowrocket':
-          content = generateBase64Config(nodes);
+          content = generateBase64Config(outputNodes);
           break;
         default:
           content = '';
@@ -658,6 +726,19 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
       const disabled = new Set(await this.getDisabledNodes());
       const dropped = new Set(await this.getDroppedNodes());
       const locked = new Set(await this.getLockedNodes());
+      const allowCountries = new Set(await this.getOutputCountries());
+
+      // 国家过滤生效时，必须先解析国家码（与 generate() 同源：smartRename 写 metadata.country）。
+      // 只在过滤开启时解析，避免无谓的外部查询；生成过一次后 ip_geo 缓存已热。
+      let statusNodes = dedupEnabled;
+      if (allowCountries.size > 0) {
+        statusNodes = dedupEnabled.map((n) => ({ ...n }));
+        const ipGeoResolver = createIpGeoResolver({
+          get: (k) => repos.settings.get(k),
+          set: (k, v, ttl) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined),
+        }, geoFetch);
+        await smartRename(statusNodes, ipGeoResolver, locked);
+      }
 
       const excluded = {
         // 停用订阅的节点：getAll() 已排除，差值即数量（去重口径与上面一致）
@@ -665,14 +746,15 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
         removed: 0,
         disabled: 0,
         dropped: 0,
+        country: 0,
       };
       let inOutput = 0;
       // v2.47.0：输出页统计卡需要「锁定节点」「覆盖地区」，与 inOutput 同口径一次算出
       let lockedInOutput = 0;
       const regions = new Set<string>();
-      for (const n of dedupEnabled) {
+      for (const n of statusNodes) {
         const fp = nodeFingerprint(n);
-        // 与 getNodes() 完全一致的优先级：锁定豁免 → removed → 禁用 → 抛弃
+        // 与 getNodes() 完全一致的优先级：锁定豁免 → removed → 禁用 → 抛弃 → 国家未启用
         if (locked.has(fp)) {
           inOutput++;
           lockedInOutput++;
@@ -684,6 +766,9 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
           continue;
         } else if (dropped.has(fp)) {
           excluded.dropped++;
+          continue;
+        } else if (!isCountryAllowed(n, allowCountries, locked)) {
+          excluded.country++;
           continue;
         } else {
           inOutput++;

@@ -2284,6 +2284,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
         <div class="nd-stat"><span>存活</span><b id="statsAlive" class="t-ok">0</b></div>
         <div class="nd-stat"><span>不通</span><b id="statsDead" class="t-bad">0</b></div>
         <div class="nd-stat"><span>已抛弃</span><b id="statsDropped" class="t-bad">0</b></div>
+        <div class="nd-stat"><span>地区未启用</span><b id="statsCountryExcluded">0</b></div>
         <div class="nd-stat"><span>未识别国家码</span><b id="statsGeoUnlocated" class="t-ok">0</b></div>
         <div class="nd-stat"><span>上次连通性探测</span><b id="statsLastProbe" class="nd-time">未测活</b></div>
         <span class="nd-stats-hint">去重依据：IP + 端口 + 协议</span>
@@ -2313,14 +2314,19 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
         <button type="button" data-v="alive" onclick="setNodeFilter('alive')">存活<b id="segNodeAlive">0</b></button>
         <button type="button" data-v="dead" onclick="setNodeFilter('dead')">不通<b id="segNodeDead">0</b></button>
         <button type="button" data-v="dropped" onclick="setNodeFilter('dropped')">已抛弃<b id="segNodeDropped">0</b></button>
+        <button type="button" data-v="country" onclick="setNodeFilter('country')">地区未启用<b id="segNodeCountry">0</b></button>
         <button type="button" data-v="unprobed" onclick="setNodeFilter('unprobed')">未探测<b id="segNodeUnprobed">0</b></button>
       </div>
       <select id="nodeHealthFilter" onchange="filterNodes()" aria-label="按节点状态筛选" hidden>
-        <option value="all">所有状态</option><option value="alive">存活</option><option value="dead">不通</option><option value="dropped">已抛弃</option><option value="unprobed">未探测</option>
+        <option value="all">所有状态</option><option value="alive">存活</option><option value="dead">不通</option><option value="dropped">已抛弃</option><option value="country">地区未启用</option><option value="unprobed">未探测</option>
       </select>
       <select id="nodeProtocolFilter" class="field-auto" onchange="filterNodes()" aria-label="按协议筛选">
         <option value="all">所有协议</option><option value="vmess">VMess</option><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="ss">Shadowsocks</option><option value="ssr">ShadowsocksR</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="wireguard">WireGuard</option><option value="anytls">AnyTLS</option><option value="other">其他</option>
       </select>
+      <button type="button" class="btn btn-sm" id="btnCountryGroups" onclick="openCountryGroups()" title="选择长期保留的国家组；未勾选地区默认不进入输出配置（锁定节点除外）">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/></svg>
+        国家组 <b id="countryGroupCount" style="font-weight:700">全部</b>
+      </button>
       <select id="nodeSort" class="field-auto" onchange="sortNodes()" aria-label="节点排序">
         <option value="default">默认顺序（锁定置顶）</option><option value="name">名称 A–Z</option><option value="latency-asc">延迟从低到高</option><option value="latency-desc">延迟从高到低</option>
       </select>
@@ -2864,6 +2870,33 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
   </div>
 </div>
 
+<!-- Country Groups Modal（输出国家组：自由多选，长期保存） -->
+<div class="modal-overlay" id="countryGroupsModal">
+  <div class="modal-content" style="max-width:520px">
+    <div class="modal-header"><h3>🌐 国家组（自由选择）</h3><button class="modal-close" onclick="closeModal('countryGroupsModal')"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+    <div class="modal-body">
+      <p style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.55">
+        勾选的国家会长期保留；未勾选的地区默认不进入输出配置（锁定节点除外）。<br>
+        全部取消勾选 = 不过滤、保留全部；启用过滤时，未识别国家的节点默认排除。
+      </p>
+      <div class="search-box" style="margin-bottom:10px">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="countryGroupSearch" type="search" placeholder="搜索国家…" oninput="renderCountryGroups()" aria-label="搜索国家">
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="countryGroupShowAll" onchange="renderCountryGroups()"> 显示全部已知国家（含当前无节点的）
+      </label>
+      <div id="countryGroupList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:4px 10px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn btn-sm" onclick="countryGroupsSelectAll()">全选</button>
+        <button type="button" class="btn btn-sm" onclick="countryGroupsSelectWithNodes()">全选有节点的</button>
+        <button type="button" class="btn btn-sm" onclick="countryGroupsClear()">清空</button>
+        <button type="button" class="btn btn-primary btn-sm" style="margin-left:auto" onclick="saveCountryGroups()">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Add Subscription Modal -->
 <div class="modal-overlay" id="addSubModal">
   <div class="modal-content">
@@ -2960,7 +2993,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
 <!-- @inline public/vendor/qrcode.min.js -->
 </script>
 <script>// ============ State ============
-let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null };
+let state = { subscriptions: [], nodes: [], nodeHealth: {}, nodeLatencySort: null, nodeDropLatency: 2000, currentPage: 'dashboard', authenticated: false, dashboardPrefetch: null, outputCountries: [], countryGroups: [], countryGroupDraft: null };
 
 const LIST_PREFS_KEY = 'sub-aggregation-list-view';
 function readListPrefs() {
@@ -4457,6 +4490,10 @@ async function loadNodes(forceRefresh = false) {
         }
         if (res.stats.dropLatencyMs) state.nodeDropLatency = res.stats.dropLatencyMs;
       }
+      if (Array.isArray(res.outputCountries)) {
+        state.outputCountries = res.outputCountries;
+        updateCountryGroupButton();
+      }
       // v2.32：并行拉健康快照（延迟/状态列数据源）。失败不阻断节点列表。
       try {
         const hr = await api('/nodes/health');
@@ -4808,6 +4845,7 @@ function renderNodes() {
   if (healthFilter === 'alive') filtered = filtered.filter(n => n.healthStatus === 'alive');
   if (healthFilter === 'dead') filtered = filtered.filter(n => n.healthStatus && n.healthStatus !== 'alive');
   if (healthFilter === 'dropped') filtered = filtered.filter(n => n.dropped);
+  if (healthFilter === 'country') filtered = filtered.filter(n => n.countryExcluded);
   if (healthFilter === 'unprobed') filtered = filtered.filter(n => !n.healthStatus);
   if (sort === 'latency-asc' || sort === 'latency-desc') {
     const dir = sort === 'latency-asc' ? 1 : -1;
@@ -4829,14 +4867,17 @@ function renderNodes() {
   const alive = cnt(n => n.healthStatus === 'alive');
   const dead = cnt(n => n.healthStatus && n.healthStatus !== 'alive');
   const droppedCnt = cnt(n => n.dropped);
+  const countryCnt = cnt(n => n.countryExcluded);
   const unprobedCnt = cnt(n => !n.healthStatus);
   const setStat2 = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
   setStat2('statsAlive', alive);
   setStat2('statsDead', dead);
   setStat2('statsDropped', droppedCnt);
+  setStat2('statsCountryExcluded', countryCnt);
   setStat2('segNodeAlive', alive);
   setStat2('segNodeDead', dead);
   setStat2('segNodeDropped', droppedCnt);
+  setStat2('segNodeCountry', countryCnt);
   setStat2('segNodeUnprobed', unprobedCnt);
   syncSeg('nodeHealthSeg', healthFilter);
 
@@ -4870,13 +4911,14 @@ function renderNodes() {
     const isDead = !!st && st !== 'alive';
     const scoreTip = n.score != null ? `得分 ${n.score}` : '尚未探测';
     const dropped = n.dropped ? '<span class="badge badge-bad" title="系统健康状态判定失效（连续失败被状态机确认），已从生成的配置中剔除（记录保留，恢复后自动回来）">已抛弃</span>' : '';
+    const countryExcluded = (n.countryExcluded && !n.locked) ? '<span class="badge badge-muted" title="该节点所在国家不在已选国家组内，不进入输出配置（锁定节点除外）">地区未启用</span>' : '';
     const suspect = n.statusMachine === 'suspect' ? '<span class="badge badge-warn" title="连续失败，观察中">观察中</span>' : '';
     let healthBadge;
     if (st === 'alive') healthBadge = `<span class="badge badge-ok" title="${escHtml(scoreTip)}"><i class="badge-dot"></i>存活</span>`;
     else if (isDead) healthBadge = `<span class="badge badge-bad" title="${escHtml(scoreTip + (n.error ? ' · ' + n.error : ''))}"><i class="badge-dot"></i>不通</span>`;
     else healthBadge = `<span class="badge badge-muted" title="${notApplicable ? 'UDP 协议节点，基础 TCP/TLS 连通性探测不适用' : '尚未探测'}"><i class="badge-dot"></i>未探测</span>`;
     const nm = nodeFlagOf(n);
-    const faded = ((n.dropped && !n.locked) || n.excluded) ? ' is-faded' : '';
+    const faded = ((n.dropped && !n.locked) || n.excluded || (n.countryExcluded && !n.locked)) ? ' is-faded' : '';
     const subLocked = n.locked ? `<div class="nd-nm-sub is-violet">${ND_ICON_LOCK_SM} 已锁定</div>` : '';
     const subExcluded = n.excluded ? `<div class="nd-nm-sub is-muted">${ND_ICON_LOGOUT_SM} 已移出配置</div>` : '';
     const fp = escHtml(n.fingerprint);
@@ -4894,7 +4936,7 @@ function renderNodes() {
       <td class="nd-addr">${escHtml(n.server)}<span>:${escHtml(String(n.port ?? ''))}</span></td>
       <td>${n.tls ? `<span class="nd-tls" title="TLS 已启用">${ND_ICON_SHIELD}</span>` : '<span class="nd-tls-na">—</span>'}</td>
       <td>${latencyCell(n)}</td>
-      <td><div class="nd-badges">${healthBadge}${suspect}${dropped}</div></td>
+      <td><div class="nd-badges">${healthBadge}${suspect}${dropped}${countryExcluded}</div></td>
       <td class="nd-cn">
         <div class="nd-ops">
           <button type="button" class="btn btn-sm${n.locked ? ' btn-soft' : ''}" title="${n.locked ? '已锁定：无视健康状态，强制进配置（点击解锁）' : '未锁定：跟随系统健康状态判定进出配置（点击锁定）'}" onclick="toggleNodeLock('${fp}', ${!n.locked})">${n.locked ? ND_ICON_UNLOCK : ND_ICON_LOCK}${n.locked ? '解锁' : '锁定'}</button>
@@ -4909,6 +4951,96 @@ function renderNodes() {
   bindNodeScrollbar();
   syncNodeScrollMetrics();
   syncNodeScrollbar();
+}
+
+// ===== 输出国家组（自由多选，长期保存；空 = 不过滤） =====
+async function openCountryGroups() {
+  try {
+    const res = await api('/nodes/countries');
+    const d = (res && res.data) || {};
+    state.countryGroups = Array.isArray(d.available) ? d.available : [];
+    state.countryGroupDraft = new Set(Array.isArray(d.selected) ? d.selected : []);
+    const search = document.getElementById('countryGroupSearch');
+    if (search) search.value = '';
+    const all = document.getElementById('countryGroupShowAll');
+    if (all) all.checked = false;
+    renderCountryGroups();
+    showModal('countryGroupsModal');
+  } catch (e) {
+    toast('加载国家组失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+function renderCountryGroups() {
+  const box = document.getElementById('countryGroupList');
+  if (!box) return;
+  const search = (document.getElementById('countryGroupSearch')?.value || '').trim().toLowerCase();
+  const showAll = !!document.getElementById('countryGroupShowAll')?.checked;
+  const draft = state.countryGroupDraft || new Set();
+  const items = (state.countryGroups || [])
+    .filter(c => showAll || Number(c.count) > 0)
+    .filter(c => !search
+      || String(c.name || '').toLowerCase().includes(search)
+      || String(c.code || '').toLowerCase().includes(search));
+  if (items.length === 0) {
+    box.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:13px">没有匹配的国家</div>';
+    return;
+  }
+  box.innerHTML = items.map(c => {
+    const checked = draft.has(c.code) ? ' checked' : '';
+    const count = Number(c.count) || 0;
+    return `<label style="display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--line);cursor:pointer">
+      <input type="checkbox" value="${escHtml(c.code)}"${checked} onchange="toggleCountryGroup('${escHtml(c.code)}', this.checked)">
+      <span style="font-size:16px;line-height:1">${escHtml(c.flag || '')}</span>
+      <span style="font-size:13px">${escHtml(c.name || c.code)}</span>
+      <span style="margin-left:auto;color:var(--muted);font-size:12px">${count} 个节点</span>
+    </label>`;
+  }).join('');
+}
+
+function toggleCountryGroup(code, checked) {
+  if (!state.countryGroupDraft) state.countryGroupDraft = new Set();
+  if (checked) state.countryGroupDraft.add(code);
+  else state.countryGroupDraft.delete(code);
+}
+
+function countryGroupsSelectAll() {
+  state.countryGroupDraft = new Set((state.countryGroups || []).map(c => c.code));
+  renderCountryGroups();
+}
+
+function countryGroupsSelectWithNodes() {
+  state.countryGroupDraft = new Set((state.countryGroups || []).filter(c => Number(c.count) > 0).map(c => c.code));
+  renderCountryGroups();
+}
+
+function countryGroupsClear() {
+  state.countryGroupDraft = new Set();
+  renderCountryGroups();
+}
+
+async function saveCountryGroups() {
+  const countries = [...(state.countryGroupDraft || [])];
+  try {
+    const res = await api('/nodes/countries', { method: 'PUT', body: JSON.stringify({ countries }) });
+    const d = (res && res.data) || {};
+    state.outputCountries = Array.isArray(d.selected) ? d.selected : countries;
+    updateCountryGroupButton();
+    closeModal('countryGroupsModal');
+    toast(countries.length > 0 ? `已保存国家组：${countries.length} 个地区` : '已清空国家组：不过滤，保留全部');
+    await loadNodes(true);
+  } catch (e) {
+    toast('保存失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+function updateCountryGroupButton() {
+  const el = document.getElementById('countryGroupCount');
+  if (!el) return;
+  const n = Array.isArray(state.outputCountries) ? state.outputCountries.length : 0;
+  el.textContent = n > 0 ? String(n) : '全部';
+  const btn = document.getElementById('btnCountryGroups');
+  if (btn) btn.classList.toggle('btn-soft', n > 0);
 }
 
 // ⚡ 立即连通性探测：全量 TCP/TLS 握手 RTT 探测（UDP 协议节点跳过，同步等待）
@@ -5147,6 +5279,7 @@ async function loadOutputStatus() {
       if (ex.subscriptionDisabled) reasons.push('停用订阅 ' + ex.subscriptionDisabled);
       if (ex.disabled) reasons.push('手动禁用 ' + ex.disabled);
       if (ex.dropped) reasons.push('已抛弃 ' + ex.dropped);
+      if (ex.country) reasons.push('地区未启用 ' + ex.country);
       if (ex.removed) reasons.push('已删除 ' + ex.removed);
       if (reasons.length) parts.push('未进配置 ' + reasons.join(' / '));
       if (d.background && d.background.geoRetryActive) parts.push('国家码补全后台重试中');

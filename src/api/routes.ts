@@ -19,6 +19,7 @@ import { rateLimit, createKvRateLimit } from './rate-limit';
 import { nodeToLink } from '@/services/config.service';
 import { nodeFingerprint } from '@/models/node';
 import { deduplicateNodes } from '@/parser';
+import { COUNTRIES, countryFlag } from '@/data/country-codes';
 import { prewarmIpGeo, emptyGeoRequestStats, type PrewarmResult } from '@/services/ip-geo.service';
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
@@ -482,6 +483,8 @@ export function createApp(deps: AppDeps): Hono {
     const dropped = new Set(await config.getDroppedNodes());
     // v2.36.9：锁定节点（无视测活/延迟，强制进配置）
     const locked = new Set(await config.getLockedNodes());
+    // 输出国家组：非空时，未勾选国家（含未识别国家）的节点不进入输出配置
+    const outputCountries = new Set(await config.getOutputCountries());
     const { getAllNodeHealth, nodeLatencyMs, isProbeApplicable } = await import('@/services/node-probe.service');
     const healthByFp = new Map((await getAllNodeHealth(storage)).map(h => [h.fingerprint, h]));
     const mapper = (n: import('@/models/node').Node) => {
@@ -489,13 +492,18 @@ export function createApp(deps: AppDeps): Hono {
       const h = healthByFp.get(fp);
       // P0-1：UDP 协议（Hysteria2/TUIC/WireGuard）不适用 TCP/TLS 基础探测 → 显式标记，不伪装为 alive/dead
       const probeApplicable = isProbeApplicable(n.protocol);
+      const country = n.metadata?.country ?? '';
+      // 国家未启用：白名单生效时，国家为空或不在白名单内，且未锁定 → 不进入输出配置
+      const countryExcluded = outputCountries.size > 0
+        && !locked.has(fp)
+        && (!country || !outputCountries.has(country.toUpperCase()));
       return {
         name: n.name,
         protocol: n.protocol,
         server: n.server,
         port: n.port,
         tls: n.tls ?? false,
-        country: n.metadata?.country ?? '',
+        country,
         link: nodeToLink(n),
         fingerprint: fp,
         enabled: !disabled.has(fp),
@@ -504,6 +512,7 @@ export function createApp(deps: AppDeps): Hono {
         excluded: disabled.has(fp),
         locked: locked.has(fp),
         dropped: dropped.has(fp),
+        countryExcluded,
         probeApplicable,
         healthStatus: probeApplicable ? (h?.status ?? null) : 'unknown',
         statusMachine: probeApplicable ? (h?.statusMachine ?? null) : null,
@@ -517,6 +526,7 @@ export function createApp(deps: AppDeps): Hono {
       return c.json({
         success: true,
         data: (await config.autoNamed(nodes)).map(mapper),
+        outputCountries: [...outputCountries],
       });
     }
     // v2.36.6：与仪表盘同口径 —— 含停用订阅的全部节点（此前仅启用订阅，两页数字对不上）
@@ -531,6 +541,53 @@ export function createApp(deps: AppDeps): Hono {
       success: true,
       data: (await config.autoNamed(unique)).map(mapper),
       stats: { original, duplicates: original - unique.length, unique: unique.length, geoUnlocated, dropLatencyMs },
+      outputCountries: [...outputCountries],
+    });
+  });
+
+  // 输出国家组：自由多选，长期保存；未勾选国家默认不进入输出配置。
+  // GET 返回全部已知国家（附当前节点数）+ 已选集合，供弹窗渲染。
+  app.get('/api/nodes/countries', async (c) => {
+    const all = deduplicateNodes(await repos.nodes.getAll(true));
+    const named = await config.autoNamed(all);
+    const counts = new Map<string, number>();
+    for (const n of named) {
+      const code = (n.metadata?.country || '').toUpperCase();
+      if (code) counts.set(code, (counts.get(code) || 0) + 1);
+    }
+    const selected = await config.getOutputCountries();
+    // 返回全部已知国家（含当前无节点的，count=0），前端默认只展示有节点的，勾选“显示全部”后展示完整列表。
+    const available = Object.keys(COUNTRIES)
+      .map((code) => ({
+        code,
+        name: COUNTRIES[code].name,
+        flag: countryFlag(code),
+        count: counts.get(code) || 0,
+      }))
+      .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+    return c.json({
+      success: true,
+      data: { available, selected, enabled: selected.length > 0 },
+    });
+  });
+
+  // 保存输出国家组（空数组 = 不过滤，保留全部）
+  app.put('/api/nodes/countries', async (c) => {
+    const body = await readBody<{ countries?: unknown }>(c);
+    const list = Array.isArray(body.countries) ? body.countries : [];
+    const codes = list.filter((x): x is string => typeof x === 'string');
+    const valid = new Set(Object.keys(COUNTRIES));
+    const invalid = codes.filter((x) => !valid.has(x.toUpperCase()));
+    if (invalid.length > 0) {
+      return c.json({
+        success: false,
+        error: { code: 'INVALID_PARAMETER', message: `包含未知国家码：${invalid.join(', ')}` },
+      }, 400);
+    }
+    await config.setOutputCountries(codes);
+    return c.json({
+      success: true,
+      data: { selected: await config.getOutputCountries() },
     });
   });
 
