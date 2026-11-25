@@ -2071,6 +2071,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
           <div class="sgroup">系统</div>
           <div class="nav-items">
             <div class="nav-tab" data-page="settings" onclick="switchPage('settings')"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span>设置</div>
+<div class="nav-tab" data-page="warp" onclick="switchPage('warp')"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>WARP 实验</div>
           </div>
         </div>
       </nav>
@@ -2524,6 +2525,99 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
     </select>
   </div>
   <!-- Settings -->
+  <!-- WARP 实验页（独立模块：不写节点列表/输出） -->
+  <div class="page" id="page-warp">
+    <div class="atlas-pagehead fade-up">
+      <div>
+        <div class="atlas-eyebrow">实验</div>
+        <h2>WARP 节点</h2>
+        <div class="atlas-subtitle">注册 Cloudflare WARP MASQUE 设备，生成 H2 / H3 节点预览。</div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up" style="border-color:color-mix(in srgb, var(--warn) 45%, var(--line));">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">🧪</span>
+        <div><h3>独立实验页</h3><p>这里的节点只在本页展示，不会进入节点列表，也不会进入输出配置。</p></div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">☁️</span>
+        <div><h3>WARP 设备（MASQUE）</h3><p>匿名设备注册，不是邮箱/密码登录。</p></div>
+      </div>
+      <div class="st-stack">
+        <div class="st-field">
+          <label class="st-label">设备状态</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <b id="warpDeviceStatus">未注册</b>
+            <span id="warpDeviceMeta" style="color:var(--muted);font-size:12px"></span>
+            <button type="button" class="btn btn-primary btn-sm" id="warpRegisterBtn" onclick="registerWarpLab()">注册 MASQUE 设备</button>
+            <button type="button" class="btn btn-sm" id="warpClearBtn" onclick="clearWarpLab()">清除</button>
+          </div>
+          <p class="st-hint" id="warpDeviceHint">注册会向 Cloudflare 申请一台免费 WARP 设备；刷新会重新注册并清空已生成节点。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">⚡</span>
+        <div><h3>生成 MASQUE 节点</h3><p>H2 = TCP/443，H3 = QUIC/UDP/443；两者共用同一个 MASQUE 设备。</p></div>
+      </div>
+      <div class="st-stack">
+        <div class="st-field">
+          <label class="st-label" for="warpEndpoints">端点（每行一个 host:port，最多 20 个）</label>
+          <textarea class="st-input" id="warpEndpoints" rows="4" style="width:100%;min-height:96px;resize:vertical;font-family:var(--font-mono);font-size:12px" placeholder="162.159.198.1:443"></textarea>
+        </div>
+        <div class="st-field">
+          <label class="st-label" for="warpSni">SNI</label>
+          <input class="st-input" id="warpSni" placeholder="consumer-masque.cloudflareclient.com">
+        </div>
+        <div class="st-field">
+          <label class="st-label">传输</label>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH2" checked> H2（TCP 443）</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH3" checked> H3（QUIC 443）</label>
+          </div>
+        </div>
+        <div>
+          <button type="button" class="btn btn-primary" id="warpGenerateBtn" onclick="generateWarpLabNodes()">生成节点</button>
+          <span class="st-hint" style="margin-left:10px">生成结果只保存在本页。</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">📋</span>
+        <div><h3>已生成的节点</h3><p>可复制每条的 mihomo YAML（包含私钥，请勿外泄）。</p></div>
+      </div>
+      <div class="table-scroll" style="max-height:420px;overflow:auto">
+        <table class="nd-table">
+          <thead><tr><th>名称</th><th>传输</th><th>端点</th><th>SNI</th><th>生成时间</th><th>操作</th></tr></thead>
+          <tbody id="warpNodesBody"></tbody>
+        </table>
+      </div>
+      <div id="warpNodesEmpty" class="nd-empty" style="display:none">还没有生成节点。</div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">ℹ️</span>
+        <div><h3>说明</h3><p>实验功能，请自行评估风险。</p></div>
+      </div>
+      <div class="st-stack" style="gap:8px;color:var(--muted);font-size:13px;line-height:1.6">
+        <div>• 本页节点不会进入节点列表、输出配置、测速或任何现有功能。</div>
+        <div>• 免费 WARP 面向个人使用，请遵守 Cloudflare 条款。</div>
+        <div>• WARP 出口是 Cloudflare 机房 IP，AI 可用性不保证。</div>
+        <div>• 客户端需使用较新的 mihomo 内核（支持 type: masque）；老版 Clash 不支持。</div>
+        <div>• 生成的 YAML 含设备私钥，请勿公开分享。</div>
+      </div>
+    </div>
+  </div>
+
   <div class="page" id="page-settings">
     <div class="atlas-pagehead">
       <div><div class="atlas-eyebrow">系统</div><h2>设置</h2><div class="atlas-subtitle">管理运行参数和外观偏好。</div></div>
@@ -3682,7 +3776,7 @@ function switchPage(page) {
   }
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
-  const pageLabels = { dashboard: '仪表盘', subscribe: '订阅管理', nodes: '节点列表', rules: '分流规则', output: '输出配置', settings: '设置' };
+  const pageLabels = { dashboard: '仪表盘', subscribe: '订阅管理', nodes: '节点列表', rules: '分流规则', output: '输出配置', settings: '设置', warp: 'WARP 实验' };
   const breadcrumb = document.getElementById('atlasBreadcrumb');
   if (breadcrumb) breadcrumb.textContent = pageLabels[page] || '仪表盘';
   window.location.hash = page;
@@ -3694,6 +3788,7 @@ function switchPage(page) {
   if (page === 'output') loadOutput();
   if (page === 'rules') { loadRules(); ensureCatalogLoaded(); loadCatalogStatus(); }
   if (page === 'settings') { loadSettings(); loadCurrentUsername(); }
+  if (page === 'warp') loadWarpLab();
 }
 
 function toggleSidebar() {
@@ -5980,6 +6075,128 @@ function runCoreProbeNow() {
       toast('测速启动失败：' + ((e && e.message) || '未知错误'), 'error');
     }
   }, 50);
+}
+
+// ===== WARP 实验页（独立：不写节点列表/输出/探测） =====
+let warpLabState = { registered: false, account: null, nodes: [], defaults: { endpoints: [], sni: '' } };
+
+async function loadWarpLab() {
+  try {
+    const res = await api('/warp-lab/status');
+    const d = (res && res.data) || {};
+    warpLabState = {
+      registered: !!d.registered,
+      account: d.account || null,
+      nodes: Array.isArray(d.nodes) ? d.nodes : [],
+      defaults: d.defaults || { endpoints: [], sni: '' },
+    };
+    renderWarpLab();
+  } catch (e) {
+    toast('加载 WARP 实验页失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+function renderWarpLab() {
+  const st = document.getElementById('warpDeviceStatus');
+  const meta = document.getElementById('warpDeviceMeta');
+  const hint = document.getElementById('warpDeviceHint');
+  const regBtn = document.getElementById('warpRegisterBtn');
+  if (st) st.textContent = warpLabState.registered ? '已注册' : '未注册';
+  if (meta) {
+    const a = warpLabState.account;
+    meta.textContent = a
+      ? [a.id, a.ipv4, a.ipv6, a.registeredAt ? new Date(a.registeredAt).toLocaleString('zh-CN', { hour12: false }) : '']
+          .filter(Boolean).join(' · ')
+      : '';
+  }
+  if (hint) {
+    hint.textContent = warpLabState.registered
+      ? '已注册 MASQUE 设备。重新注册会清空当前已生成节点。'
+      : '注册会向 Cloudflare 申请一台免费 WARP 设备。';
+  }
+  if (regBtn) regBtn.textContent = warpLabState.registered ? '重新注册设备' : '注册 MASQUE 设备';
+
+  const epEl = document.getElementById('warpEndpoints');
+  if (epEl && !epEl.value.trim()) {
+    epEl.value = (warpLabState.defaults.endpoints || []).join('\n');
+  }
+  const sniEl = document.getElementById('warpSni');
+  if (sniEl && !sniEl.value.trim()) sniEl.value = warpLabState.defaults.sni || '';
+
+  const body = document.getElementById('warpNodesBody');
+  const empty = document.getElementById('warpNodesEmpty');
+  if (!body) return;
+  if (warpLabState.nodes.length === 0) {
+    body.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  body.innerHTML = warpLabState.nodes.map((n) => `
+    <tr>
+      <td>${escHtml(n.name)}</td>
+      <td>${n.transport === 'h2' ? 'H2' : 'H3'}</td>
+      <td>${escHtml(n.server + ':' + n.port)}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(n.sni)}">${escHtml(n.sni)}</td>
+      <td>${n.createdAt ? new Date(n.createdAt).toLocaleString('zh-CN', { hour12: false }) : ''}</td>
+      <td><button type="button" class="btn btn-sm" onclick="copyWarpLabYaml('${escHtml(n.id)}')">复制 YAML</button></td>
+    </tr>`).join('');
+}
+
+async function registerWarpLab() {
+  const btn = document.getElementById('warpRegisterBtn');
+  if (btn) btn.disabled = true;
+  try {
+    await api('/warp-lab/register', { method: 'POST', timeout: 90000 });
+    toast('WARP MASQUE 设备已注册');
+    await loadWarpLab();
+  } catch (e) {
+    toast('注册失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function generateWarpLabNodes() {
+  const btn = document.getElementById('warpGenerateBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const endpoints = (document.getElementById('warpEndpoints')?.value || '')
+      .split(/\r?\n|,/).map((s) => s.trim()).filter(Boolean);
+    const sni = (document.getElementById('warpSni')?.value || '').trim();
+    const h2 = !!document.getElementById('warpH2')?.checked;
+    const h3 = !!document.getElementById('warpH3')?.checked;
+    if (!h2 && !h3) { toast('至少选择 H2 或 H3', 'error'); return; }
+    const res = await api('/warp-lab/generate', {
+      method: 'POST',
+      body: JSON.stringify({ endpoints, sni, h2, h3 }),
+    });
+    const d = (res && res.data) || {};
+    warpLabState.nodes = Array.isArray(d.nodes) ? d.nodes : [];
+    renderWarpLab();
+    toast(`已生成 ${warpLabState.nodes.length} 个节点（仅本页）`);
+  } catch (e) {
+    toast('生成失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function clearWarpLab() {
+  if (!window.confirm('确定清除 WARP 实验数据（设备与已生成节点）？')) return;
+  try {
+    await api('/warp-lab/clear', { method: 'POST' });
+    toast('WARP 实验数据已清除');
+    await loadWarpLab();
+  } catch (e) {
+    toast('清除失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+function copyWarpLabYaml(id) {
+  const node = (warpLabState.nodes || []).find((n) => n.id === id);
+  if (!node) return;
+  copyText(node.yaml, '节点 YAML 已复制（含私钥，请勿外泄）');
 }
 
 const ST_ICON_PLUG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>';

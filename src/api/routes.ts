@@ -52,6 +52,18 @@ import {
   DEFAULT_CORE_TEST_URLS,
 } from '@/services/core-probe.service';
 import { getCoreStatus, getLatestCoreRelease, upgradeCore } from '@/services/core-upgrade.service';
+import {
+  WARP_LAB_DEFAULT_ENDPOINTS,
+  WARP_LAB_DEFAULT_SNI,
+  clearWarpLab,
+  generateMasqueNodes,
+  maskWarpLabAccount,
+  readWarpLabAccount,
+  readWarpLabNodes,
+  registerMasqueDevice,
+  saveWarpLabAccount,
+  saveWarpLabNodes,
+} from '@/services/warp-lab.service';
 
 /**
  * 请求是否走 https。
@@ -1080,6 +1092,59 @@ export function createApp(deps: AppDeps): Hono {
     } catch (e) {
       return c.json({ success: false, error: { code: 'CORE_UPGRADE_FAILED', message: (e as Error).message } }, 502);
     }
+  });
+
+  // ============ WARP 实验页（独立模块：不写节点列表/输出/探测） ============
+
+  app.get('/api/warp-lab/status', requireAuth(auth), async (c) => {
+    const account = await readWarpLabAccount(storage);
+    const nodes = await readWarpLabNodes(storage);
+    return c.json({
+      success: true,
+      data: {
+        registered: !!account,
+        account: account ? maskWarpLabAccount(account) : null,
+        nodes,
+        defaults: { endpoints: WARP_LAB_DEFAULT_ENDPOINTS, sni: WARP_LAB_DEFAULT_SNI },
+      },
+    });
+  });
+
+  app.post('/api/warp-lab/register', requireAuth(auth), sensitiveOpRateLimit, async (c) => {
+    try {
+      const account = await registerMasqueDevice(http.asFetch('version'));
+      await saveWarpLabAccount(storage, account);
+      await saveWarpLabNodes(storage, []);
+      return c.json({ success: true, data: { account: maskWarpLabAccount(account) } });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'WARP_REGISTER_FAILED', message: (e as Error).message } }, 502);
+    }
+  });
+
+  app.post('/api/warp-lab/generate', requireAuth(auth), async (c) => {
+    const account = await readWarpLabAccount(storage);
+    if (!account) {
+      return c.json({ success: false, error: { code: 'WARP_NOT_REGISTERED', message: '请先注册 WARP MASQUE 设备' } }, 400);
+    }
+    const body = await readBody<{ endpoints?: unknown; sni?: unknown; h2?: unknown; h3?: unknown }>(c);
+    const endpoints = Array.isArray(body.endpoints)
+      ? body.endpoints.filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const sni = typeof body.sni === 'string' ? body.sni : undefined;
+    const h2 = body.h2 !== false;
+    const h3 = body.h3 !== false;
+    try {
+      const nodes = generateMasqueNodes(account, { endpoints, sni, h2, h3 });
+      await saveWarpLabNodes(storage, nodes);
+      return c.json({ success: true, data: { nodes } });
+    } catch (e) {
+      return c.json({ success: false, error: { code: 'WARP_GENERATE_FAILED', message: (e as Error).message } }, 400);
+    }
+  });
+
+  app.post('/api/warp-lab/clear', requireAuth(auth), async (c) => {
+    await clearWarpLab(storage);
+    return c.json({ success: true, data: { cleared: true } });
   });
 
   // ============ Settings ============
