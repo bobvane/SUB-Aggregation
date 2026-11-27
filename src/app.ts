@@ -232,7 +232,7 @@ export async function runScheduled(
   // v2.25.0：任务门闩（active 哨兵）——正常态（无未识别 IP）直接短路，0 KV 写，不再每分钟跑全量/写归零状态
   if (cron === '* * * * *') {
     try {
-      const { prewarmIpGeo, filterUnlocatedServers, getGeoRetryGate, setGeoRetryGate, deactivateGeoRetry, GEO_RETRY_MAX } = await import('@/services/ip-geo.service');
+      const { prewarmIpGeo, filterUnlocatedServers, geoLookupServers, getGeoRetryGate, setGeoRetryGate, deactivateGeoRetry, GEO_RETRY_MAX } = await import('@/services/ip-geo.service');
       const ipGeoCache = { get: (k: string): Promise<string | null> => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
 
       // ① 门闩短路：无激活重试任务 → 直接 return（0 KV 写，不跑 getAll、不查 IP）
@@ -240,7 +240,7 @@ export async function runScheduled(
       if (!gate.active) return;
 
       const allNodes = deduplicateNodes(await repos.nodes.getAll());
-      const servers = [...new Set(allNodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
+      const servers = geoLookupServers(allNodes);
       if (servers.length === 0) {
         await deactivateGeoRetry(repos.settings);
         return;
@@ -366,9 +366,9 @@ export async function runScheduled(
   // v2.25.0：cache 统一走 repos.settings（setting: 前缀，与手动更新/前端统计同口径）；
   //          预热后若有未识别 IP 则激活 GeoRetry 门闩，唤醒每分钟 cron 继续重查
   try {
-    const { prewarmIpGeo, filterUnlocatedServers, activateGeoRetry } = await import('@/services/ip-geo.service');
+    const { prewarmIpGeo, filterUnlocatedServers, activateGeoRetry, geoLookupServers } = await import('@/services/ip-geo.service');
     const allNodes = deduplicateNodes(await repos.nodes.getAll());
-    const servers = [...new Set(allNodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
+    const servers = geoLookupServers(allNodes);
     if (servers.length > 0) {
       const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
       const geoResult = await prewarmIpGeo(servers, ipGeoCache, geoFetch);

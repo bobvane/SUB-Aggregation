@@ -137,6 +137,8 @@ function buildScoreOf(
 function isCountryAllowed(node: Node, allow: Set<string>, locked: Set<string>): boolean {
   if (allow.size === 0) return true;
   if (locked.has(nodeFingerprint(node))) return true;
+  // v2.50.8：masque 不做国家码；未锁定时不参与国家组过滤（一律排除）
+  if (node.protocol === 'masque') return false;
   const code = (node.metadata?.country || '').toUpperCase();
   return !!code && allow.has(code);
 }
@@ -776,6 +778,8 @@ export function createConfigService(repos: Repositories, kv: KVStorage, geoFetch
         } else {
           inOutput++;
         }
+        // v2.50.8：masque 不做国家码，不参与地区统计
+        if (n.protocol === 'masque') continue;
         const country = n.metadata?.country;
         if (country) regions.add(country);
       }

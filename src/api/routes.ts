@@ -20,7 +20,7 @@ import { nodeToLink } from '@/services/config.service';
 import { nodeFingerprint } from '@/models/node';
 import { deduplicateNodes } from '@/parser';
 import { COUNTRIES, countryFlag } from '@/data/country-codes';
-import { prewarmIpGeo, emptyGeoRequestStats, type PrewarmResult } from '@/services/ip-geo.service';
+import { prewarmIpGeo, emptyGeoRequestStats, geoLookupServers, type PrewarmResult } from '@/services/ip-geo.service';
 import { APP_META, isNewerVersion } from '@/meta';
 import { createCatalogSyncService, CatalogSyncService } from '@/services/catalog-sync.service';
 import { RuleCatalogMeta } from '@/models/rule-catalog';
@@ -486,7 +486,7 @@ export function createApp(deps: AppDeps): Hono {
         (async () => {
           try {
             const nodes = deduplicateNodes(await repos.nodes.getAll());
-            const servers = [...new Set(nodes.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
+            const servers = geoLookupServers(nodes);
             if (servers.length > 0) {
               const geoService = await import('@/services/ip-geo.service');
               const ipGeoCache = { get: (k: string) => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };
@@ -527,7 +527,8 @@ export function createApp(deps: AppDeps): Hono {
       const h = healthByFp.get(fp);
       // v2.50.0：所有协议统一由 mihomo 核心测速（含 UDP 协议），probeApplicable 恒 true。
       const probeApplicable = true;
-      const country = n.metadata?.country ?? '';
+      // v2.50.8：masque 不做国家码，即使 metadata 里有历史残留也不展示
+      const country = n.protocol === 'masque' ? '' : (n.metadata?.country ?? '');
       // 国家未启用：白名单生效时，国家为空或不在白名单内，且未锁定 → 不进入输出配置
       const countryExcluded = outputCountries.size > 0
         && !locked.has(fp)
@@ -570,7 +571,8 @@ export function createApp(deps: AppDeps): Hono {
     const all = await repos.nodes.getAll(true);
     const original = all.length;
     const unique = deduplicateNodes(all);
-    const geoUnlocated = await config.countUnlocatedGeo(unique.map(n => n.server));
+    // v2.50.8：masque 的 server 是 anycast 入口，不参与 IP 归属地统计
+    const geoUnlocated = await config.countUnlocatedGeo(geoLookupServers(unique));
     // 前端用同一阈值做延迟红字高亮（与 getDroppedNodes 同口径）
     const dropLatRaw = Number((await repos.settings.get('node_drop_latency_ms')) ?? '');
     const dropLatencyMs = Number.isFinite(dropLatRaw) && dropLatRaw >= 100 && dropLatRaw <= 2000 ? dropLatRaw : 2000;
@@ -634,7 +636,8 @@ export function createApp(deps: AppDeps): Hono {
     const body = await readBody<{ scope?: string }>(c);
     const all = await repos.nodes.getAll();
     const unique = deduplicateNodes(all);
-    const servers = [...new Set(unique.map((n) => n.server).filter((v): v is string => typeof v === 'string'))];
+    // v2.50.8：masque 不参与国家码重检
+    const servers = geoLookupServers(unique);
     // 1. 并发锁：同一次检测进行中返回 409
     const LOCK_KEY = 'geo_redetect_lock';
     const lockRaw = await repos.settings.get(LOCK_KEY);

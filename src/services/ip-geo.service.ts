@@ -11,6 +11,7 @@
 
 import { countryDisplayName } from '@/data/country-codes';
 import type { FetchFn } from '@/engine/http-client';
+import type { Node } from '@/models/node';
 
 const IP_GEO_KEY_PREFIX = 'ip_geo:';
 const IP_API_URL = 'http://ip-api.com/batch';
@@ -38,6 +39,25 @@ const DOH_ENDPOINTS = [
 
 /** IPv4 正则：4段点分十进制，每段1-3位数字 */
 const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+/**
+ * v2.50.8：MASQUE 不参与 IP 归属地查询。
+ *
+ * MASQUE 的 server 是 Cloudflare anycast 入口，不是出口；而 WARP 出口的 GeoIP
+ * 又常常跟随用户所在国（而不是机房所在国）。用入口 IP 查国家会得到错误结果，
+ * 所以从节点列表提取可查询 server 时统一排除 masque。
+ * 需要国家码的节点由 WARP 实验页另行决定，不进入这条 IP-geo 管线。
+ */
+export function geoLookupServers(
+  nodes: Array<Pick<Node, 'server' | 'protocol'>>
+): string[] {
+  const out = new Set<string>();
+  for (const node of nodes) {
+    if (node.protocol === 'masque') continue;
+    if (typeof node.server === 'string' && node.server) out.add(node.server);
+  }
+  return [...out];
+}
 
 /** 判断 server 是否为纯 IP（IPv4）。每段需 ≤255，且必须是点分十进制
  * （v2.23.0：补段值校验，避免 999.1.1.1 / 2130706433 十进制等非标准写法被当作域名去真解析） */

@@ -101,7 +101,7 @@
 - **指纹**：masque 追加 `network`（h2/h3）与 SNI，避免同一端点 H2/H3 在入库去重时互相覆盖。
 - **mihomo 生成**：`nodeToMihomoProxy` 输出完整 masque 字段；核心测速沿用同一映射，自动可用。
 - **其他输出**：sing-box / v2ray 不支持 masque，仍按“客户端不认识就跳过”处理，不额外提示。
-- **国家码**：**尚未处理**。masque 的 `server` 是 Cloudflare anycast 入口，不是出口；当前不做 IP 归属地查询，节点归入「其他」，名字降级为 `MASQUE-xx`。出口国家方案待定。
+- **国家码**：**确定不做**（v2.50.8）。WARP 出口的物理位置（`colo`）与 GeoIP 国家经常不一致，GeoIP 还常跟随用户所在国；masque 无法可靠打国家码。节点归入「其他」，名字降级为 `MASQUE-xx`；masque 的 `server` 已从 IP-geo 预热/重检/统计中排除。
 - **UI**：协议标签、筛选、仪表盘识别 MASQUE（H2/H3）。
 
 后续真正并入时，只需把 `WarpLabNode + account` 转成 `Node` 并写入 `nodes:*`（产品决策），不需要再改模型/解析/生成器。

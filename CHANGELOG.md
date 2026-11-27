@@ -1,5 +1,15 @@
 # 更新日志
 
+## v2.50.8 — 2026-11-27
+
+确定 **masque 不做国家码**，并从 IP 归属地管线彻底排除。
+
+- **结论**：WARP 出口的物理位置（`colo`）与 GeoIP 国家经常不一致；GeoIP 还常跟随用户所在国，而不是机房所在国。masque 无法可靠打国家码。
+- **节点列表**：`smartRename` / 地理分组继续把 masque 归入「其他」，名称降级为 `MASQUE-xx`。
+- **IP-geo**：`prewarmIpGeo`、`geo-redetect`、每分钟重试、`countUnlocatedGeo` 全部跳过 masque 的 `server`，避免把 anycast 入口 IP 的国家写回缓存/统计。
+- **API**：`/api/nodes` 对 masque 强制返回空 `country`；输出国家组过滤中，masque 未锁定时一律排除。
+- **新增**：`geoLookupServers()` 统一提取参与 IP 归属地查询的 server。
+
 ## v2.50.7 — 2026-11-27
 
 WARP 实验页：协议 / 端口选项按内容自适应宽度，不再折成两行。
