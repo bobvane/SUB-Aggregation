@@ -236,6 +236,10 @@ tbody tr:hover { background: var(--accent-soft); }
 .task-null { color: var(--text2); font-weight: 400; }
 .task-result-note { margin-top: 10px; font-size: 13px; line-height: 1.65; color: var(--text2); }
 .task-result-list { margin-top: 6px; max-height: 120px; overflow: auto; font-size: 13px; line-height: 1.7; color: var(--text2); word-break: break-all; }
+/* WARP 端点验证：实时日志 + 取消 */
+.task-log { margin-top: 12px; max-height: 150px; overflow: auto; text-align: left; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text2); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.task-log > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#taskCancelWrap { margin-top: 14px; }
 /* ===== Sub Items ===== */
 .sub-item {
   display: flex; align-items: center; gap: 12px;
@@ -2531,7 +2535,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
       <div>
         <div class="atlas-eyebrow">实验</div>
         <h2>WARP 节点</h2>
-        <div class="atlas-subtitle">注册 Cloudflare WARP MASQUE 设备，生成 H2 / H3 节点预览。</div>
+        <div class="atlas-subtitle">注册 Cloudflare WARP MASQUE 设备，自动发现并验证端点，只生成通过验证的 H2 / H3 节点。</div>
       </div>
     </div>
 
@@ -2563,29 +2567,70 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
 
     <div class="card st-section fade-up">
       <div class="st-sec-head">
-        <span class="st-sec-ico">⚡</span>
-        <div><h3>生成 MASQUE 节点</h3><p>H2 = TCP/443，H3 = QUIC/UDP/443；两者共用同一个 MASQUE 设备。</p></div>
+        <span class="st-sec-ico">🛰️</span>
+        <div><h3>发现并验证端点</h3><p>从 Cloudflare 已知网段自动发现候选，用 mihomo 核心真实建链；只生成通过验证的节点。</p></div>
       </div>
       <div class="st-stack">
         <div class="st-field">
-          <label class="st-label" for="warpEndpoints">端点（每行一个 host:port，最多 20 个）</label>
-          <textarea class="st-input" id="warpEndpoints" rows="4" style="width:100%;min-height:96px;resize:vertical;font-family:var(--font-mono);font-size:12px" placeholder="162.159.198.1:443"></textarea>
-        </div>
-        <div class="st-field">
-          <label class="st-label" for="warpSni">SNI</label>
-          <input class="st-input" id="warpSni" placeholder="consumer-masque.cloudflareclient.com">
-        </div>
-        <div class="st-field">
-          <label class="st-label">传输</label>
-          <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH2" checked> H2（TCP 443）</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH3" checked> H3（QUIC 443）</label>
+          <label class="st-label">SNI</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <code id="warpSniValue" style="font-family:var(--font-mono);font-size:12px;color:var(--text2)">consumer-masque.cloudflareclient.com</code>
+            <button type="button" class="btn btn-sm" onclick="openWarpSniModal()">修改</button>
           </div>
+          <p class="st-hint">Cloudflare 官方建议保持默认；仅在遭遇针对性阻断时尝试修改，填错会直接握手失败。</p>
         </div>
-        <div>
-          <button type="button" class="btn btn-primary" id="warpGenerateBtn" onclick="generateWarpLabNodes()">生成节点</button>
-          <span class="st-hint" style="margin-left:10px">生成结果只保存在本页。</span>
+
+        <div class="st-field">
+          <label class="st-label">传输协议</label>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH2" checked> H2（TCP）</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH3" checked> H3（QUIC）</label>
+          </div>
+          <p class="st-hint">H3 只验证固定地址（162.159.198 / 199 的 .1、.2）；H2 在两个 /24 里采样。</p>
         </div>
+
+        <div class="st-field">
+          <label class="st-label">端口</label>
+          <div id="warpPorts" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="443" checked> 443（推荐）</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="500"> 500</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="1701"> 1701</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="4500"> 4500</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="4443"> 4443</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="8443"> 8443</label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="8095"> 8095</label>
+          </div>
+          <p class="st-hint">默认只测 443；勾选更多端口会显著增加组合数与耗时（上限 150 组）。</p>
+        </div>
+
+        <div class="st-field">
+          <label class="st-label" for="warpSample">H2 每个 /24 采样数</label>
+          <input class="st-input" id="warpSample" type="number" min="1" max="32" value="8" style="max-width:120px">
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn btn-primary" id="warpScanBtn" onclick="startWarpScan(false)">发现并验证端点</button>
+          <button type="button" class="btn btn-sm" id="warpSelfcheckBtn" onclick="startWarpScan(true)">自检（8 组）</button>
+          <span class="st-hint">验证从本机网络发起，只证明端点“活着”，不代表墙内可用。</span>
+        </div>
+        <div class="st-hint" id="warpScanEstimate"></div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up" id="warpScanCard" style="display:none">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">📊</span>
+        <div><h3>验证结果</h3><p id="warpScanSummary">尚未验证。</p></div>
+      </div>
+      <div class="table-scroll" style="max-height:420px;overflow:auto">
+        <table class="nd-table">
+          <thead><tr><th style="width:36px"><input type="checkbox" id="warpResultAll" onclick="toggleWarpResultAll(this)"></th><th>端点</th><th>传输</th><th>端口</th><th>状态</th><th>延迟</th></tr></thead>
+          <tbody id="warpScanBody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+        <button type="button" class="btn btn-primary" id="warpGenerateBtn" onclick="generateWarpLabFromSelection()">生成选中节点</button>
+        <span class="st-hint" id="warpScanNote">已通过验证的端点默认勾选；失败/不确定的不会生成。</span>
       </div>
     </div>
 
@@ -2610,6 +2655,8 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
       </div>
       <div class="st-stack" style="gap:8px;color:var(--muted);font-size:13px;line-height:1.6">
         <div>• 本页节点不会进入节点列表、输出配置、测速或任何现有功能。</div>
+        <div>• 验证从运行本项目的机器发起；部署在境外 VPS 时，只能证明端点“活着”，不代表墙内可用。</div>
+        <div>• 验证结果会随时间变化（anycast 路由、端口可达性、墙的封锁），需要时可重新验证。</div>
         <div>• 免费 WARP 面向个人使用，请遵守 Cloudflare 条款。</div>
         <div>• WARP 出口是 Cloudflare 机房 IP，AI 可用性不保证。</div>
         <div>• 客户端需使用较新的 mihomo 内核（支持 type: masque）；老版 Clash 不支持。</div>
@@ -3080,7 +3127,27 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
       <div id="progressMeta" style="margin-top:12px;font-size:13px;color:var(--text2)">
         <span id="progressTimer">00:00</span> / <span id="progressCap">02:00</span>
       </div>
+      <div id="taskLog" class="task-log" style="display:none"></div>
+      <div id="taskCancelWrap" style="display:none">
+        <button type="button" class="btn btn-sm" id="taskCancelBtn" onclick="cancelWarpScan()">取消</button>
+      </div>
       <div id="progressResult" class="task-result" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- WARP SNI 修改弹窗（默认只读，点“修改”才打开） -->
+<div class="modal-overlay" id="warpSniModal">
+  <div class="modal-content" style="max-width:480px">
+    <div class="modal-header"><h3>修改 SNI</h3><button class="modal-close" onclick="closeModal('warpSniModal')"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+    <div class="modal-body">
+      <p class="st-hint" style="margin:0 0 12px">Cloudflare 官方建议保持默认（<code>consumer-masque.cloudflareclient.com</code>）。仅在默认 SNI 被针对性阻断时尝试修改；填错会直接导致 TLS 握手失败。</p>
+      <input class="st-input" id="warpSniInput" placeholder="consumer-masque.cloudflareclient.com" style="width:100%;font-family:var(--font-mono);font-size:12px">
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm" onclick="resetWarpSni()">恢复默认</button>
+        <button type="button" class="btn btn-sm" onclick="closeModal('warpSniModal')">取消</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveWarpSni()">保存</button>
+      </div>
     </div>
   </div>
 </div>
@@ -6078,9 +6145,28 @@ function runCoreProbeNow() {
 }
 
 // ===== WARP 实验页（独立：不写节点列表/输出/探测） =====
-let warpLabState = { registered: false, account: null, nodes: [], defaults: { endpoints: [], sni: '' } };
+const WARP_SNI_STORAGE_KEY = 'warp_lab_ui_sni';
+let warpLabState = {
+  registered: false,
+  account: null,
+  nodes: [],
+  defaults: {
+    endpoints: [], sni: '', ports: [], defaultPorts: [],
+    h3Ips: [], h2Subnets: [], defaultSample: 8, maxCombos: 150,
+  },
+  lastScan: null,
+};
+let warpLabSni = '';
+let warpScanJobId = null;
+let warpScanInputsBound = false;
+
+const warpSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function loadWarpLab() {
+  if (!warpScanInputsBound) {
+    warpScanInputsBound = true;
+    bindWarpScanInputs();
+  }
   try {
     const res = await api('/warp-lab/status');
     const d = (res && res.data) || {};
@@ -6088,8 +6174,15 @@ async function loadWarpLab() {
       registered: !!d.registered,
       account: d.account || null,
       nodes: Array.isArray(d.nodes) ? d.nodes : [],
-      defaults: d.defaults || { endpoints: [], sni: '' },
+      defaults: d.defaults || {},
+      lastScan: d.lastScan || null,
     };
+    try {
+      warpLabSni = localStorage.getItem(WARP_SNI_STORAGE_KEY) || '';
+    } catch {
+      warpLabSni = '';
+    }
+    if (!warpLabSni) warpLabSni = (warpLabState.defaults.sni || '').trim();
     renderWarpLab();
   } catch (e) {
     toast('加载 WARP 实验页失败：' + ((e && e.message) || '未知错误'), 'error');
@@ -6116,31 +6209,351 @@ function renderWarpLab() {
   }
   if (regBtn) regBtn.textContent = warpLabState.registered ? '重新注册设备' : '注册 MASQUE 设备';
 
-  const epEl = document.getElementById('warpEndpoints');
-  if (epEl && !epEl.value.trim()) {
-    epEl.value = (warpLabState.defaults.endpoints || []).join('\n');
-  }
-  const sniEl = document.getElementById('warpSni');
-  if (sniEl && !sniEl.value.trim()) sniEl.value = warpLabState.defaults.sni || '';
+  renderWarpSni();
+  updateWarpScanEstimate();
 
   const body = document.getElementById('warpNodesBody');
   const empty = document.getElementById('warpNodesEmpty');
-  if (!body) return;
-  if (warpLabState.nodes.length === 0) {
-    body.innerHTML = '';
-    if (empty) empty.style.display = 'block';
+  if (body) {
+    if (warpLabState.nodes.length === 0) {
+      body.innerHTML = '';
+      if (empty) empty.style.display = 'block';
+    } else {
+      if (empty) empty.style.display = 'none';
+      body.innerHTML = warpLabState.nodes.map((n) => `
+        <tr>
+          <td>${escHtml(n.name)}</td>
+          <td>${n.transport === 'h2' ? 'H2' : 'H3'}</td>
+          <td>${escHtml(n.server + ':' + n.port)}</td>
+          <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(n.sni)}">${escHtml(n.sni)}</td>
+          <td>${n.createdAt ? new Date(n.createdAt).toLocaleString('zh-CN', { hour12: false }) : ''}</td>
+          <td><button type="button" class="btn btn-sm" onclick="copyWarpLabYaml('${escHtml(n.id)}')">复制 YAML</button></td>
+        </tr>`).join('');
+    }
+  }
+  renderWarpScanResults(warpLabState.lastScan);
+}
+
+// ---- SNI：默认只读，点“修改”才弹窗 ----
+function getWarpSni() {
+  return (warpLabSni || warpLabState.defaults.sni || '').trim();
+}
+
+function renderWarpSni() {
+  const el = document.getElementById('warpSniValue');
+  if (!el) return;
+  const def = (warpLabState.defaults.sni || '').trim();
+  const cur = getWarpSni();
+  el.textContent = cur + (cur && cur === def ? '（默认）' : cur ? '（已自定义）' : '');
+}
+
+function openWarpSniModal() {
+  const input = document.getElementById('warpSniInput');
+  if (input) input.value = getWarpSni();
+  showModal('warpSniModal');
+}
+
+function saveWarpSni() {
+  const v = (document.getElementById('warpSniInput')?.value || '').trim();
+  if (!v) { toast('SNI 不能为空', 'error'); return; }
+  if (/\s/.test(v) || v.length > 253) { toast('SNI 格式不正确', 'error'); return; }
+  warpLabSni = v;
+  try { localStorage.setItem(WARP_SNI_STORAGE_KEY, v); } catch { /* ignore */ }
+  renderWarpSni();
+  closeModal('warpSniModal');
+  toast('SNI 已更新（仅本页）');
+}
+
+function resetWarpSni() {
+  warpLabSni = (warpLabState.defaults.sni || '').trim();
+  try { localStorage.removeItem(WARP_SNI_STORAGE_KEY); } catch { /* ignore */ }
+  const input = document.getElementById('warpSniInput');
+  if (input) input.value = warpLabSni;
+  renderWarpSni();
+  closeModal('warpSniModal');
+  toast('已恢复默认 SNI');
+}
+
+// ---- 选项与预估 ----
+function collectWarpScanOptions(selfcheck) {
+  const protocols = [];
+  if (selfcheck || document.getElementById('warpH2')?.checked) protocols.push('h2');
+  if (selfcheck || document.getElementById('warpH3')?.checked) protocols.push('h3');
+  if (!protocols.length) throw new Error('至少选择 H2 或 H3');
+  const ports = [...document.querySelectorAll('#warpPorts input[type="checkbox"]')]
+    .filter((el) => el.checked)
+    .map((el) => Number(el.dataset.warpPort))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!selfcheck && !ports.length) throw new Error('至少选择一个端口');
+  const sample = Math.max(1, Math.min(32, Number(document.getElementById('warpSample')?.value) || 8));
+  return { protocols, ports, samplePerSubnet: sample, selfcheck: !!selfcheck, sni: getWarpSni() };
+}
+
+function updateWarpScanEstimate() {
+  const el = document.getElementById('warpScanEstimate');
+  if (!el) return;
+  const h2 = !!document.getElementById('warpH2')?.checked;
+  const h3 = !!document.getElementById('warpH3')?.checked;
+  const ports = [...document.querySelectorAll('#warpPorts input[type="checkbox"]')].filter((x) => x.checked).length;
+  const sample = Math.max(1, Math.min(32, Number(document.getElementById('warpSample')?.value) || 8));
+  const total = (h3 ? 4 : 0) * ports + (h2 ? 2 * sample : 0) * ports;
+  const max = Number(warpLabState.defaults.maxCombos || 150);
+  if (total === 0) { el.textContent = ''; return; }
+  const worst = Math.ceil((total / 3) * 16);
+  el.textContent = `预计组合：${total} 组（并发 3；全部超时的最坏情况约 ${worst} 秒）`
+    + (total > max ? ` —— 超过上限 ${max}，请减少端口或采样数` : '');
+}
+
+function bindWarpScanInputs() {
+  ['warpH2', 'warpH3', 'warpSample'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', updateWarpScanEstimate);
+  });
+  document.querySelectorAll('#warpPorts input[type="checkbox"]').forEach((el) => {
+    el.addEventListener('change', updateWarpScanEstimate);
+  });
+}
+
+// ---- 任务窗口：真实进度 + 实时日志 + 取消 ----
+function showWarpScanTask(selfcheck) {
+  showProgress(selfcheck ? '🔍 正在自检端点…' : '🔍 正在发现并验证端点…', 30 * 60 * 1000, {
+    indeterminate: true,
+    status: '正在准备候选…',
+  });
+  const bar = document.getElementById('progressBar');
+  if (bar) { bar.classList.remove('task-indeterminate'); bar.style.width = '0%'; }
+  const log = document.getElementById('taskLog');
+  if (log) { log.style.display = ''; log.innerHTML = ''; }
+  const wrap = document.getElementById('taskCancelWrap');
+  if (wrap) wrap.style.display = '';
+  const cap = document.getElementById('progressCap');
+  if (cap) cap.textContent = '--:--';
+}
+
+function hideWarpScanControls() {
+  const wrap = document.getElementById('taskCancelWrap');
+  if (wrap) wrap.style.display = 'none';
+  const log = document.getElementById('taskLog');
+  if (log) log.style.display = 'none';
+}
+
+function setWarpTaskProgress(done, total) {
+  const bar = document.getElementById('progressBar');
+  if (!bar) return;
+  bar.classList.remove('task-indeterminate');
+  const pct = total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0;
+  bar.style.width = pct.toFixed(1) + '%';
+}
+
+function renderWarpTaskLog(results) {
+  const log = document.getElementById('taskLog');
+  if (!log) return;
+  const lines = (results || []).slice(-8).map((r) => {
+    const tag = r.status === 'alive' ? '✅' : r.status === 'failed' ? '❌' : '⚠️';
+    const detail = r.status === 'alive' && r.latency != null ? `${r.latency}ms` : (r.error || '');
+    return `${r.server}:${r.port} ${String(r.transport).toUpperCase()} ${tag} ${detail}`;
+  });
+  log.innerHTML = lines.map((l) => `<div>${escHtml(l)}</div>`).join('');
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateWarpScanTask(job) {
+  setWarpTaskProgress(job.processed, job.total);
+  updateProgress(`已测 ${job.processed}/${job.total} · 存活 ${job.alive} · 失败 ${job.failed} · 不确定 ${job.unknown}`);
+  renderWarpTaskLog(job.results);
+}
+
+async function startWarpScan(selfcheck) {
+  if (warpScanJobId) { toast('已有验证任务在运行', 'error'); return; }
+  let opts;
+  try {
+    opts = collectWarpScanOptions(selfcheck);
+  } catch (e) {
+    toast(e.message, 'error');
     return;
   }
-  if (empty) empty.style.display = 'none';
-  body.innerHTML = warpLabState.nodes.map((n) => `
-    <tr>
-      <td>${escHtml(n.name)}</td>
-      <td>${n.transport === 'h2' ? 'H2' : 'H3'}</td>
-      <td>${escHtml(n.server + ':' + n.port)}</td>
-      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(n.sni)}">${escHtml(n.sni)}</td>
-      <td>${n.createdAt ? new Date(n.createdAt).toLocaleString('zh-CN', { hour12: false }) : ''}</td>
-      <td><button type="button" class="btn btn-sm" onclick="copyWarpLabYaml('${escHtml(n.id)}')">复制 YAML</button></td>
-    </tr>`).join('');
+  const scanBtn = document.getElementById('warpScanBtn');
+  const selfBtn = document.getElementById('warpSelfcheckBtn');
+  if (scanBtn) scanBtn.disabled = true;
+  if (selfBtn) selfBtn.disabled = true;
+  showWarpScanTask(selfcheck);
+  try {
+    const res = await api('/warp-lab/scan', { method: 'POST', body: JSON.stringify(opts), timeout: 20000 });
+    const jobId = res && res.data && res.data.jobId;
+    if (!jobId) throw new Error('服务端未返回任务 ID');
+    warpScanJobId = jobId;
+    pollWarpScan(jobId, selfcheck);
+  } catch (e) {
+    finishTaskWindow('failed', renderTaskFailure(e), '❌ 未完成', selfcheck ? '自检未完成' : '端点验证未完成');
+    hideWarpScanControls();
+    if (scanBtn) scanBtn.disabled = false;
+    if (selfBtn) selfBtn.disabled = false;
+  }
+}
+
+async function pollWarpScan(jobId, selfcheck) {
+  let errors = 0;
+  while (warpScanJobId === jobId) {
+    let job = null;
+    try {
+      const res = await api(`/warp-lab/scan/${jobId}`, { timeout: 15000 });
+      job = (res && res.data) || null;
+      errors = 0;
+    } catch (e) {
+      errors++;
+      if (errors >= 5) {
+        finishTaskWindow('failed', renderTaskFailure(e), '❌ 未完成', selfcheck ? '自检未完成' : '端点验证未完成');
+        break;
+      }
+      await warpSleep(1200);
+      continue;
+    }
+    if (!job) break;
+    updateWarpScanTask(job);
+    if (job.state !== 'running') {
+      warpLabState.lastScan = job;
+      renderWarpScanResults(job);
+      const ok = job.state === 'success';
+      const cancelled = job.state === 'cancelled';
+      finishTaskWindow(
+        ok ? 'success' : 'failed',
+        renderWarpScanModalResult(job),
+        ok ? '✅ 已完成' : cancelled ? '已取消' : '❌ 未完成',
+        ok ? '✅ 端点验证完成' : cancelled ? '已取消' : '❌ 端点验证未完成'
+      );
+      hideWarpScanControls();
+      break;
+    }
+    await warpSleep(800);
+  }
+  warpScanJobId = null;
+  const scanBtn = document.getElementById('warpScanBtn');
+  const selfBtn = document.getElementById('warpSelfcheckBtn');
+  if (scanBtn) scanBtn.disabled = false;
+  if (selfBtn) selfBtn.disabled = false;
+}
+
+async function cancelWarpScan() {
+  const id = warpScanJobId;
+  if (!id) return;
+  const btn = document.getElementById('taskCancelBtn');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/warp-lab/scan/${id}/cancel`, { method: 'POST', timeout: 10000 });
+    updateProgress('正在取消…');
+  } catch (e) {
+    toast('取消失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderWarpScanModalResult(job) {
+  const rows = [
+    taskRow('候选组合', taskNum(job.total)),
+    taskRow('已测', taskNum(job.processed)),
+    taskRow('存活', taskNum(job.alive)),
+    taskRow('失败', taskNum(job.failed)),
+    taskRow('不确定', taskNum(job.unknown)),
+  ];
+  const ok = job.state === 'success';
+  const cancelled = job.state === 'cancelled';
+  let html = `<div class="task-result-title ${ok ? 'ok' : 'err'}">${ok ? '✅ 端点验证完成' : cancelled ? '已取消' : '❌ 端点验证未完成'}</div>`;
+  html += `<div class="task-result-grid">${rows.join('')}</div>`;
+  html += `<div class="task-result-note">验证从本机网络发起，只证明端点“活着、能传数据”，<b>不代表中国墙内可用</b>；墙内可达性由客户端实际连接时体现。</div>`;
+  if (job.error) html += `<div class="task-result-note">原因：${escHtml(job.error)}</div>`;
+  if (job.state === 'failed' && job.alive === 0 && job.unknown > 0) {
+    html += `<div class="task-result-note">全部为“不确定”通常意味着本机 UDP 出站受限或核心不可用，不代表端点已死。</div>`;
+  }
+  if (job.alive > 0) {
+    const alive = job.results
+      .filter((r) => r.status === 'alive')
+      .sort((a, b) => (a.latency ?? 1e9) - (b.latency ?? 1e9))
+      .slice(0, 10);
+    html += `<div class="task-result-sub">存活端点</div>`
+      + `<div class="task-result-list">`
+      + alive.map((r) => `${escHtml(r.server)}:${r.port} ${String(r.transport).toUpperCase()} · ${r.latency ?? '-'} ms`).join('<br>')
+      + `</div>`;
+    if (job.alive > alive.length) {
+      html += `<div class="task-result-note">仅显示前 ${alive.length} 个，完整列表见页面「验证结果」。</div>`;
+    } else {
+      html += `<div class="task-result-note">完整列表见页面「验证结果」，勾选后可生成节点。</div>`;
+    }
+  }
+  return html;
+}
+
+function renderWarpScanResults(job) {
+  const card = document.getElementById('warpScanCard');
+  const body = document.getElementById('warpScanBody');
+  const summary = document.getElementById('warpScanSummary');
+  if (!card || !body) return;
+  if (!job || !Array.isArray(job.results) || job.results.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  const rank = (s) => (s === 'alive' ? 0 : s === 'failed' ? 1 : 2);
+  const sorted = [...job.results].sort((a, b) => {
+    if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
+    return (a.latency ?? 1e9) - (b.latency ?? 1e9);
+  });
+  const when = job.finishedAt ? new Date(job.finishedAt).toLocaleString('zh-CN', { hour12: false }) : '';
+  if (summary) {
+    summary.textContent = `候选 ${job.total} · 存活 ${job.alive} · 失败 ${job.failed} · 不确定 ${job.unknown}${when ? ' · ' + when : ''}`;
+  }
+  body.innerHTML = sorted.map((r) => {
+    const status = r.status === 'alive'
+      ? '<span style="color:var(--ok);font-weight:600">存活</span>'
+      : r.status === 'failed'
+        ? '<span style="color:var(--red);font-weight:600">失败</span>'
+        : '<span style="color:var(--muted);font-weight:600">不确定</span>';
+    const alive = r.status === 'alive';
+    return `<tr data-server="${escHtml(r.server)}" data-port="${r.port}" data-transport="${r.transport}">
+      <td><input type="checkbox" class="warp-result-check" ${alive ? 'checked' : ''} ${alive ? '' : 'disabled'}></td>
+      <td>${escHtml(r.server)}</td>
+      <td>${r.transport === 'h2' ? 'H2' : 'H3'}</td>
+      <td>${r.port}</td>
+      <td>${status}</td>
+      <td>${r.latency != null ? r.latency + ' ms' : '—'}</td>
+    </tr>`;
+  }).join('');
+  const all = document.getElementById('warpResultAll');
+  if (all) all.checked = sorted.some((r) => r.status === 'alive');
+}
+
+function toggleWarpResultAll(el) {
+  document.querySelectorAll('#warpScanBody .warp-result-check:not(:disabled)').forEach((cb) => {
+    cb.checked = !!el.checked;
+  });
+}
+
+async function generateWarpLabFromSelection() {
+  const items = [...document.querySelectorAll('#warpScanBody tr')]
+    .map((tr) => ({ tr, cb: tr.querySelector('.warp-result-check') }))
+    .filter(({ cb }) => cb && cb.checked && !cb.disabled)
+    .map(({ tr }) => ({
+      server: tr.dataset.server,
+      port: Number(tr.dataset.port),
+      transport: tr.dataset.transport,
+    }));
+  if (!items.length) { toast('请先勾选至少一个已验证存活的端点', 'error'); return; }
+  const btn = document.getElementById('warpGenerateBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/warp-lab/generate', {
+      method: 'POST',
+      body: JSON.stringify({ items, sni: getWarpSni() }),
+    });
+    const d = (res && res.data) || {};
+    warpLabState.nodes = Array.isArray(d.nodes) ? d.nodes : [];
+    renderWarpLab();
+    toast(`已生成 ${warpLabState.nodes.length} 个节点（仅本页）`);
+  } catch (e) {
+    toast('生成失败：' + ((e && e.message) || '未知错误'), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function registerWarpLab() {
@@ -6157,36 +6570,12 @@ async function registerWarpLab() {
   }
 }
 
-async function generateWarpLabNodes() {
-  const btn = document.getElementById('warpGenerateBtn');
-  if (btn) btn.disabled = true;
-  try {
-    const endpoints = (document.getElementById('warpEndpoints')?.value || '')
-      .split(/\r?\n|,/).map((s) => s.trim()).filter(Boolean);
-    const sni = (document.getElementById('warpSni')?.value || '').trim();
-    const h2 = !!document.getElementById('warpH2')?.checked;
-    const h3 = !!document.getElementById('warpH3')?.checked;
-    if (!h2 && !h3) { toast('至少选择 H2 或 H3', 'error'); return; }
-    const res = await api('/warp-lab/generate', {
-      method: 'POST',
-      body: JSON.stringify({ endpoints, sni, h2, h3 }),
-    });
-    const d = (res && res.data) || {};
-    warpLabState.nodes = Array.isArray(d.nodes) ? d.nodes : [];
-    renderWarpLab();
-    toast(`已生成 ${warpLabState.nodes.length} 个节点（仅本页）`);
-  } catch (e) {
-    toast('生成失败：' + ((e && e.message) || '未知错误'), 'error');
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
 async function clearWarpLab() {
   if (!window.confirm('确定清除 WARP 实验数据（设备与已生成节点）？')) return;
   try {
     await api('/warp-lab/clear', { method: 'POST' });
     toast('WARP 实验数据已清除');
+    warpLabState.lastScan = null;
     await loadWarpLab();
   } catch (e) {
     toast('清除失败：' + ((e && e.message) || '未知错误'), 'error');

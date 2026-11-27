@@ -186,6 +186,52 @@ export function generateMasqueNodes(
   return nodes;
 }
 
+export interface WarpLabNodeItem {
+  server: string;
+  port: number;
+  transport: 'h2' | 'h3';
+}
+
+/**
+ * 按「已通过存活验证的端点」逐条生成节点（v2.50.4）。
+ * 与 generateMasqueNodes 的区别：每个端点只生成它实际验证通过的传输方式，
+ * 不会给一个只测了 H3 的端点再补一个 H2 节点。
+ */
+export function generateMasqueNodesFromItems(
+  account: WarpLabAccount,
+  items: WarpLabNodeItem[],
+  sni?: string
+): WarpLabNode[] {
+  const resolvedSni = String(sni ?? '').trim() || WARP_LAB_DEFAULT_SNI;
+  const counters = { h2: 0, h3: 0 };
+  const seen = new Set<string>();
+  const nodes: WarpLabNode[] = [];
+  const createdAt = Date.now();
+  for (const item of items) {
+    const transport: 'h2' | 'h3' = item.transport === 'h2' ? 'h2' : 'h3';
+    const server = String(item.server ?? '').trim();
+    if (!server) throw new Error('端点地址不能为空');
+    const port = validatePort(Number(item.port));
+    const id = `${transport}-${server}-${port}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    counters[transport]++;
+    const name = `WARP-${transport.toUpperCase()}-${String(counters[transport]).padStart(2, '0')}`;
+    nodes.push({
+      id,
+      name,
+      transport,
+      server,
+      port,
+      sni: resolvedSni,
+      yaml: buildMasqueYaml(account, { name, transport, server, port, sni: resolvedSni }),
+      createdAt,
+    });
+  }
+  if (nodes.length === 0) throw new Error('至少需要一个有效端点');
+  return nodes;
+}
+
 export function maskWarpLabAccount(account: WarpLabAccount): Record<string, unknown> {
   return {
     id: account.id ? `****${account.id.slice(-4)}` : '',

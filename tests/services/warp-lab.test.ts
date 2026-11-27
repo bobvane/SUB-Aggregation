@@ -14,6 +14,7 @@ import {
   buildMasqueYaml,
   clearWarpLab,
   generateMasqueNodes,
+  generateMasqueNodesFromItems,
   maskWarpLabAccount,
   normalizePeerKey,
   parseWarpEndpoint,
@@ -134,6 +135,35 @@ describe('MASQUE 节点生成', () => {
     });
     expect(yaml).toContain('type: masque');
     expect(yaml).not.toContain('network:');
+  });
+});
+
+describe('按已验证端点生成节点（v2.50.4）', () => {
+  it('每个端点只生成它验证通过的传输，名称按传输分别编号', () => {
+    const nodes = generateMasqueNodesFromItems(
+      account,
+      [
+        { server: '162.159.198.1', port: 443, transport: 'h3' },
+        { server: '162.159.198.2', port: 443, transport: 'h3' },
+        { server: '162.159.198.3', port: 443, transport: 'h2' },
+      ],
+      's.example'
+    );
+    expect(nodes.map((n) => n.name)).toEqual(['WARP-H3-01', 'WARP-H3-02', 'WARP-H2-01']);
+    expect(nodes[0].yaml).not.toContain('network: h2');
+    expect(nodes[2].yaml).toContain('network: h2');
+    expect(nodes[0].sni).toBe('s.example');
+  });
+
+  it('同端点同传输去重；非法端口抛错', () => {
+    const nodes = generateMasqueNodesFromItems(account, [
+      { server: '162.159.198.1', port: 443, transport: 'h3' },
+      { server: '162.159.198.1', port: 443, transport: 'h3' },
+    ]);
+    expect(nodes).toHaveLength(1);
+    expect(() =>
+      generateMasqueNodesFromItems(account, [{ server: '1.2.3.4', port: 0, transport: 'h3' }])
+    ).toThrow(/端口/);
   });
 });
 

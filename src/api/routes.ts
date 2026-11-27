@@ -57,13 +57,29 @@ import {
   WARP_LAB_DEFAULT_SNI,
   clearWarpLab,
   generateMasqueNodes,
+  generateMasqueNodesFromItems,
   maskWarpLabAccount,
   readWarpLabAccount,
   readWarpLabNodes,
   registerMasqueDevice,
   saveWarpLabAccount,
   saveWarpLabNodes,
+  type WarpLabNode,
 } from '@/services/warp-lab.service';
+import {
+  WARP_SCAN_DEFAULT_PORTS,
+  WARP_SCAN_DEFAULT_SAMPLE,
+  WARP_SCAN_H2_SUBNETS,
+  WARP_SCAN_H3_IPS,
+  WARP_SCAN_LAST_KEY,
+  WARP_SCAN_MAX_COMBOS,
+  WARP_SCAN_PORTS,
+  cancelWarpScanJob,
+  getWarpScanJob,
+  startWarpScan,
+  type WarpScanJobPublic,
+  type WarpTransport,
+} from '@/services/warp-scan.service';
 
 /**
  * 请求是否走 https。
@@ -1099,13 +1115,30 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/warp-lab/status', requireAuth(auth), async (c) => {
     const account = await readWarpLabAccount(storage);
     const nodes = await readWarpLabNodes(storage);
+    let lastScan: WarpScanJobPublic | null = null;
+    try {
+      const raw = await storage.get(WARP_SCAN_LAST_KEY);
+      if (raw) lastScan = JSON.parse(raw) as WarpScanJobPublic;
+    } catch {
+      lastScan = null;
+    }
     return c.json({
       success: true,
       data: {
         registered: !!account,
         account: account ? maskWarpLabAccount(account) : null,
         nodes,
-        defaults: { endpoints: WARP_LAB_DEFAULT_ENDPOINTS, sni: WARP_LAB_DEFAULT_SNI },
+        defaults: {
+          endpoints: WARP_LAB_DEFAULT_ENDPOINTS,
+          sni: WARP_LAB_DEFAULT_SNI,
+          ports: WARP_SCAN_PORTS,
+          defaultPorts: WARP_SCAN_DEFAULT_PORTS,
+          h3Ips: WARP_SCAN_H3_IPS,
+          h2Subnets: WARP_SCAN_H2_SUBNETS,
+          defaultSample: WARP_SCAN_DEFAULT_SAMPLE,
+          maxCombos: WARP_SCAN_MAX_COMBOS,
+        },
+        lastScan,
       },
     });
   });
@@ -1121,20 +1154,121 @@ export function createApp(deps: AppDeps): Hono {
     }
   });
 
+  // 端点发现 + 存活验证（任务式：前端轮询进度，可取消）
+  app.post('/api/warp-lab/scan', requireAuth(auth), async (c) => {
+    const account = await readWarpLabAccount(storage);
+    if (!account) {
+      return c.json({ success: false, error: { code: 'WARP_NOT_REGISTERED', message: '请先注册 WARP MASQUE 设备' } }, 400);
+    }
+    const body = await readBody<{
+      protocols?: unknown;
+      ports?: unknown;
+      samplePerSubnet?: unknown;
+      selfcheck?: unknown;
+      sni?: unknown;
+    }>(c);
+    const protocols = Array.isArray(body.protocols)
+      ? body.protocols.filter((x): x is WarpTransport => x === 'h2' || x === 'h3')
+      : undefined;
+    const ports = Array.isArray(body.ports)
+      ? body.ports
+          .map((x) => Number(x))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535)
+      : undefined;
+    try {
+      const job = startWarpScan(
+        account,
+        {
+          protocols,
+          ports,
+          samplePerSubnet:
+            typeof body.samplePerSubnet === 'number' ? body.samplePerSubnet : undefined,
+          selfcheck: body.selfcheck === true,
+          sni: typeof body.sni === 'string' ? body.sni : undefined,
+        },
+        {
+          onFinish: async (finished) => {
+            try {
+              await storage.put(WARP_SCAN_LAST_KEY, JSON.stringify(finished));
+            } catch {
+              // 持久化失败不影响任务结果
+            }
+          },
+        }
+      );
+      return c.json({
+        success: true,
+        data: { jobId: job.id, total: job.total, mode: job.mode },
+      });
+    } catch (e) {
+      return c.json(
+        { success: false, error: { code: 'WARP_SCAN_FAILED', message: (e as Error).message } },
+        400
+      );
+    }
+  });
+
+  app.get('/api/warp-lab/scan/:jobId', requireAuth(auth), async (c) => {
+    const job = getWarpScanJob(c.req.param('jobId') ?? '');
+    if (!job) {
+      return c.json(
+        { success: false, error: { code: 'WARP_SCAN_NOT_FOUND', message: '任务不存在或已过期' } },
+        404
+      );
+    }
+    return c.json({ success: true, data: job });
+  });
+
+  app.post('/api/warp-lab/scan/:jobId/cancel', requireAuth(auth), async (c) => {
+    const ok = cancelWarpScanJob(c.req.param('jobId') ?? '');
+    if (!ok) {
+      return c.json(
+        { success: false, error: { code: 'WARP_SCAN_NOT_RUNNING', message: '任务不存在或已结束' } },
+        404
+      );
+    }
+    return c.json({ success: true, data: { cancelled: true } });
+  });
+
   app.post('/api/warp-lab/generate', requireAuth(auth), async (c) => {
     const account = await readWarpLabAccount(storage);
     if (!account) {
       return c.json({ success: false, error: { code: 'WARP_NOT_REGISTERED', message: '请先注册 WARP MASQUE 设备' } }, 400);
     }
-    const body = await readBody<{ endpoints?: unknown; sni?: unknown; h2?: unknown; h3?: unknown }>(c);
-    const endpoints = Array.isArray(body.endpoints)
-      ? body.endpoints.filter((x): x is string => typeof x === 'string')
-      : undefined;
+    const body = await readBody<{
+      endpoints?: unknown;
+      items?: unknown;
+      sni?: unknown;
+      h2?: unknown;
+      h3?: unknown;
+    }>(c);
     const sni = typeof body.sni === 'string' ? body.sni : undefined;
-    const h2 = body.h2 !== false;
-    const h3 = body.h3 !== false;
     try {
-      const nodes = generateMasqueNodes(account, { endpoints, sni, h2, h3 });
+      let nodes: WarpLabNode[];
+      if (Array.isArray(body.items)) {
+        const rawItems = body.items as unknown[];
+        const items = rawItems
+          .filter(
+            (x): x is Record<string, unknown> =>
+              !!x && typeof x === 'object' && ((x as Record<string, unknown>).transport === 'h2' || (x as Record<string, unknown>).transport === 'h3')
+          )
+          .map((x) => ({
+            server: typeof x.server === 'string' ? x.server : '',
+            port: Number(x.port),
+            transport: x.transport === 'h2' ? ('h2' as const) : ('h3' as const),
+          }))
+          .filter((x) => x.server);
+        if (items.length === 0) throw new Error('至少选择一个已验证的端点');
+        if (items.length > 60) throw new Error('一次最多生成 60 个节点');
+        nodes = generateMasqueNodesFromItems(account, items, sni);
+      } else {
+        const endpoints = Array.isArray(body.endpoints)
+          ? body.endpoints.filter((x): x is string => typeof x === 'string')
+          : undefined;
+        const h2 = body.h2 !== false;
+        const h3 = body.h3 !== false;
+        nodes = generateMasqueNodes(account, { endpoints, sni, h2, h3 });
+      }
       await saveWarpLabNodes(storage, nodes);
       return c.json({ success: true, data: { nodes } });
     } catch (e) {
@@ -1144,6 +1278,11 @@ export function createApp(deps: AppDeps): Hono {
 
   app.post('/api/warp-lab/clear', requireAuth(auth), async (c) => {
     await clearWarpLab(storage);
+    try {
+      await storage.delete(WARP_SCAN_LAST_KEY);
+    } catch {
+      // 忽略：键不存在或存储不支持删除
+    }
     return c.json({ success: true, data: { cleared: true } });
   });
 
