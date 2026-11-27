@@ -326,6 +326,21 @@ export function nodeToMihomoProxy(node: Node): Record<string, unknown> {
       if (node.minIdleSession !== undefined) base['min-idle-session'] = node.minIdleSession;
       if (node.clientMetadata) base['client-metadata'] = node.clientMetadata;
       break;
+
+    case 'masque':
+      // v2.50.5：让 MASQUE 节点能无损写入 mihomo 配置。
+      // H2 用 `network: h2`（TCP+TLS/HTTP2）；H3 省略 network（QUIC/HTTP3）。
+      if (node.sni) base.sni = node.sni;
+      if (node.masquePrivateKey) base['private-key'] = node.masquePrivateKey;
+      if (node.masquePublicKey) base['public-key'] = node.masquePublicKey;
+      if (node.masqueIp) base.ip = node.masqueIp;
+      if (node.masqueIpv6) base.ipv6 = node.masqueIpv6;
+      if (node.masqueNetwork === 'h2') base.network = 'h2';
+      base.udp = node.masqueUdp ?? true;
+      if (node.masqueCongestionController) base['congestion-controller'] = node.masqueCongestionController;
+      if (node.masqueIpStack) base['ip-stack'] = { mode: node.masqueIpStack };
+      if (node.masqueHandshakeTimeout !== undefined) base['handshake-timeout'] = node.masqueHandshakeTimeout;
+      break;
   }
 
   return base;
@@ -375,6 +390,12 @@ async function groupNodesByGeo(
   const ungrouped: string[] = [];
 
   for (const node of nodes) {
+    // v2.50.5：masque 的 server 是 Cloudflare anycast 入口，不是出口；
+    // 用 server IP 查归属地会得到错误国家。国家码方案待定，先归入「其他」。
+    if (node.protocol === 'masque') {
+      ungrouped.push(node.name);
+      continue;
+    }
     // 直接使用外部 resolver 查询单个 IP
     const geoName = ipGeoResolver ? await ipGeoResolver(node.server) : null;
     if (geoName) {

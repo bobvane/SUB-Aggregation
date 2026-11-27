@@ -26,6 +26,7 @@ import type { FetchFn } from '@/engine/http-client';
 const PROTOCOL_LABELS: Record<Node['protocol'], string> = {
   vless: 'VLESS', vmess: 'VMESS', trojan: 'Trojan', ss: 'Shadowsocks', ssr: 'ShadowsocksR',
   hysteria2: 'Hysteria2', tuic: 'TUIC', wireguard: 'WireGuard', anytls: 'AnyTLS',
+  masque: 'MASQUE',
 };
 
 /** 地理显示名（"🇭🇰 香港"，即 ip-geo 缓存存的值）→ ISO 码（逆向查表） */
@@ -54,6 +55,13 @@ async function smartRename(
   // 1) 解析每个节点的国家（同一 server 只查一次）
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
+    // v2.50.5：masque 的 server 是 Cloudflare anycast 入口，不是出口。
+    // 用入口 IP 查国家会得到错误结果；真正的出口国家需要连上隧道后读取，
+    // 方案待定，因此这里先不写 country（节点名降级为 MASQUE-01）。
+    if (n.protocol === 'masque') {
+      countries[i] = '';
+      continue;
+    }
     if (!geoCache.has(n.server)) {
       geoCache.set(n.server, ipGeoResolver ? await ipGeoResolver(n.server) : null);
     }

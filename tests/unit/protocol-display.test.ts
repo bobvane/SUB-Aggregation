@@ -39,6 +39,19 @@ describe('displayProtocol - 非 VLESS 全名', () => {
     expect(displayProtocol(node('wireguard'))).toBe('WireGuard');
     expect(displayProtocol(node('anytls'))).toBe('AnyTLS');
   });
+  it('should map MASQUE / MASQUE H2 / MASQUE H3', () => {
+    expect(displayProtocol(node('masque'))).toBe('MASQUE');
+    expect(
+      displayProtocol(
+        createNode({ name: 't', protocol: 'masque', server: 'x.com', port: 443, masqueNetwork: 'h2' })
+      )
+    ).toBe('MASQUE H2');
+    expect(
+      displayProtocol(
+        createNode({ name: 't', protocol: 'masque', server: 'x.com', port: 443, masqueNetwork: 'h3' })
+      )
+    ).toBe('MASQUE H3');
+  });
   it('should pass unknown protocol through', () => {
     expect(displayProtocol(node('unknown'))).toBe('unknown');
   });
@@ -108,6 +121,7 @@ describe('protocolTagClass - 12 色方案', () => {
     expect(protocolTagClass('tuic')).toBe('tag-tuic');
     expect(protocolTagClass('wireguard')).toBe('tag-wireguard');
     expect(protocolTagClass('anytls')).toBe('tag-anytls');
+    expect(protocolTagClass('masque')).toBe('tag-masque');
   });
   it('未知协议归 tag-other', () => {
     expect(protocolTagClass('bogus')).toBe('tag-other');

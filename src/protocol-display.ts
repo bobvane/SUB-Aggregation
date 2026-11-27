@@ -35,6 +35,10 @@ export function displayProtocol(node: Node): string {
       return 'WireGuard';
     case 'anytls':
       return 'AnyTLS';
+    case 'masque':
+      if (node.masqueNetwork === 'h2') return 'MASQUE H2';
+      if (node.masqueNetwork === 'h3') return 'MASQUE H3';
+      return 'MASQUE';
     case 'vless':
       return displayVlessProtocol(node);
     default:
@@ -71,6 +75,6 @@ function displayVlessProtocol(node: Node): string {
  * 协议 → 标签 class（VLESS 全子类型共享 tag-vless 一色，其余协议各一色）
  */
 export function protocolTagClass(protocol: string): string {
-  const known = ['vless', 'vmess', 'trojan', 'ss', 'ssr', 'hysteria2', 'tuic', 'wireguard', 'anytls'];
+  const known = ['vless', 'vmess', 'trojan', 'ss', 'ssr', 'hysteria2', 'tuic', 'wireguard', 'anytls', 'masque'];
   return `tag-${known.includes(protocol) ? protocol : 'other'}`;
 }

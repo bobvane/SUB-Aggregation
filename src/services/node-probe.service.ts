@@ -548,6 +548,16 @@ function nodeConnectivityHash(node: Node): string {
     ssrProtocol: node.ssrProtocol,
     ssrProtocolParam: node.ssrProtocolParam,
     ssrObfsParam: node.ssrObfsParam,
+    // v2.50.5：MASQUE 的密钥/IP/传输层/SNI 都会影响连通性，变更后必须重新测速
+    masquePrivateKey: node.masquePrivateKey,
+    masquePublicKey: node.masquePublicKey,
+    masqueIp: node.masqueIp,
+    masqueIpv6: node.masqueIpv6,
+    masqueNetwork: node.masqueNetwork,
+    masqueUdp: node.masqueUdp,
+    masqueCongestionController: node.masqueCongestionController,
+    masqueIpStack: node.masqueIpStack,
+    masqueHandshakeTimeout: node.masqueHandshakeTimeout,
     alpn: node.alpn,
     fingerprint: node.fingerprint,
   };

@@ -23,6 +23,10 @@ interface ClashProxy {
   'skip-cert-verify'?: boolean;
   'client-fingerprint'?: string;
   network?: string;
+  /** MASQUE 专用 */
+  udp?: boolean;
+  'ip-stack'?: { mode?: string } | string;
+  'handshake-timeout'?: number;
   'ws-opts'?: {
     path?: string;
     headers?: Record<string, string>;
@@ -109,7 +113,20 @@ export function parseClashYaml(content: string): { nodes: Node[]; errors: { line
       return { nodes, errors };
     }
 
-    const supportedTypes = ['vless', 'vmess', 'trojan', 'ss'];
+    // v2.50.5：与下方 clashProxyToNode 的 switch 对齐。
+    // 此前白名单只有 4 种，导致 Clash YAML 里的 hysteria2/tuic/wireguard/anytls
+    // 在进入 switch 之前就被判为 UNSUPPORTED_TYPE；本次一并修正，并加入 masque。
+    const supportedTypes = [
+      'vless',
+      'vmess',
+      'trojan',
+      'ss',
+      'hysteria2',
+      'tuic',
+      'wireguard',
+      'anytls',
+      'masque',
+    ];
     let lineNum = 1;
 
     for (const proxy of parsed.proxies) {
@@ -334,6 +351,32 @@ function clashProxyToNode(proxy: ClashProxy): Node | null {
         });
       }
 
+      case 'masque': {
+        // MASQUE（Cloudflare WARP / CONNECT-IP）：密钥是必需的，缺任一都无法建链。
+        const masquePrivateKey = proxy['private-key'];
+        const masquePublicKey = proxy['public-key'];
+        if (!masquePrivateKey || !masquePublicKey) return null;
+        return createNode({
+          name,
+          protocol: 'masque',
+          server,
+          port: serverPort,
+          tls: true,
+          // mihomo 用 `network: h2` 表示 TCP+HTTP/2；缺省即 QUIC/HTTP3。
+          sni: tlsName,
+          masquePrivateKey,
+          masquePublicKey,
+          masqueIp: proxy.ip,
+          masqueIpv6: proxy.ipv6,
+          masqueNetwork: proxy.network === 'h2' ? 'h2' : 'h3',
+          masqueUdp: proxy.udp ?? true,
+          masqueCongestionController: proxy['congestion-controller'],
+          masqueIpStack: parseIpStack(proxy['ip-stack']),
+          masqueHandshakeTimeout: proxy['handshake-timeout'],
+          metadata: { source: 'clash', originalName: name, tags: [] },
+        });
+      }
+
       default:
         return null;
     }
@@ -354,6 +397,14 @@ function parseAllowedIps(val: string[] | string | undefined): string | undefined
   if (!val) return undefined;
   if (Array.isArray(val)) return val.join(',') ;
   return val;
+}
+
+// Helper: parse MASQUE ip-stack（mihomo 写成 { mode: gvisor }，也兼容字符串）
+function parseIpStack(val: { mode?: string } | string | undefined): string | undefined {
+  if (!val) return undefined;
+  if (typeof val === 'string') return val.trim() || undefined;
+  const mode = typeof val.mode === 'string' ? val.mode.trim() : '';
+  return mode || undefined;
 }
 
 // Helper: parse reserved from string or array

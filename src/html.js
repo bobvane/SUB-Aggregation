@@ -200,12 +200,14 @@ tbody tr:hover { background: var(--accent-soft); }
 .tag-tuic { background: #fff8e1; color: #b45309; }
 .tag-wireguard { background: #e0e7ff; color: #4338ca; }
 .tag-anytls { background: #fce7f3; color: #be185d; }
+.tag-masque { background: #e0f2fe; color: #0369a1; }
 .tag-other { background: #f1f5f9; color: #475569; }
 [data-theme="dark"] .tag-ssr { background: rgba(194,37,92,0.2); color: #ff7aa2; }
 [data-theme="dark"] .tag-hysteria2 { background: rgba(8,145,178,0.2); color: #67e8f9; }
 [data-theme="dark"] .tag-tuic { background: rgba(180,83,9,0.2); color: #fbbf24; }
 [data-theme="dark"] .tag-wireguard { background: rgba(67,56,202,0.2); color: #a5b4fc; }
 [data-theme="dark"] .tag-anytls { background: rgba(190,24,93,0.2); color: #f9a8d4; }
+[data-theme="dark"] .tag-masque { background: rgba(14,165,233,0.2); color: #7dd3fc; }
 [data-theme="dark"] .tag-other { background: rgba(71,85,105,0.25); color: #94a3b8; }
 /* ===== Status ===== */
 .status-active { color: var(--green); }
@@ -566,10 +568,11 @@ tbody tr:hover { background: var(--surface2); }
 .tag-tuic { background: rgba(251,191,36,.12); color: var(--warn); border-color: rgba(251,191,36,.22); }
 .tag-wireguard { background: rgba(99,102,241,.12); color: var(--accent); border-color: rgba(99,102,241,.22); }
 .tag-anytls { background: rgba(192,132,252,.12); color: var(--violet); border-color: rgba(192,132,252,.22); }
+.tag-masque { background: rgba(14,165,233,.12); color: var(--accent2); border-color: rgba(14,165,233,.22); }
 .tag-other { background: var(--surface2); color: var(--muted); border-color: var(--line); }
 [data-theme="dark"] .tag-vmess, [data-theme="dark"] .tag-vless, [data-theme="dark"] .tag-trojan,
 [data-theme="dark"] .tag-ss, [data-theme="dark"] .tag-ssr, [data-theme="dark"] .tag-hysteria2,
-[data-theme="dark"] .tag-tuic, [data-theme="dark"] .tag-wireguard, [data-theme="dark"] .tag-anytls { color: inherit; }
+[data-theme="dark"] .tag-tuic, [data-theme="dark"] .tag-wireguard, [data-theme="dark"] .tag-anytls, [data-theme="dark"] .tag-masque { color: inherit; }
 [data-theme="dark"] .tag-vmess { color: var(--accent); }
 [data-theme="dark"] .tag-vless,[data-theme="dark"] .tag-hysteria2 { color: var(--accent2); }
 [data-theme="dark"] .tag-trojan,[data-theme="dark"] .tag-tuic { color: var(--warn); }
@@ -2367,7 +2370,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
         <option value="all">所有状态</option><option value="alive">存活</option><option value="dead">不通</option><option value="dropped">已抛弃</option><option value="country">地区未启用</option><option value="unprobed">未探测</option>
       </select>
       <select id="nodeProtocolFilter" class="field-auto" onchange="filterNodes()" aria-label="按协议筛选">
-        <option value="all">所有协议</option><option value="vmess">VMess</option><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="ss">Shadowsocks</option><option value="ssr">ShadowsocksR</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="wireguard">WireGuard</option><option value="anytls">AnyTLS</option><option value="other">其他</option>
+        <option value="all">所有协议</option><option value="vmess">VMess</option><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="ss">Shadowsocks</option><option value="ssr">ShadowsocksR</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="wireguard">WireGuard</option><option value="anytls">AnyTLS</option><option value="masque">MASQUE</option><option value="other">其他</option>
       </select>
       <button type="button" class="btn btn-sm" id="btnCountryGroups" onclick="openCountryGroups()" title="选择长期保留的国家组；未勾选地区默认不进入输出配置（锁定节点除外）">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/></svg>
@@ -4136,8 +4139,8 @@ function loadRules() {
 }
 
 // ============ Dashboard ============
-const DASH_PROTO_COLORS = { vless:'#22d3ee', vmess:'#818cf8', trojan:'#fbbf24', ss:'#c084fc', shadowsocks:'#c084fc', ssr:'#fb7185', hysteria2:'#22d3ee', tuic:'#fbbf24', wireguard:'#818cf8', anytls:'#c084fc' };
-const DASH_PROTO_LABELS = { vless:'VLESS', vmess:'VMess', trojan:'Trojan', ss:'SS', shadowsocks:'SS', ssr:'SSR', hysteria2:'Hysteria2', tuic:'TUIC', wireguard:'WireGuard', anytls:'AnyTLS' };
+const DASH_PROTO_COLORS = { vless:'#22d3ee', vmess:'#818cf8', trojan:'#fbbf24', ss:'#c084fc', shadowsocks:'#c084fc', ssr:'#fb7185', hysteria2:'#22d3ee', tuic:'#fbbf24', wireguard:'#818cf8', anytls:'#c084fc', masque:'#0ea5e9' };
+const DASH_PROTO_LABELS = { vless:'VLESS', vmess:'VMess', trojan:'Trojan', ss:'SS', shadowsocks:'SS', ssr:'SSR', hysteria2:'Hysteria2', tuic:'TUIC', wireguard:'WireGuard', anytls:'AnyTLS', masque:'MASQUE' };
 const DASH_BIN_LABELS = ['<50', '50-100', '100-200', '200-500', '500-1k', '>1k'];
 const DASH_BIN_COLORS = ['#34d399', '#4ade80', '#a3e635', '#fbbf24', '#fb923c', '#fb7185'];
 
@@ -4837,6 +4840,12 @@ function displayProtocol(n) {
   if (p === 'tuic') return 'TUIC';
   if (p === 'wireguard') return 'WireGuard';
   if (p === 'anytls') return 'AnyTLS';
+  if (p === 'masque') {
+    const net = typeof n === 'string' ? '' : n.masqueNetwork;
+    if (net === 'h2') return 'MASQUE H2';
+    if (net === 'h3') return 'MASQUE H3';
+    return 'MASQUE';
+  }
   if (p === 'vless') {
     const link = parseVlessLink(n);
     const t = link.type || (n.transport && n.transport.type) || 'tcp';
@@ -4858,7 +4867,7 @@ function displayProtocol(n) {
 }
 // VLESS 全子类型共享 tag-vless 一色，其余协议各一色
 function protocolTagClass(protocol) {
-  const known = ['vless', 'vmess', 'trojan', 'ss', 'ssr', 'hysteria2', 'tuic', 'wireguard', 'anytls'];
+  const known = ['vless', 'vmess', 'trojan', 'ss', 'ssr', 'hysteria2', 'tuic', 'wireguard', 'anytls', 'masque'];
   return 'tag-' + (known.indexOf(protocol) >= 0 ? protocol : 'other');
 }
 
@@ -5094,7 +5103,7 @@ function renderNodes() {
   if (search) filtered = filtered.filter(n => \`\${n.name || ''} \${n.server || ''} \${n.protocol || ''}\`.toLocaleLowerCase().includes(search));
   if (protocolFilter !== 'all') {
     filtered = filtered.filter(n => protocolFilter === 'other'
-      ? !['vmess','vless','trojan','ss','shadowsocks','ssr','hysteria2','tuic','wireguard','anytls'].includes(String(n.protocol || '').toLowerCase())
+      ? !['vmess','vless','trojan','ss','shadowsocks','ssr','hysteria2','tuic','wireguard','anytls','masque'].includes(String(n.protocol || '').toLowerCase())
       : (protocolFilter === 'ss' ? ['ss','shadowsocks'].includes(String(n.protocol || '').toLowerCase()) : String(n.protocol || '').toLowerCase() === protocolFilter));
   }
   if (healthFilter === 'alive') filtered = filtered.filter(n => n.healthStatus === 'alive');

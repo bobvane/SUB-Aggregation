@@ -535,6 +535,8 @@ export function createApp(deps: AppDeps): Hono {
       return {
         name: n.name,
         protocol: n.protocol,
+        // v2.50.5：MASQUE 的 h2/h3 只影响展示与标识；没有该字段时为 null
+        masqueNetwork: n.masqueNetwork ?? null,
         server: n.server,
         port: n.port,
         tls: n.tls ?? false,

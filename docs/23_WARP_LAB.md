@@ -91,3 +91,17 @@
 4. `src/services/warp-scan.service.ts`。
 5. `tests/services/warp-lab.test.ts`、`tests/services/warp-scan.test.ts`。
 6. 运行 `npm run build:html`，删除残留的 `warp_lab:*` 键（或先在页面点“清除”）。
+
+## 8. 节点列表并入准备（v2.50.5）
+
+本页仍保持隔离（不写 `nodes:*`）。但节点列表/输出链路已经为 masque 做好框架准备：
+
+- **模型**：`NodeProtocol` 增加 `masque`；新增 `masquePrivateKey / masquePublicKey / masqueIp / masqueIpv6 / masqueNetwork / masqueUdp / masqueCongestionController / masqueIpStack / masqueHandshakeTimeout`。
+- **解析**：Clash YAML 支持 `type: masque`（H2/H3）；同时修正白名单只认 4 种协议、导致 hysteria2/tuic/wireguard/anytls 的 Clash YAML 被误杀的问题。
+- **指纹**：masque 追加 `network`（h2/h3）与 SNI，避免同一端点 H2/H3 在入库去重时互相覆盖。
+- **mihomo 生成**：`nodeToMihomoProxy` 输出完整 masque 字段；核心测速沿用同一映射，自动可用。
+- **其他输出**：sing-box / v2ray 不支持 masque，仍按“客户端不认识就跳过”处理，不额外提示。
+- **国家码**：**尚未处理**。masque 的 `server` 是 Cloudflare anycast 入口，不是出口；当前不做 IP 归属地查询，节点归入「其他」，名字降级为 `MASQUE-xx`。出口国家方案待定。
+- **UI**：协议标签、筛选、仪表盘识别 MASQUE（H2/H3）。
+
+后续真正并入时，只需把 `WarpLabNode + account` 转成 `Node` 并写入 `nodes:*`（产品决策），不需要再改模型/解析/生成器。

@@ -12,9 +12,13 @@ export type NodeProtocol =
   | 'hysteria2'
   | 'tuic'
   | 'wireguard'
-  | 'anytls';
+  | 'anytls'
+  | 'masque';
 
 export type TransportType = 'tcp' | 'ws' | 'grpc' | 'h2' | 'xhttp';
+
+/** MASQUE 传输：h2 = TCP + HTTP/2；h3 = QUIC + HTTP/3 */
+export type MasqueNetwork = 'h2' | 'h3';
 
 export interface Transport {
   type: TransportType;
@@ -113,6 +117,25 @@ export interface Node {
   minIdleSession?: number;
   /** AnyTLS client-metadata */
   clientMetadata?: string;
+  /** MASQUE 专用字段（Cloudflare WARP / CONNECT-IP） */
+  /** 客户端私钥（base64 DER SEC1） */
+  masquePrivateKey?: string;
+  /** 服务端公钥（base64 DER SPKI） */
+  masquePublicKey?: string;
+  /** 隧道内本地 IPv4 */
+  masqueIp?: string;
+  /** 隧道内本地 IPv6 */
+  masqueIpv6?: string;
+  /** h2 = TCP + HTTP/2；h3 = QUIC + HTTP/3 */
+  masqueNetwork?: MasqueNetwork;
+  /** 是否启用 UDP（默认 true） */
+  masqueUdp?: boolean;
+  /** 拥塞控制（常见 bbr） */
+  masqueCongestionController?: string;
+  /** 用户态网络栈（常见 gvisor） */
+  masqueIpStack?: string;
+  /** 握手超时（秒） */
+  masqueHandshakeTimeout?: number;
   /** ShadowsocksR 专用字段 */
   /** SSR 协议方式 (origin / auth_aes128_md5 等) */
   ssrProtocol?: string;
@@ -182,6 +205,15 @@ export function createNode(partial: Partial<Node> & { name: string }): Node {
     idleSessionTimeout: partial.idleSessionTimeout,
     minIdleSession: partial.minIdleSession,
     clientMetadata: partial.clientMetadata,
+    masquePrivateKey: partial.masquePrivateKey,
+    masquePublicKey: partial.masquePublicKey,
+    masqueIp: partial.masqueIp,
+    masqueIpv6: partial.masqueIpv6,
+    masqueNetwork: partial.masqueNetwork,
+    masqueUdp: partial.masqueUdp,
+    masqueCongestionController: partial.masqueCongestionController,
+    masqueIpStack: partial.masqueIpStack,
+    masqueHandshakeTimeout: partial.masqueHandshakeTimeout,
     ssrProtocol: partial.ssrProtocol,
     ssrProtocolParam: partial.ssrProtocolParam,
     ssrObfsParam: partial.ssrObfsParam,
@@ -215,12 +247,24 @@ export function createNode(partial: Partial<Node> & { name: string }): Node {
  * VLESS TCP（含 Reality/XTLS）与 VLESS XHTTP 节点，二者仅传输层不同。
  * 如果指纹只到 protocol，它们会被当成同一节点，导致 XHTTP 节点从列表和配置中消失。
  *
- * 本次只给 xhttp 追加后缀，保持现有 TCP/WS/gRPC 节点指纹不变，
- * 避免打断已存在的 locked_nodes / disabled_nodes / health:* 数据。
+ * MASQUE（v2.50.5）额外区分 `network`（h2/h3）与 SNI：
+ * 同一 Cloudflare 端点可以同时生成 H2 与 H3，二者端口相同、协议相同，
+ * 若不加区分会在入库去重时互相覆盖；不同 SNI 也是不同的握手行为。
+ *
+ * xhttp 后缀保持原样，避免打断已存在的 locked_nodes / disabled_nodes / health:* 数据；
+ * masque 是新增协议，不存在历史数据兼容问题。
  */
 export function nodeFingerprint(
-  node: Pick<Node, 'server' | 'port' | 'protocol' | 'transport'>
+  node: Pick<
+    Node,
+    'server' | 'port' | 'protocol' | 'transport' | 'sni' | 'masqueNetwork'
+  >
 ): string {
   const base = `${node.server}:${node.port}:${node.protocol}`.toLowerCase();
+  if (node.protocol === 'masque') {
+    const network = node.masqueNetwork ?? 'h3';
+    const sni = (node.sni ?? '').toLowerCase();
+    return `${base}:${network}${sni ? `:${sni}` : ''}`;
+  }
   return node.transport?.type === 'xhttp' ? `${base}:xhttp` : base;
 }

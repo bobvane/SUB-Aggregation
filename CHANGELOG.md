@@ -1,5 +1,17 @@
 # 更新日志
 
+## v2.50.5 — 2026-11-27
+
+为 MASQUE 节点并入节点列表做准备（不改变 WARP 实验页隔离）。
+
+- **模型**：`NodeProtocol` 增加 `masque`，新增 masque 专用字段（密钥、隧道 IP、h2/h3、UDP、拥塞控制、ip-stack、握手超时）。
+- **解析**：Clash YAML 支持 `type: masque`（H2/H3）；同时修正白名单只有 4 种协议、导致 hysteria2/tuic/wireguard/anytls 的 Clash YAML 被误杀的问题。
+- **指纹**：masque 追加 `network`（h2/h3）与 SNI，避免同一 Cloudflare 端点的 H2/H3 在入库去重时互相覆盖。
+- **生成**：`nodeToMihomoProxy` 输出完整 masque 字段；核心测速沿用同一映射，自动可用。
+- **国家码**：暂不处理（`server` 是 anycast 入口，不能代表出口）；masque 先归入「其他」，名字降级为 `MASQUE-xx`，等出口国家方案确定后再补。
+- **UI**：协议标签、筛选、仪表盘识别 MASQUE H2 / H3。
+- **其他输出**：sing-box / v2ray 不支持 masque，按“客户端不认识就跳过”处理，不额外提示。
+
 ## v2.50.4 — 2026-11-27
 
 WARP 实验页：端点自动发现 + 存活验证 + SNI 弹窗。
