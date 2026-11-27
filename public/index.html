@@ -1882,6 +1882,8 @@ tbody tr:hover { background: var(--surface2); }
 
 .st-field { display: flex; flex-direction: column; gap: 6px; }
 .st-label { display: block; font-size: 13px; font-weight: 500; color: color-mix(in srgb, var(--fg) 90%, transparent); }
+/* WARP 实验页：协议/端口选项（按内容自适应宽度，不折行） */
+.warp-opt { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; flex: 0 0 auto; font-size: 13px; line-height: 1.5; padding: 2px 0; }
 
 .st-input {
   width: 100%; height: 40px; padding: 0 13px;
@@ -2585,23 +2587,23 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
 
         <div class="st-field">
           <label class="st-label">传输协议</label>
-          <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH2" checked> H2（TCP）</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="warpH3" checked> H3（QUIC）</label>
+          <div style="display:flex;gap:10px 18px;flex-wrap:wrap">
+            <label class="warp-opt"><input type="checkbox" id="warpH2" checked> H2（TCP）</label>
+            <label class="warp-opt"><input type="checkbox" id="warpH3" checked> H3（QUIC）</label>
           </div>
           <p class="st-hint">H3 只验证固定地址（162.159.198 / 199 的 .1、.2）；H2 在两个 /24 里采样。</p>
         </div>
 
         <div class="st-field">
           <label class="st-label">端口</label>
-          <div id="warpPorts" style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px">
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="443" checked> 443（推荐）</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="500"> 500</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="1701"> 1701</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="4500"> 4500</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="4443"> 4443</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="8443"> 8443</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-warp-port="8095"> 8095</label>
+          <div id="warpPorts" style="display:flex;gap:10px 14px;flex-wrap:wrap">
+            <label class="warp-opt"><input type="checkbox" data-warp-port="443" checked> 443（推荐）</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="500"> 500</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="1701"> 1701</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="4500"> 4500</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="4443"> 4443</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="8443"> 8443</label>
+            <label class="warp-opt"><input type="checkbox" data-warp-port="8095"> 8095</label>
           </div>
           <p class="st-hint">默认只测 443；勾选更多端口会显著增加组合数与耗时（上限 150 组）。</p>
         </div>
