@@ -2080,6 +2080,7 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
           <div class="sgroup">系统</div>
           <div class="nav-items">
             <div class="nav-tab" data-page="settings" onclick="switchPage('settings')"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></span>设置</div>
+<div class="nav-tab" data-page="home-lab" onclick="switchPage('home-lab')"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/></svg></span>家宽实验</div>
 <div class="nav-tab" data-page="warp" onclick="switchPage('warp')"><span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>WARP 实验</div>
           </div>
         </div>
@@ -2534,6 +2535,100 @@ select.st-input option { background: var(--bg2); color: var(--fg); }
     </select>
   </div>
   <!-- Settings -->
+  <!-- 家宽实验（独立模块：只读写 home_lab:*） -->
+  <div class="page" id="page-home-lab">
+    <div class="atlas-pagehead fade-up">
+      <div>
+        <div class="atlas-eyebrow">实验</div>
+        <h2>家宽实验</h2>
+        <div class="atlas-subtitle">从 VPN Gate 拉取免费中继，做端口连通与住宅 IP 评分；与项目节点 / 输出 / WARP 实验完全隔离。</div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up" style="border-color:color-mix(in srgb, var(--warn) 45%, var(--line));">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">🏠</span>
+        <div><h3>独立实验页</h3><p>只读写 home_lab:*，不进入节点列表、输出配置、测速或调度。</p></div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">⚙️</span>
+        <div><h3>拉取设置</h3><p>总开关关闭时不拉取；开启后按间隔自动拉取 VPN Gate 列表。</p></div>
+      </div>
+      <div class="st-stack">
+        <div class="st-field">
+          <label class="st-label" style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input type="checkbox" id="homeLabEnabled" onchange="saveHomeLabSettings()">
+            <span>启用自动拉取</span>
+          </label>
+          <p class="st-hint" id="homeLabStatusText">未启用。</p>
+        </div>
+        <div class="st-field">
+          <label class="st-label" for="homeLabSource">源地址</label>
+          <input class="st-input" id="homeLabSource" placeholder="https://www.vpngate.net/api/iphone/" onchange="saveHomeLabSettings()">
+        </div>
+        <div class="st-field">
+          <label class="st-label" for="homeLabInterval">拉取间隔</label>
+          <select class="st-input" id="homeLabInterval" style="max-width:200px" onchange="saveHomeLabSettings()">
+            <option value="6">6 小时</option>
+            <option value="12" selected>12 小时</option>
+            <option value="24">24 小时</option>
+            <option value="48">48 小时</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn btn-primary" id="homeLabFetchBtn" onclick="fetchHomeLab()">立即拉取</button>
+          <button type="button" class="btn btn-sm" id="homeLabTestAllBtn" onclick="testAllHomeLab()">测试当前列表</button>
+          <button type="button" class="btn btn-sm" onclick="clearHomeLab()">清除</button>
+          <span class="st-hint" id="homeLabFetchInfo"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card st-section fade-up" id="homeLabListCard">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">📋</span>
+        <div><h3>中继列表</h3><p id="homeLabSummary">尚未拉取。</p></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <select class="st-input" id="homeLabCountry" style="max-width:200px" onchange="renderHomeLab()">
+          <option value="all">所有国家</option>
+        </select>
+        <select class="st-input" id="homeLabClass" style="max-width:200px" onchange="renderHomeLab()">
+          <option value="all">所有分类</option>
+          <option value="residential">住宅</option>
+          <option value="likely_residential">疑似住宅</option>
+          <option value="datacenter">机房</option>
+          <option value="proxy">代理/VPN</option>
+          <option value="unknown">未知</option>
+        </select>
+        <span class="st-hint" id="homeLabFilterInfo"></span>
+      </div>
+      <div class="table-scroll" style="max-height:560px;overflow:auto">
+        <table class="nd-table">
+          <thead><tr><th>国家</th><th>IP</th><th>端口</th><th>协议</th><th>运营商</th><th>分类</th><th>置信度</th><th>自报延迟</th><th>端口可达</th><th>操作</th></tr></thead>
+          <tbody id="homeLabBody"></tbody>
+        </table>
+      </div>
+      <div id="homeLabEmpty" class="nd-empty" style="display:none">还没有拉取中继。</div>
+    </div>
+
+    <div class="card st-section fade-up">
+      <div class="st-sec-head">
+        <span class="st-sec-ico">ℹ️</span>
+        <div><h3>说明</h3><p>VPN Gate 是志愿者网络，家宽判断是多信号评分，不是 100% 证明。</p></div>
+      </div>
+      <div class="st-stack" style="gap:8px;color:var(--muted);font-size:13px;line-height:1.6">
+        <div>• 只读写 home_lab:*，不进入节点列表、输出配置、测速或调度。</div>
+        <div>• 分类来自 ip-api + ipapi.is 的 ASN/ISP/hosting/mobile 等信号，仅供参考。</div>
+        <div>• 当前只做 TCP 端口可达测试；OpenVPN 隧道/测速后续再加。</div>
+        <div>• VPN Gate 中继质量参差、寿命短，建议间隔 12 小时以上。</div>
+      </div>
+    </div>
+  </div>
+
   <!-- WARP 实验页（独立模块：不写节点列表/输出） -->
   <div class="page" id="page-warp">
     <div class="atlas-pagehead fade-up">
@@ -3242,6 +3337,7 @@ const PALETTE_PAGES = [
   { page: 'rules', label: '分流规则', hint: '规则' },
   { page: 'output', label: '输出配置', hint: '发布' },
   { page: 'settings', label: '设置', hint: '系统' },
+  { page: 'home-lab', label: '家宽实验', hint: '住宅 IP' },
   { page: 'warp', label: 'WARP 实验', hint: '实验' },
 ];
 const PALETTE_ICONS = {
@@ -3252,6 +3348,7 @@ const PALETTE_ICONS = {
   output: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   warp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+  'home-lab': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/></svg>',
 };
 let paletteList = [];
 let paletteIdx = 0;
@@ -3850,7 +3947,7 @@ function switchPage(page) {
   }
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.page === page));
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
-  const pageLabels = { dashboard: '仪表盘', subscribe: '订阅管理', nodes: '节点列表', rules: '分流规则', output: '输出配置', settings: '设置', warp: 'WARP 实验' };
+  const pageLabels = { dashboard: '仪表盘', subscribe: '订阅管理', nodes: '节点列表', rules: '分流规则', output: '输出配置', settings: '设置', 'home-lab': '家宽实验', warp: 'WARP 实验' };
   const breadcrumb = document.getElementById('atlasBreadcrumb');
   if (breadcrumb) breadcrumb.textContent = pageLabels[page] || '仪表盘';
   window.location.hash = page;
@@ -3862,6 +3959,7 @@ function switchPage(page) {
   if (page === 'output') loadOutput();
   if (page === 'rules') { loadRules(); ensureCatalogLoaded(); loadCatalogStatus(); }
   if (page === 'settings') { loadSettings(); loadCurrentUsername(); }
+  if (page === 'home-lab') loadHomeLab();
   if (page === 'warp') loadWarpLab();
 }
 
@@ -6155,6 +6253,288 @@ function runCoreProbeNow() {
       toast('测速启动失败：' + ((e && e.message) || '未知错误'), 'error');
     }
   }, 50);
+}
+
+// ===== 家宽实验（独立：只读写 home_lab:*） =====
+const HOME_LAB_CLASS_LABELS = {
+  residential: '住宅',
+  likely_residential: '疑似住宅',
+  datacenter: '机房',
+  proxy: '代理/VPN',
+  unknown: '未知',
+};
+const HOME_LAB_CLASS_COLORS = {
+  residential: 'var(--green)',
+  likely_residential: 'var(--warn)',
+  datacenter: 'var(--red)',
+  proxy: 'var(--violet)',
+  unknown: 'var(--muted)',
+};
+
+let homeLabState = { settings: null, nodes: [], defaults: null };
+let homeLabFiltered = [];
+
+function fmtHomeLabTime(ts) {
+  if (!ts) return '—';
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return '—';
+  }
+}
+
+async function loadHomeLab() {
+  try {
+    const res = await api('/home-lab/status');
+    const d = (res && res.data) || {};
+    homeLabState = {
+      settings: d.settings || null,
+      nodes: Array.isArray(d.nodes) ? d.nodes : [],
+      defaults: d.defaults || null,
+    };
+    renderHomeLab();
+  } catch (e) {
+    toast('加载家宽实验失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+function renderHomeLab() {
+  const s = homeLabState.settings || {};
+  const nodes = homeLabState.nodes || [];
+
+  const enabledEl = document.getElementById('homeLabEnabled');
+  if (enabledEl) enabledEl.checked = !!s.enabled;
+  const sourceEl = document.getElementById('homeLabSource');
+  if (sourceEl && document.activeElement !== sourceEl) {
+    sourceEl.value = s.sourceUrl || (homeLabState.defaults && homeLabState.defaults.sourceUrl) || '';
+  }
+  const intervalEl = document.getElementById('homeLabInterval');
+  if (intervalEl) {
+    const want = String(s.intervalHours || 12);
+    if (![...intervalEl.options].some((o) => o.value === want)) {
+      const opt = document.createElement('option');
+      opt.value = want;
+      opt.textContent = `${want} 小时`;
+      intervalEl.appendChild(opt);
+    }
+    intervalEl.value = want;
+  }
+
+  const statusEl = document.getElementById('homeLabStatusText');
+  if (statusEl) {
+    if (!s.enabled) {
+      statusEl.textContent = '已关闭：不会自动拉取，手动拉取仍可用。';
+    } else {
+      const next = s.lastAttemptAt
+        ? s.lastAttemptAt + (s.intervalHours || 12) * 3600 * 1000
+        : null;
+      statusEl.textContent = `已启用 · 上次尝试 ${fmtHomeLabTime(s.lastAttemptAt)} · 下次约 ${fmtHomeLabTime(next)}`;
+    }
+  }
+  const infoEl = document.getElementById('homeLabFetchInfo');
+  if (infoEl) {
+    infoEl.textContent = s.lastError
+      ? `上次失败：${s.lastError}`
+      : s.lastFetchAt
+        ? `上次成功：${fmtHomeLabTime(s.lastFetchAt)} · ${s.lastCount || 0} 个中继`
+        : '尚未拉取。';
+  }
+
+  const countryEl = document.getElementById('homeLabCountry');
+  if (countryEl) {
+    const current = countryEl.value || 'all';
+    const map = new Map();
+    for (const n of nodes) {
+      const cc = String(n.countryShort || '').toUpperCase();
+      if (!cc) continue;
+      if (!map.has(cc)) map.set(cc, n.countryLong || cc);
+    }
+    const opts = ['<option value="all">所有国家</option>'];
+    for (const [cc, name] of [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      opts.push(`<option value="${escHtml(cc)}">${escHtml(cc)} · ${escHtml(name)}</option>`);
+    }
+    countryEl.innerHTML = opts.join('');
+    countryEl.value = current === 'all' || map.has(current) ? current : 'all';
+  }
+
+  const classEl = document.getElementById('homeLabClass');
+  const filterClass = classEl ? classEl.value : 'all';
+  const filterCountry = countryEl ? countryEl.value : 'all';
+  const filtered = nodes.filter((n) => {
+    if (
+      filterCountry !== 'all' &&
+      String(n.countryShort || '').toUpperCase() !== filterCountry
+    ) {
+      return false;
+    }
+    if (filterClass !== 'all' && n.class !== filterClass) return false;
+    return true;
+  });
+
+  const counts = { residential: 0, likely_residential: 0, datacenter: 0, proxy: 0, unknown: 0 };
+  for (const n of nodes) {
+    if (counts[n.class] !== undefined) counts[n.class]++;
+  }
+  const summaryEl = document.getElementById('homeLabSummary');
+  if (summaryEl) {
+    summaryEl.textContent = nodes.length
+      ? `共 ${nodes.length} 个 · 住宅 ${counts.residential} · 疑似 ${counts.likely_residential} · 机房 ${counts.datacenter} · 代理 ${counts.proxy} · 未知 ${counts.unknown}`
+      : '尚未拉取。';
+  }
+  homeLabFiltered = filtered;
+  const filterInfo = document.getElementById('homeLabFilterInfo');
+  if (filterInfo) filterInfo.textContent = `显示 ${filtered.length} / ${nodes.length}`;
+
+  const body = document.getElementById('homeLabBody');
+  const empty = document.getElementById('homeLabEmpty');
+  if (!body) return;
+  if (filtered.length === 0) {
+    body.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  body.innerHTML = filtered
+    .map((n) => {
+      const cls = HOME_LAB_CLASS_LABELS[n.class] || n.class;
+      const color = HOME_LAB_CLASS_COLORS[n.class] || 'var(--muted)';
+      const tcp =
+        n.proto === 'udp'
+          ? '<span style="color:var(--muted)" title="UDP 中继需要 OpenVPN 隧道测试">UDP（需隧道）</span>'
+          : n.tcp && n.tcp.checkedAt
+            ? n.tcp.reachable
+              ? `<span style="color:var(--green)">可达 ${n.tcp.latencyMs != null ? n.tcp.latencyMs + 'ms' : ''}</span>`
+              : '<span style="color:var(--red)">不可达</span>'
+            : '<span style="color:var(--muted)">未测</span>';
+      const ping = n.pingMs != null ? `${n.pingMs} ms` : '—';
+      return `<tr>
+        <td>${escHtml(n.countryShort || '—')}</td>
+        <td style="font-family:var(--font-mono);font-size:12px">${escHtml(n.ip)}</td>
+        <td>${n.port}</td>
+        <td>${escHtml(String(n.proto || 'unknown').toUpperCase())}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(n.operator || '')}">${escHtml(n.operator || '—')}</td>
+        <td><span style="color:${color};font-weight:600">${escHtml(cls)}</span></td>
+        <td>${n.confidence != null ? n.confidence + '%' : '—'}</td>
+        <td>${ping}</td>
+        <td>${tcp}</td>
+        <td><button type="button" class="btn btn-sm" onclick="testHomeLabNode('${escHtml(n.id)}')">测试</button></td>
+      </tr>`;
+    })
+    .join('');
+}
+
+async function saveHomeLabSettings() {
+  const enabled = !!document.getElementById('homeLabEnabled')?.checked;
+  const sourceUrl = (document.getElementById('homeLabSource')?.value || '').trim();
+  const intervalHours = Number(document.getElementById('homeLabInterval')?.value) || 12;
+  try {
+    const res = await api('/home-lab/settings', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, sourceUrl, intervalHours }),
+    });
+    const s = res && res.data && res.data.settings;
+    if (s) homeLabState.settings = s;
+    renderHomeLab();
+    toast(enabled ? '家宽实验已启用' : '家宽实验已关闭');
+  } catch (e) {
+    toast('保存失败：' + ((e && e.message) || '未知错误'), 'error');
+    await loadHomeLab();
+  }
+}
+
+async function fetchHomeLab() {
+  const btn = document.getElementById('homeLabFetchBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '拉取中…';
+  }
+  try {
+    const res = await api('/home-lab/fetch', { method: 'POST', timeout: 120000 });
+    const d = (res && res.data) || {};
+    toast(
+      `拉取完成：${d.parsed || 0} 个中继（住宅 ${d.residential || 0} · 疑似 ${d.likelyResidential || 0} · 机房 ${d.datacenter || 0}）`
+    );
+    await loadHomeLab();
+  } catch (e) {
+    toast('拉取失败：' + ((e && e.message) || '未知错误'), 'error');
+    await loadHomeLab();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '立即拉取';
+    }
+  }
+}
+
+async function testHomeLabNode(id) {
+  try {
+    const res = await api('/home-lab/test', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+      timeout: 20000,
+    });
+    const node = res && res.data && res.data.node;
+    if (!node) return;
+    const index = homeLabState.nodes.findIndex((n) => n.id === id);
+    if (index >= 0) homeLabState.nodes[index] = node;
+    renderHomeLab();
+    if (node.tcp && node.tcp.reachable) {
+      toast(`端口可达 ${node.tcp.latencyMs ?? '-'}ms`);
+    } else {
+      toast('端口不可达', 'error');
+    }
+  } catch (e) {
+    toast('测试失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
+}
+
+async function testAllHomeLab() {
+  const btn = document.getElementById('homeLabTestAllBtn');
+  const ids = (homeLabFiltered || []).map((n) => n.id);
+  if (!ids.length) {
+    toast('当前筛选没有节点', 'error');
+    return;
+  }
+  if (btn) btn.disabled = true;
+  let reachable = 0;
+  let total = 0;
+  const chunk = 40;
+  try {
+    for (let i = 0; i < ids.length; i += chunk) {
+      const part = ids.slice(i, i + chunk);
+      if (btn) btn.textContent = `测试中 ${Math.min(i + part.length, ids.length)}/${ids.length}…`;
+      const res = await api('/home-lab/test-all', {
+        method: 'POST',
+        body: JSON.stringify({ ids: part }),
+        timeout: 60000,
+      });
+      const d = (res && res.data) || {};
+      reachable += d.reachable || 0;
+      total += d.total || 0;
+    }
+    toast(`端口测试完成：${reachable}/${total} 可达`);
+    await loadHomeLab();
+  } catch (e) {
+    toast('测试失败：' + ((e && e.message) || '未知错误'), 'error');
+    await loadHomeLab();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '测试当前列表';
+    }
+  }
+}
+
+async function clearHomeLab() {
+  if (!window.confirm('确定清除家宽实验数据（设置、列表、情报缓存）？')) return;
+  try {
+    await api('/home-lab/clear', { method: 'POST' });
+    toast('家宽实验数据已清除');
+    homeLabState = { settings: null, nodes: [], defaults: homeLabState.defaults };
+    await loadHomeLab();
+  } catch (e) {
+    toast('清除失败：' + ((e && e.message) || '未知错误'), 'error');
+  }
 }
 
 // ===== WARP 实验页（独立：不写节点列表/输出/探测） =====

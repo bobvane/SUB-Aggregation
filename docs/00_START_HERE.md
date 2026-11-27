@@ -1,6 +1,6 @@
 # 文档入口
 
-本文档以 **v2.50.8** 为维护基线。版本号以 `package.json` 为准，发布时同步更新锁文件并生成对应 Release。
+本文档以 **v2.50.9** 为维护基线。版本号以 `package.json` 为准，发布时同步更新锁文件并生成对应 Release。
 
 SUB-Aggregation 是自托管订阅聚合服务：抓取并解析订阅、维护节点健康与地理信息，再生成客户端可用的代理配置。应用运行在单个 Node.js Docker 容器中，数据保存在 SQLite。
 
@@ -28,6 +28,8 @@ SUB-Aggregation 是自托管订阅聚合服务：抓取并解析订阅、维护�
 - [`19_PROXY_AVAILABILITY_DESIGN.md`](./19_PROXY_AVAILABILITY_DESIGN.md)：真实代理可用性检测方案设计（v2.37.3 基线，结论已落地）
 - [`20_OUTPUT_SYNC_AND_GEO.md`](./20_OUTPUT_SYNC_AND_GEO.md)：国家码检测、订阅同步与输出配置（v2.38.6 基线）
 - [`21_PROXY_USAGE_AUDIT.md`](./21_PROXY_USAGE_AUDIT.md)：项目代理使用调研（v2.43.1 基线，改造前后对照）
+- [`23_WARP_LAB.md`](./23_WARP_LAB.md)：WARP MASQUE 实验页（v2.50.4 起，独立模块）
+- [`24_HOME_LAB.md`](./24_HOME_LAB.md)：家宽实验页（v2.50.9 起，VPN Gate + 住宅评分，独立模块）
 
 ## 维护约束
 

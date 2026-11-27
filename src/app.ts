@@ -231,6 +231,14 @@ export async function runScheduled(
   // 每分钟未识别国家码自动重试（v2.19.1）：发现未识别 IP 全量批量重查，连续重试 10 次后停止并提示检查节点
   // v2.25.0：任务门闩（active 哨兵）——正常态（无未识别 IP）直接短路，0 KV 写，不再每分钟跑全量/写归零状态
   if (cron === '* * * * *') {
+    // 家宽实验：独立调度，总开关关闭时直接短路（只读写 home_lab:*）
+    try {
+      const { maybeFetchHomeLab } = await import('@/services/home-lab.service');
+      await maybeFetchHomeLab(kv, http.asFetch('subscription'), http.asFetch('geo'));
+    } catch (e) {
+      console.warn(`[HomeLab] 调度失败: ${(e as Error).message}`);
+    }
+
     try {
       const { prewarmIpGeo, filterUnlocatedServers, geoLookupServers, getGeoRetryGate, setGeoRetryGate, deactivateGeoRetry, GEO_RETRY_MAX } = await import('@/services/ip-geo.service');
       const ipGeoCache = { get: (k: string): Promise<string | null> => repos.settings.get(k), set: (k: string, v: string, ttl?: number) => repos.settings.set(k, v, ttl ? { expirationTtl: ttl } : undefined) };

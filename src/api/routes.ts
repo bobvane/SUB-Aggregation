@@ -67,6 +67,18 @@ import {
   type WarpLabNode,
 } from '@/services/warp-lab.service';
 import {
+  HOME_LAB_DEFAULT_INTERVAL_HOURS,
+  HOME_LAB_DEFAULT_SOURCE_URL,
+  HOME_LAB_MAX_NODES,
+  clearHomeLab,
+  readHomeLabNodes,
+  readHomeLabSettings,
+  refreshHomeLab,
+  saveHomeLabSettings,
+  testAllHomeLabNodes,
+  testHomeLabNode,
+} from '@/services/home-lab.service';
+import {
   WARP_SCAN_DEFAULT_PORTS,
   WARP_SCAN_DEFAULT_SAMPLE,
   WARP_SCAN_H2_SUBNETS,
@@ -1113,6 +1125,104 @@ export function createApp(deps: AppDeps): Hono {
     } catch (e) {
       return c.json({ success: false, error: { code: 'CORE_UPGRADE_FAILED', message: (e as Error).message } }, 502);
     }
+  });
+
+  // ============ 家宽实验（独立模块：只读写 home_lab:*） ============
+
+  app.get('/api/home-lab/status', requireAuth(auth), async (c) => {
+    const settings = await readHomeLabSettings(storage);
+    const nodes = await readHomeLabNodes(storage);
+    return c.json({
+      success: true,
+      data: {
+        settings,
+        nodes,
+        defaults: {
+          sourceUrl: HOME_LAB_DEFAULT_SOURCE_URL,
+          intervalHours: HOME_LAB_DEFAULT_INTERVAL_HOURS,
+          maxNodes: HOME_LAB_MAX_NODES,
+        },
+      },
+    });
+  });
+
+  app.post('/api/home-lab/settings', requireAuth(auth), async (c) => {
+    const body = await readBody<{
+      enabled?: unknown;
+      sourceUrl?: unknown;
+      intervalHours?: unknown;
+    }>(c);
+    const patch: { enabled?: boolean; sourceUrl?: string; intervalHours?: number } = {};
+    if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+    if (typeof body.sourceUrl === 'string') {
+      const url = body.sourceUrl.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        return c.json(
+          { success: false, error: { code: 'HOME_LAB_BAD_URL', message: '源地址必须是 http(s) URL' } },
+          400
+        );
+      }
+      patch.sourceUrl = url;
+    }
+    if (typeof body.intervalHours === 'number') {
+      if (!Number.isInteger(body.intervalHours) || body.intervalHours < 1 || body.intervalHours > 168) {
+        return c.json(
+          { success: false, error: { code: 'HOME_LAB_BAD_INTERVAL', message: '拉取间隔必须是 1-168 小时' } },
+          400
+        );
+      }
+      patch.intervalHours = body.intervalHours;
+    }
+    const settings = await saveHomeLabSettings(storage, patch);
+    return c.json({ success: true, data: { settings } });
+  });
+
+  app.post('/api/home-lab/fetch', requireAuth(auth), sensitiveOpRateLimit, async (c) => {
+    try {
+      const result = await refreshHomeLab(
+        storage,
+        http.asFetch('subscription'),
+        http.asFetch('geo')
+      );
+      return c.json({ success: true, data: result });
+    } catch (e) {
+      return c.json(
+        { success: false, error: { code: 'HOME_LAB_FETCH_FAILED', message: (e as Error).message } },
+        502
+      );
+    }
+  });
+
+  app.post('/api/home-lab/test', requireAuth(auth), async (c) => {
+    const body = await readBody<{ id?: unknown }>(c);
+    if (typeof body.id !== 'string' || !body.id) {
+      return c.json(
+        { success: false, error: { code: 'HOME_LAB_BAD_ID', message: '缺少节点 id' } },
+        400
+      );
+    }
+    const node = await testHomeLabNode(storage, body.id);
+    if (!node) {
+      return c.json(
+        { success: false, error: { code: 'HOME_LAB_NOT_FOUND', message: '节点不存在' } },
+        404
+      );
+    }
+    return c.json({ success: true, data: { node } });
+  });
+
+  app.post('/api/home-lab/test-all', requireAuth(auth), async (c) => {
+    const body = await readBody<{ ids?: unknown }>(c);
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((x): x is string => typeof x === 'string').slice(0, 200)
+      : undefined;
+    const result = await testAllHomeLabNodes(storage, 12, ids);
+    return c.json({ success: true, data: result });
+  });
+
+  app.post('/api/home-lab/clear', requireAuth(auth), async (c) => {
+    await clearHomeLab(storage);
+    return c.json({ success: true, data: { cleared: true } });
   });
 
   // ============ WARP 实验页（独立模块：不写节点列表/输出/探测） ============
